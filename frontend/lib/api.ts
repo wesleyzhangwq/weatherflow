@@ -1,5 +1,10 @@
-export const API_BASE =
+const PUBLIC_API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8765";
+
+const SERVER_API_BASE = process.env.NEXT_SERVER_API_BASE || PUBLIC_API_BASE;
+
+export const API_BASE =
+  typeof window === "undefined" ? SERVER_API_BASE : PUBLIC_API_BASE;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

@@ -72,34 +72,36 @@ Details:
 [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md),
 [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md), and
 [docs/REVIEW_CHECKLIST.md](docs/REVIEW_CHECKLIST.md).
+Frontend upgrade notes live in
+[docs/NEXT_UPGRADE_PLAN.md](docs/NEXT_UPGRADE_PLAN.md).
 
 ## Quick Start
 
 ```bash
-# 1. Backend
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-cp ../.env.example ../.env
+# 1. Install dependencies
+cp .env.example .env
 # fill OPENAI_BASE_URL / OPENAI_API_KEY / models
-uvicorn app.main:app --reload --port 8765
+make install
 
-# 2. CLI (in another terminal)
-cd cli
-pip install -e .
-wf checkin             # interactive 1–3 min morning check-in
-wf weather             # current life weather
-wf reflect             # today's reflection
-wf patterns            # window-vs-window deterministic pattern report
-wf scan-git         --root ~/Projects              # behavior sensor
-wf scan-notes       --root ~/Notes                 # notes / Obsidian sensor
-wf scan-workspace   --root ~/Projects              # filesystem / fragmentation sensor
-wf sensors                                       # git + notes + workspace (one request)
+# 2. Backend and frontend
+make dev-backend       # http://127.0.0.1:8765
+make dev-frontend      # http://localhost:3000
 
-# 3. Frontend
-cd frontend
-npm install
-npm run dev            # http://localhost:3000
+# 3. CLI
+uv run wf checkin             # interactive 1–3 min morning check-in
+uv run wf weather             # current life weather
+uv run wf reflect             # today's reflection
+uv run wf patterns            # window-vs-window deterministic pattern report
+uv run wf scan-git       --root ~/Projects     # behavior sensor
+uv run wf scan-notes     --root ~/Notes        # notes / Obsidian sensor
+uv run wf scan-workspace --root ~/Projects     # filesystem / fragmentation sensor
+uv run wf sensors             # git + notes + workspace (one request)
+```
+
+Docker Compose can start backend, frontend, and Qdrant together:
+
+```bash
+docker compose up --build
 ```
 
 ### Health and checks
@@ -108,11 +110,18 @@ npm run dev            # http://localhost:3000
 curl http://127.0.0.1:8765/health
 curl http://127.0.0.1:8765/api/meta/status
 make check
+make inspect
 ```
 
 `/api/meta/status` reports local runtime diagnostics without exposing secrets:
 database path, Markdown memory path, scheduler jobs, configured models, and
 whether long-term memory is using Qdrant or SQLite fallback.
+
+By default, local runtime data lives outside the source tree:
+
+```text
+${HOME}/.local/share/weatherflow/data
+```
 
 ### Local-first profile (no API key, no network)
 
