@@ -112,6 +112,19 @@ export interface SuggestionFeedbackIn {
   note?: string | null;
 }
 
+export type MemoryFeedbackType =
+  | "accurate"
+  | "inaccurate"
+  | "stale"
+  | "important";
+
+export interface MemoryFeedbackIn {
+  semantic_key: string;
+  feedback_type: MemoryFeedbackType;
+  semantic_value_snapshot?: string;
+  session_id?: string;
+}
+
 export interface SemanticItem {
   key: string;
   value: string;
@@ -147,6 +160,16 @@ export const api = {
         reflection_id: body.reflection_id ?? null,
         session_id: body.session_id ?? "default",
         note: body.note ?? null
+      })
+    }),
+  submitMemoryFeedback: (body: MemoryFeedbackIn) =>
+    request<{ status: string }>("/api/feedback/memory", {
+      method: "POST",
+      body: JSON.stringify({
+        semantic_key: body.semantic_key,
+        feedback_type: body.feedback_type,
+        semantic_value_snapshot: body.semantic_value_snapshot ?? "",
+        session_id: body.session_id ?? "default"
       })
     }),
   semantic: (limit = 50) =>

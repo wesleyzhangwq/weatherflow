@@ -119,6 +119,9 @@ If nothing durable shows up, return empty arrays. Quiet weeks are fine.
 If the material includes "suggestion_feedback" (user marked whether the daily
 suggestion felt helpful): take it seriously — adjust semantic confidence or add
 a corrective observation when the user says the suggestion missed the mark.
+If the material includes "memory_feedback" (user marked a semantic memory as
+accurate, inaccurate, stale, or important): preserve important/accurate memories,
+and correct, lower confidence, or replace inaccurate/stale memories.
 Prefer Simplified Chinese in "value" fields when the source material is Chinese.
 """
 
@@ -149,6 +152,9 @@ THREE markdown bodies (no outer JSON, no code fences):
 1) user_profile — 2-4 short paragraphs, warm, second person 「你」, in Simplified Chinese.
 2) behavior_patterns — bullet list (use "- "), max 8 bullets, pattern-level only, Chinese.
 3) goals — bullet list, max 5 gentle *directions* (not KPIs; no「你应该」), Chinese.
+
+If memory_feedback is present, use it to avoid repeating inaccurate or stale
+claims, and give important memories appropriate weight.
 
 Return STRICT JSON with keys: user_profile, behavior_patterns, goals
 Each value is a single string containing markdown body only.
