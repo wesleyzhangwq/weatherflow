@@ -25,6 +25,21 @@ class CheckinRecord(CheckinIn):
 
 # ----------------------------- Reflection -----------------------------
 ReflectionKind = Literal["daily", "weekly"]
+GroundingSourceType = Literal[
+    "checkin",
+    "state",
+    "git",
+    "notes",
+    "workspace",
+    "patterns",
+    "memory",
+]
+
+
+class GroundingSource(BaseModel):
+    type: GroundingSourceType
+    label: str
+    summary: str
 
 
 class ReflectionRecord(BaseModel):
@@ -166,6 +181,8 @@ __all__ = [
     "CheckinIn",
     "CheckinRecord",
     "ReflectionKind",
+    "GroundingSourceType",
+    "GroundingSource",
     "ReflectionRecord",
     "WeatherLabel",
     "UserStateOut",

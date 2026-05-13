@@ -1,5 +1,6 @@
 "use client";
 
+import { ReflectionGrounding } from "@/components/ReflectionGrounding";
 import type { Reflection } from "@/lib/api";
 
 const KIND_ZH: Record<Reflection["kind"], string> = {
@@ -21,6 +22,7 @@ export function ReflectionFeed({ items }: { items: Reflection[] }) {
                 {KIND_ZH[r.kind]} · {r.date}
               </div>
               <p className="mt-1 leading-relaxed whitespace-pre-wrap">{r.content}</p>
+              <ReflectionGrounding sources={r.insights?.grounding_sources} />
             </li>
           ))}
         </ul>

@@ -50,8 +50,30 @@ export interface Reflection {
   date: string;
   kind: "daily" | "weekly";
   content: string;
-  insights?: Record<string, unknown> | null;
+  insights?: ReflectionInsights | null;
   created_at: string;
+}
+
+export type GroundingSourceType =
+  | "checkin"
+  | "state"
+  | "git"
+  | "notes"
+  | "workspace"
+  | "patterns"
+  | "memory";
+
+export interface GroundingSource {
+  type: GroundingSourceType;
+  label: string;
+  summary: string;
+}
+
+export interface ReflectionInsights {
+  weather_label?: WeatherLabel | null;
+  checkins_considered?: number;
+  git_records_considered?: number;
+  grounding_sources?: GroundingSource[];
 }
 
 export interface TimelineEvent {

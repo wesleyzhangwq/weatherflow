@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ReflectionGrounding } from "@/components/ReflectionGrounding";
 import { SuggestionFeedback } from "@/components/SuggestionFeedback";
 import { api, type CheckinResponse } from "@/lib/api";
 import {
@@ -74,6 +75,9 @@ export default function CheckinPage() {
           <p className="mt-3 leading-relaxed whitespace-pre-wrap">
             {result.reflection.content}
           </p>
+          <ReflectionGrounding
+            sources={result.reflection.insights?.grounding_sources}
+          />
         </div>
         {result.patterns && result.patterns.length > 0 ? (
           <div className="card">
