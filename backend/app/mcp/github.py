@@ -1,0 +1,92 @@
+"""GitHub MCP connector — minimal pull of recent activity.
+
+Used as a *supplementary* signal next to the local git sensor. The local
+sensor is authoritative for "did you actually write code"; GitHub fills in
+"public output" (PRs, issues, comments).
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import httpx
+
+from app.mcp.base import MCPConnector
+
+logger = logging.getLogger(__name__)
+
+
+class GithubConnector(MCPConnector):
+    name = "github"
+
+    def __init__(self, token: str, base_url: str = "https://api.github.com") -> None:
+        self.token = token
+        self.base_url = base_url.rstrip("/")
+
+    async def health(self) -> dict[str, Any]:
+        async with self._client() as client:
+            r = await client.get("/user")
+            ok = r.status_code == 200
+        return {
+            "name": self.name,
+            "status": "ok" if ok else "auth_failed",
+            "code": r.status_code,
+        }
+
+    async def fetch(self, *, days: int = 7, **_: Any) -> dict[str, Any]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        async with self._client() as client:
+            user = (await client.get("/user")).json()
+            login = user.get("login")
+            if not login:
+                return {"login": None, "events": 0}
+
+            r = await client.get(f"/users/{login}/events", params={"per_page": 100})
+            r.raise_for_status()
+            events = r.json()
+
+        recent = [
+            e for e in events
+            if _parse_dt(e.get("created_at")) and _parse_dt(e["created_at"]) >= cutoff
+        ]
+        by_type: dict[str, int] = {}
+        repos: set[str] = set()
+        for e in recent:
+            by_type[e.get("type", "Unknown")] = by_type.get(e.get("type", "Unknown"), 0) + 1
+            repo = (e.get("repo") or {}).get("name")
+            if repo:
+                repos.add(repo)
+
+        return {
+            "login": login,
+            "window_days": days,
+            "events": len(recent),
+            "by_type": by_type,
+            "repos_touched": len(repos),
+            "repo_list": sorted(repos),
+        }
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self.base_url,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=httpx.Timeout(20.0, connect=10.0),
+        )
+
+
+def _parse_dt(s: str | None) -> datetime | None:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+__all__ = ["GithubConnector"]

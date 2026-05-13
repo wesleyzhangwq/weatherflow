@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weatherflow-backend"
+version = "0.1.0"
+description = "WeatherFlow backend: long-term growth companionship agent"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "WeatherFlow" }]
+dependencies = [
+    "fastapi>=0.115,<0.120",
+    "uvicorn[standard]>=0.32,<0.40",
+    "pydantic>=2.9,<3.0",
+    "pydantic-settings>=2.6,<3.0",
+    "httpx>=0.27,<0.29",
+    "numpy>=1.26,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    "orjson>=3.10,<4.0",
+    "apscheduler>=3.10,<4.0",
+    "qdrant-client>=1.12,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9.0",
+    "pytest-asyncio>=0.24,<0.25",
+    "ruff>=0.6,<1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

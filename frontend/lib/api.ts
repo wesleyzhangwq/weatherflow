@@ -1,0 +1,154 @@
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8765";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    cache: "no-store"
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+// ---- Types (mirror of backend pydantic models) ----
+export type WeatherLabel =
+  | "Momentum"
+  | "Confusion"
+  | "Burnout"
+  | "Overload"
+  | "Recovery";
+
+export interface UserState {
+  focus: number;
+  stress: number;
+  burnout: number;
+  momentum: number;
+  confidence: number;
+  motivation: number;
+  weather_label: WeatherLabel;
+  rationale?: string | null;
+  ts?: string | null;
+}
+
+export interface StateTrendPoint {
+  ts: string;
+  focus: number;
+  stress: number;
+  burnout: number;
+  momentum: number;
+  confidence: number;
+  motivation: number;
+  weather_label: WeatherLabel;
+}
+
+export interface Reflection {
+  id: number;
+  date: string;
+  kind: "daily" | "weekly";
+  content: string;
+  insights?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface TimelineEvent {
+  id: number | null;
+  ts: string;
+  kind: "milestone" | "phase" | "event";
+  title: string;
+  description?: string | null;
+  tags: string[];
+}
+
+export interface CheckinIn {
+  status?: string | null;
+  did_today?: string | null;
+  stuck_on?: string | null;
+  anxiety?: string | null;
+  raw?: string | null;
+}
+
+export interface PatternMetric {
+  name: string;
+  current: number;
+  previous: number;
+  delta: number;
+  pct_delta: number | null;
+}
+
+export interface PatternHit {
+  code: string;
+  severity: "info" | "watch" | "alert";
+  label: string;
+  explanation: string;
+  evidence: Record<string, unknown>;
+}
+
+export interface PatternReport {
+  window_days: number;
+  metrics: PatternMetric[];
+  patterns: PatternHit[];
+}
+
+export interface CheckinResponse {
+  checkin: CheckinIn & { id: number; date: string; created_at: string };
+  state: UserState;
+  reflection: Reflection;
+  suggestion: string;
+  patterns: PatternHit[];
+  suggestion_pattern_codes: string[];
+  pattern_window_days: number;
+}
+
+export interface SuggestionFeedbackIn {
+  helpful: boolean;
+  suggestion_text?: string;
+  pattern_codes?: string[];
+  reflection_id?: number;
+  session_id?: string;
+  note?: string | null;
+}
+
+export interface SemanticItem {
+  key: string;
+  value: string;
+  confidence: number;
+  last_updated?: string | null;
+}
+
+// ---- Endpoints ----
+export const api = {
+  currentState: () => request<UserState>("/api/state/current"),
+  stateTrend: (days = 14) =>
+    request<StateTrendPoint[]>(`/api/state/trend?days=${days}`),
+  patterns: (window = 7) =>
+    request<PatternReport>(`/api/state/patterns?window_days=${window}`),
+  reflections: (limit = 5) =>
+    request<Reflection[]>(`/api/reflection?limit=${limit}`),
+  runReflection: (kind: "daily" | "weekly" = "daily") =>
+    request<Reflection>(`/api/reflection/run?kind=${kind}`, { method: "POST" }),
+  timeline: (limit = 50) =>
+    request<TimelineEvent[]>(`/api/timeline?limit=${limit}`),
+  submitCheckin: (body: CheckinIn) =>
+    request<CheckinResponse>("/api/checkin", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
+  submitSuggestionFeedback: (body: SuggestionFeedbackIn) =>
+    request<{ status: string }>("/api/feedback/suggestion", {
+      method: "POST",
+      body: JSON.stringify({
+        helpful: body.helpful,
+        suggestion_text: body.suggestion_text ?? "",
+        pattern_codes: body.pattern_codes ?? [],
+        reflection_id: body.reflection_id ?? null,
+        session_id: body.session_id ?? "default",
+        note: body.note ?? null
+      })
+    }),
+  semantic: (limit = 50) =>
+    request<SemanticItem[]>(`/api/memory/semantic?limit=${limit}`)
+};
