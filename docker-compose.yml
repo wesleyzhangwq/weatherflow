@@ -1,10 +1,10 @@
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.6
     ports:
       - "6333:6333"
     volumes:
-      - ./backend/data/qdrant:/qdrant/storage
+      - ${WF_DATA_DIR:-./.wf-data}/qdrant:/qdrant/storage
 
   backend:
     build: ./backend
@@ -13,9 +13,28 @@ services:
     env_file:
       - .env
     environment:
+      DATA_DIR: /app/data
       QDRANT_URL: http://qdrant:6333
     volumes:
-      - ./backend/data:/app/data
+      - ${WF_DATA_DIR:-./.wf-data}:/app/data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8765
     depends_on:
       - qdrant
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE: http://127.0.0.1:8765
+      NEXT_SERVER_API_BASE: http://backend:8765
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --hostname 0.0.0.0"
+    depends_on:
+      - backend
+
+volumes:
+  frontend_node_modules:

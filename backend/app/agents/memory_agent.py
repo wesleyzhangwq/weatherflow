@@ -54,18 +54,12 @@ class MemoryAgent(BaseAgent):
                 for r in recent_reflections[-5:]
             ],
         }
-        fb_parsed: list[dict] = []
-        for e in events_repo.recent(limit=60, session_id="default"):
-            if e.type != "suggestion_feedback":
-                continue
-            try:
-                fb_parsed.append(json.loads(e.content))
-            except json.JSONDecodeError:
-                fb_parsed.append({"raw": (e.content or "")[:500]})
-            if len(fb_parsed) >= 12:
-                break
-        if fb_parsed:
-            material["suggestion_feedback"] = fb_parsed
+        suggestion_feedback = _recent_event_payloads("suggestion_feedback")
+        memory_feedback = _recent_event_payloads("memory_feedback")
+        if suggestion_feedback:
+            material["suggestion_feedback"] = suggestion_feedback
+        if memory_feedback:
+            material["memory_feedback"] = memory_feedback
         try:
             data = await chat_json(
                 self.llm,
@@ -217,7 +211,12 @@ class MemoryAgent(BaseAgent):
                 logger.exception("long-term pattern search failed during profile refresh")
                 pattern_lines = ""
 
-        payload = {"semantic_bullets": sem_bullets, "patterns": pattern_lines}
+        memory_feedback = _recent_event_payloads("memory_feedback")
+        payload = {
+            "semantic_bullets": sem_bullets,
+            "patterns": pattern_lines,
+            "memory_feedback": memory_feedback,
+        }
         try:
             data = await chat_json(
                 self.llm,
@@ -282,6 +281,26 @@ def _format_checkin(c: CheckinRecord) -> str:
     if c.raw:
         parts.append(f"raw: {c.raw}")
     return f"[{c.date}] " + " | ".join(parts)
+
+
+def _recent_event_payloads(
+    event_type: str,
+    *,
+    limit: int = 12,
+    session_id: str = "default",
+) -> list[dict]:
+    payloads: list[dict] = []
+    for e in events_repo.recent(limit=60, session_id=session_id):
+        if e.type != event_type:
+            continue
+        try:
+            payload = json.loads(e.content)
+            payloads.append(payload if isinstance(payload, dict) else {"value": payload})
+        except json.JSONDecodeError:
+            payloads.append({"raw": (e.content or "")[:500]})
+        if len(payloads) >= limit:
+            break
+    return payloads
 
 
 __all__ = ["MemoryAgent"]

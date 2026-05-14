@@ -12,6 +12,7 @@ from typing import List, Sequence
 
 import pytest
 
+from app.config import get_settings
 from app.memory.store import init_db, set_db_path
 
 
@@ -20,10 +21,12 @@ def _isolated_db(monkeypatch: pytest.MonkeyPatch) -> None:
     tmpdir = tempfile.mkdtemp(prefix="wf-test-")
     db_path = os.path.join(tmpdir, "weatherflow.db")
     set_db_path(db_path)
-    init_db(db_path)
     monkeypatch.setenv("DATA_DIR", tmpdir)
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    init_db(db_path)
     yield
     set_db_path(None)  # type: ignore[arg-type]
+    get_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

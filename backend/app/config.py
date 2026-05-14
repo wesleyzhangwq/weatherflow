@@ -87,14 +87,15 @@ class Settings(BaseSettings):
 
     @property
     def db_path(self) -> str:
-        Path(self.data_dir).mkdir(parents=True, exist_ok=True)
-        return os.path.join(self.data_dir, self.db_filename)
+        data_dir = Path(os.path.expandvars(self.data_dir)).expanduser()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return str(data_dir / self.db_filename)
 
     @property
     def resolved_memory_markdown_dir(self) -> str:
         if self.memory_markdown_dir.strip():
-            return str(Path(self.memory_markdown_dir).expanduser())
-        return str(Path(self.data_dir).expanduser() / "memory")
+            return str(Path(os.path.expandvars(self.memory_markdown_dir)).expanduser())
+        return str(Path(os.path.expandvars(self.data_dir)).expanduser() / "memory")
 
     @property
     def cors_origins(self) -> list[str]:
