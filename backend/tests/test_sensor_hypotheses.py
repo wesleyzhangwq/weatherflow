@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi import BackgroundTasks
 
 from app.agents import MemoryAgent, StateAgent
 from app.core.orchestrator import Orchestrator
@@ -166,13 +167,14 @@ async def test_checkin_response_returns_pending_hypotheses(fake_llm) -> None:
             }
         ),
         "你今天的记录比较安静，但有一点稳定的回到现场。",
+        "今天先保留一个小闭环就好。",
         json.dumps({"patterns": []}),
         json.dumps({"semantic": [], "milestones": [], "phases": []}),
-        "今天先保留一个小闭环就好。",
     )
 
     response = await submit_checkin(
         CheckinIn(status="还可以", did_today="写了一点东西"),
+        background_tasks=BackgroundTasks(),
         orch=Orchestrator(fake_llm),
     )
 
