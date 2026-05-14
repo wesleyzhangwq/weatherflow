@@ -9,8 +9,8 @@ from app.agents.base import BaseAgent
 from app.core.llm import chat_json
 from app.core.model_router import model_for
 from app.core.prompts import STATE_SYSTEM
-from app.memory import checkin_repo, git_repo, notes_repo, state_repo, workspace_repo
-from app.memory.schemas import CheckinRecord, GitActivityRecord, UserStateOut
+from app.memory import checkin_repo, hypothesis_repo, state_repo
+from app.memory.schemas import CheckinRecord, GitActivityRecord, SensorHypothesis, UserStateOut
 
 _VALID_LABELS = {"Momentum", "Confusion", "Burnout", "Overload", "Recovery"}
 
@@ -24,7 +24,7 @@ def _clamp(v: Any, default: int = 50) -> int:
 
 def _heuristic_state(
     checkin: Optional[CheckinRecord],
-    git: list[GitActivityRecord],
+    active_hypotheses: list[SensorHypothesis],
 ) -> dict:
     """Cheap deterministic baseline used when no LLM is available
     (offline tests, missing API key, fallback). Not as nuanced as the LLM
@@ -85,10 +85,11 @@ def _heuristic_state(
     )
     stuck_kw = bool(checkin and (checkin.stuck_on or "").strip())
 
-    avg_switch = (
-        sum(g.switch_score for g in git) / len(git) if git else 0.0
-    )
-    total_commits = sum(g.commit_count for g in git)
+    hypothesis_text = " ".join(
+        f"{h.key} {h.label} {h.summary}" for h in active_hypotheses
+    ).lower()
+    switching_hypothesis = "switch" in hypothesis_text or "切换" in hypothesis_text
+    output_hypothesis = "output_active" in hypothesis_text or "推进" in hypothesis_text
 
     base = {
         "focus": 60,
@@ -102,10 +103,10 @@ def _heuristic_state(
         base["burnout"] += 30
         base["stress"] += 20
         base["momentum"] -= 20
-    if overload_kw or avg_switch > 0.6:
+    if overload_kw or switching_hypothesis:
         base["focus"] -= 15
         base["momentum"] -= 10
-    if momentum_kw or total_commits >= 5:
+    if momentum_kw or output_hypothesis:
         base["momentum"] += 20
         base["confidence"] += 10
         base["focus"] += 5
@@ -116,7 +117,7 @@ def _heuristic_state(
 
     if state["burnout"] >= 60:
         label = "Burnout"
-    elif overload_kw or avg_switch > 0.6:
+    elif overload_kw or switching_hypothesis:
         label = "Overload"
     elif state["momentum"] >= 65 and state["focus"] >= 60:
         label = "Momentum"
@@ -140,15 +141,11 @@ class StateAgent(BaseAgent):
         git_recent: Optional[list[GitActivityRecord]] = None,
     ) -> UserStateOut:
         checkin = checkin or checkin_repo.latest()
-        git_recent = git_recent if git_recent is not None else git_repo.recent(limit=14)
-        workspace_recent = workspace_repo.recent(limit=5)
-        notes_recent = notes_repo.recent(limit=3)
+        active_hypotheses = hypothesis_repo.active(limit=12)
 
         context = {
             "checkin": checkin.model_dump() if checkin else None,
-            "git_recent": [g.model_dump() for g in git_recent],
-            "workspace_recent": [w.model_dump() for w in workspace_recent],
-            "notes_recent": [n.model_dump() for n in notes_recent],
+            "active_sensor_hypotheses": [h.model_dump() for h in active_hypotheses],
         }
 
         try:
@@ -169,7 +166,7 @@ class StateAgent(BaseAgent):
                 temperature=0.2,
             )
         except Exception:
-            raw = _heuristic_state(checkin, git_recent)
+            raw = _heuristic_state(checkin, active_hypotheses)
 
         state = UserStateOut(
             focus=_clamp(raw.get("focus")),

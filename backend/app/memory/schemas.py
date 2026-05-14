@@ -134,6 +134,34 @@ class SensorSweepIn(BaseModel):
     dry_run: bool = False
 
 
+# ----------------------------- Sensor hypotheses -----------------------------
+HypothesisSourceType = Literal["git", "notes", "workspace", "patterns"]
+HypothesisStatus = Literal["pending", "confirmed", "rejected", "superseded"]
+HypothesisFeedback = Literal["confirmed", "rejected"]
+
+
+class SensorHypothesis(BaseModel):
+    id: int
+    created_at: str
+    last_seen_at: str
+    source_type: HypothesisSourceType
+    source_record_id: Optional[int] = None
+    key: str
+    label: str
+    summary: str
+    evidence: Optional[dict] = None
+    confidence: float = 0.2
+    seen_count: int = 1
+    status: HypothesisStatus = "pending"
+    user_feedback: Optional[HypothesisFeedback] = None
+    confirmed_at: Optional[str] = None
+    rejected_at: Optional[str] = None
+
+
+class HypothesisFeedbackIn(BaseModel):
+    feedback: HypothesisFeedback
+
+
 # ----------------------------- Short-term events -----------------------------
 class EventIn(BaseModel):
     type: str = Field(..., description="chat / action / reflection / state / sensor / ...")
@@ -179,6 +207,11 @@ __all__ = [
     "NotesActivityIn",
     "NotesActivityRecord",
     "SensorSweepIn",
+    "HypothesisSourceType",
+    "HypothesisStatus",
+    "HypothesisFeedback",
+    "SensorHypothesis",
+    "HypothesisFeedbackIn",
     "EventIn",
     "EventRecord",
     "WorkspaceActivityIn",

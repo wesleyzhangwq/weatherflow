@@ -1,54 +1,43 @@
 """Sensor ingestion endpoints — git activity, notes activity, workspace.
 
-Each ingest endpoint also triggers a state recompute so the dashboard
-reflects new behavioral signal immediately (the gap was the original design
-goal: "理解模式"必须可见).
+Ingest writes deterministic sensor rows and derives weak hypotheses. Hypotheses
+need user confirmation or repetition before they influence state.
 """
 
 from __future__ import annotations
-
-import logging
 from typing import List
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, HTTPException, Query
 
-from app.agents import StateAgent
 from app.config import get_settings
-from app.core.llm import LLMClient
-from app.memory import git_repo, notes_repo, workspace_repo
+from app.memory import git_repo, hypothesis_repo, notes_repo, workspace_repo
 from app.memory.schemas import (
     GitActivityIn,
     GitActivityRecord,
+    HypothesisFeedbackIn,
+    HypothesisStatus,
     NotesActivityIn,
     NotesActivityRecord,
     SensorSweepIn,
+    SensorHypothesis,
     WorkspaceActivityIn,
     WorkspaceActivityRecord,
 )
-from app.routers._deps import get_llm
+from app.sensors import hypotheses as hypothesis_builder
 from app.sensors.sweep_runner import run_sensor_sweep
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sensors", tags=["sensors"])
-
-
-async def _refresh_state(llm: LLMClient) -> None:
-    try:
-        await StateAgent(llm).estimate()
-    except Exception:
-        logger.exception("state refresh after sensor ingest failed")
 
 
 # -------------------------- Bundled sweep ------------------------
 @router.post("/sweep")
 async def sensor_sweep(
     body: SensorSweepIn = Body(default_factory=SensorSweepIn),
-    llm: LLMClient = Depends(get_llm),
 ) -> dict:
     """Run git + notes + workspace in one shot.
 
     Empty root lists use server defaults (``SENSOR_SWEEP_*`` env or ``~/Projects`` / ``~/Notes``).
-    After a non-dry run, state is recomputed once (single LLM call).
+    Non-dry runs write sensor rows and weak hypotheses, but do not recompute state.
     """
     settings = get_settings()
     summary = run_sensor_sweep(
@@ -59,8 +48,6 @@ async def sensor_sweep(
         window_days=body.window_days,
         dry_run=body.dry_run,
     )
-    if not body.dry_run:
-        await _refresh_state(llm)
     return summary
 
 
@@ -68,7 +55,6 @@ async def sensor_sweep(
 @router.post("/git", response_model=GitActivityRecord)
 async def ingest_git(
     payload: GitActivityIn,
-    llm: LLMClient = Depends(get_llm),
 ) -> GitActivityRecord:
     rid = git_repo.add(payload)
     rows = git_repo.recent(limit=1)
@@ -77,7 +63,7 @@ async def ingest_git(
         if rows and rows[0].id == rid
         else GitActivityRecord(id=rid, ts="", **payload.model_dump())
     )
-    await _refresh_state(llm)
+    hypothesis_builder.from_git(record)
     return record
 
 
@@ -90,7 +76,6 @@ async def recent_git(limit: int = 30) -> List[GitActivityRecord]:
 @router.post("/notes", response_model=NotesActivityRecord)
 async def ingest_notes(
     payload: NotesActivityIn,
-    llm: LLMClient = Depends(get_llm),
 ) -> NotesActivityRecord:
     rid = notes_repo.add(payload)
     rows = notes_repo.recent(limit=1)
@@ -99,7 +84,7 @@ async def ingest_notes(
         if rows and rows[0].id == rid
         else NotesActivityRecord(id=rid, ts="", **payload.model_dump())
     )
-    await _refresh_state(llm)
+    hypothesis_builder.from_notes(record)
     return record
 
 
@@ -112,7 +97,6 @@ async def recent_notes(limit: int = 30) -> List[NotesActivityRecord]:
 @router.post("/workspace", response_model=WorkspaceActivityRecord)
 async def ingest_workspace(
     payload: WorkspaceActivityIn,
-    llm: LLMClient = Depends(get_llm),
 ) -> WorkspaceActivityRecord:
     rid = workspace_repo.add(payload)
     rows = workspace_repo.recent(limit=1)
@@ -121,10 +105,30 @@ async def ingest_workspace(
         if rows and rows[0].id == rid
         else WorkspaceActivityRecord(id=rid, ts="", **payload.model_dump())
     )
-    await _refresh_state(llm)
+    hypothesis_builder.from_workspace(record)
     return record
 
 
 @router.get("/workspace/recent", response_model=List[WorkspaceActivityRecord])
 async def recent_workspace(limit: int = 30) -> List[WorkspaceActivityRecord]:
     return workspace_repo.recent(limit=limit)
+
+
+# -------------------------- Hypotheses ------------------------
+@router.get("/hypotheses", response_model=List[SensorHypothesis])
+async def recent_hypotheses(
+    limit: int = 30,
+    status: HypothesisStatus | None = Query(default=None),
+) -> List[SensorHypothesis]:
+    return hypothesis_repo.recent(limit=limit, status=status)
+
+
+@router.post("/hypotheses/{hypothesis_id}/feedback", response_model=SensorHypothesis)
+async def hypothesis_feedback(
+    hypothesis_id: int,
+    body: HypothesisFeedbackIn,
+) -> SensorHypothesis:
+    item = hypothesis_repo.set_feedback(hypothesis_id, body.feedback)
+    if item is None:
+        raise HTTPException(status_code=404, detail="hypothesis not found")
+    return item

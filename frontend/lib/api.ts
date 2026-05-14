@@ -106,6 +106,29 @@ export interface CheckinResponse {
   patterns: PatternHit[];
   suggestion_pattern_codes: string[];
   pattern_window_days: number;
+  pending_hypotheses: SensorHypothesis[];
+}
+
+export type HypothesisSourceType = "git" | "notes" | "workspace" | "patterns";
+export type HypothesisStatus = "pending" | "confirmed" | "rejected" | "superseded";
+export type HypothesisFeedback = "confirmed" | "rejected";
+
+export interface SensorHypothesis {
+  id: number;
+  created_at: string;
+  last_seen_at: string;
+  source_type: HypothesisSourceType;
+  source_record_id?: number | null;
+  key: string;
+  label: string;
+  summary: string;
+  evidence?: Record<string, unknown> | null;
+  confidence: number;
+  seen_count: number;
+  status: HypothesisStatus;
+  user_feedback?: HypothesisFeedback | null;
+  confirmed_at?: string | null;
+  rejected_at?: string | null;
 }
 
 export interface SuggestionFeedbackIn {
@@ -176,6 +199,11 @@ export const api = {
         semantic_value_snapshot: body.semantic_value_snapshot ?? "",
         session_id: body.session_id ?? "default"
       })
+    }),
+  submitHypothesisFeedback: (id: number, feedback: HypothesisFeedback) =>
+    request<SensorHypothesis>(`/api/sensors/hypotheses/${id}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ feedback })
     }),
   semantic: (limit = 50) =>
     request<SemanticItem[]>(`/api/memory/semantic?limit=${limit}`)

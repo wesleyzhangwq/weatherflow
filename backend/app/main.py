@@ -10,7 +10,6 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.agents import StateAgent
 from app.config import get_settings
 from app.core.llm import build_llm_client
 from app.core.orchestrator import Orchestrator
@@ -56,7 +55,6 @@ async def lifespan(app: FastAPI):
                 None,
                 lambda: run_sensor_sweep(settings=get_settings(), dry_run=False),
             )
-            await StateAgent(app.state.llm).estimate()
         except Exception:
             logger.exception("Sensor sweep job failed.")
 
