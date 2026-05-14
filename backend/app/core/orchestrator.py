@@ -1,11 +1,23 @@
-"""Orchestrator — hybrid memory write path + four agents."""
+"""Orchestrator — hybrid memory write path + four agents.
+
+Daily flow is split for clarity (Phase 1, behavior unchanged):
+
+- **Hot path** (`Orchestrator.run_daily_interaction` / `InteractionOrchestrator`):
+  ingest check-in, estimate state, reflect, then (after synchronous maintenance)
+  gather hybrid memory context, detect patterns, and produce the suggestion payload.
+- **Maintenance path** (`Orchestrator.run_daily_maintenance`): markdown digest,
+  long-term compression, and semantic/timeline extraction.
+
+Maintenance still runs synchronously inside the interaction method so API
+semantics stay identical until a later phase moves it async/off-thread.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 from app.agents import MemoryAgent, PlanningAgent, ReflectionAgent, StateAgent
 from app.core.llm import LLMClient
@@ -42,12 +54,26 @@ class DailyLoopResult:
     pattern_window_days: int = 7
 
 
-class Orchestrator:
-    def __init__(self, llm: LLMClient) -> None:
-        self.state_agent = StateAgent(llm)
-        self.reflection_agent = ReflectionAgent(llm)
-        self.planning_agent = PlanningAgent(llm)
-        self.memory_agent = MemoryAgent(llm)
+class InteractionOrchestrator:
+    """Coordinates the daily **hot** path with an explicit **maintenance** boundary.
+
+    Phase 1: `run_daily_interaction` still `await`s maintenance synchronously so
+    check-in responses and memory context stay identical to the pre-split loop.
+    """
+
+    def __init__(
+        self,
+        *,
+        state_agent: StateAgent,
+        reflection_agent: ReflectionAgent,
+        planning_agent: PlanningAgent,
+        memory_agent: MemoryAgent,
+        llm: LLMClient,
+    ) -> None:
+        self.state_agent = state_agent
+        self.reflection_agent = reflection_agent
+        self.planning_agent = planning_agent
+        self.memory_agent = memory_agent
         self._llm = llm
 
     @staticmethod
@@ -66,12 +92,56 @@ class Orchestrator:
             lines.append(f"- [{code}] {label}: {expl}")
         return "\n".join(lines)
 
-    async def daily_loop(
+    async def run_daily_maintenance(
+        self,
+        *,
+        session_id: str,
+        for_date: str,
+        state: UserStateOut,
+        reflection: ReflectionRecord,
+    ) -> None:
+        """Slow memory factory: digest, vectors, semantic/timeline extraction."""
+        event_lines = _event_lines_for_day(session_id, for_date)
+        await self.memory_agent.write_daily_markdown(
+            for_date=for_date,
+            state=state,
+            reflection=reflection,
+            event_lines=event_lines or None,
+            semantic_hints=None,
+        )
+
+        await self.memory_agent.compress_to_long_term(
+            for_date=for_date,
+            reflection=reflection,
+            extra_context="",
+        )
+
+        recent_checkins = checkin_repo.recent(limit=7)
+        recent_refs = reflection_repo.recent(limit=5)
+        try:
+            await self.memory_agent.extract(
+                recent_checkins=recent_checkins,
+                recent_reflections=recent_refs,
+            )
+        except Exception:
+            pass
+
+    async def run_daily_interaction(
         self,
         checkin: Optional[CheckinRecord] = None,
         *,
         session_id: str = "default",
+        run_maintenance: Optional[
+            Callable[..., Awaitable[None]]
+        ] = None,
     ) -> DailyLoopResult:
+        """Understand the moment and produce the user-facing loop result.
+
+        Still invokes maintenance synchronously after reflection (Phase 1 —
+        ordering and side effects unchanged). When ``run_maintenance`` is set
+        (by ``Orchestrator``), it is used so outer subclasses can wrap the slow
+        path without duplicating interaction logic.
+        """
         sid = session_id or "default"
         for_date = checkin.date if checkin else _today_iso()
 
@@ -117,30 +187,13 @@ class Orchestrator:
 
         await self.memory_agent.ingest_reflection(reflection)
 
-        event_lines = _event_lines_for_day(sid, for_date)
-        await self.memory_agent.write_daily_markdown(
+        maint = run_maintenance or self.run_daily_maintenance
+        await maint(
+            session_id=sid,
             for_date=for_date,
             state=state,
             reflection=reflection,
-            event_lines=event_lines or None,
-            semantic_hints=None,
         )
-
-        await self.memory_agent.compress_to_long_term(
-            for_date=for_date,
-            reflection=reflection,
-            extra_context="",
-        )
-
-        recent_checkins = checkin_repo.recent(limit=7)
-        recent_refs = reflection_repo.recent(limit=5)
-        try:
-            await self.memory_agent.extract(
-                recent_checkins=recent_checkins,
-                recent_reflections=recent_refs,
-            )
-        except Exception:
-            pass
 
         mem_ctx = await gather_memory_context(
             self._llm,
@@ -164,6 +217,79 @@ class Orchestrator:
             patterns=pat_list,
             pattern_window_days=pw,
         )
+
+
+class Orchestrator:
+    def __init__(self, llm: LLMClient) -> None:
+        self.state_agent = StateAgent(llm)
+        self.reflection_agent = ReflectionAgent(llm)
+        self.planning_agent = PlanningAgent(llm)
+        self.memory_agent = MemoryAgent(llm)
+        self._llm = llm
+        self._interaction = InteractionOrchestrator(
+            state_agent=self.state_agent,
+            reflection_agent=self.reflection_agent,
+            planning_agent=self.planning_agent,
+            memory_agent=self.memory_agent,
+            llm=self._llm,
+        )
+
+    @staticmethod
+    def _pattern_window_days() -> int:
+        return 7
+
+    @staticmethod
+    def _patterns_summary_for_planning(pat_list: List[dict[str, Any]]) -> str:
+        if not pat_list:
+            return "（本窗口暂无显著模式信号。）"
+        lines: list[str] = []
+        for p in pat_list[:6]:
+            code = p.get("code", "")
+            label = p.get("label", "")
+            expl = p.get("explanation", "")
+            lines.append(f"- [{code}] {label}: {expl}")
+        return "\n".join(lines)
+
+    async def run_daily_interaction(
+        self,
+        checkin: Optional[CheckinRecord] = None,
+        *,
+        session_id: str = "default",
+    ) -> DailyLoopResult:
+        """Hot path plus planning; maintenance runs via ``run_daily_maintenance`` hook."""
+
+        async def _maint(**kw: Any) -> None:
+            await self.run_daily_maintenance(**kw)
+
+        return await self._interaction.run_daily_interaction(
+            checkin=checkin,
+            session_id=session_id,
+            run_maintenance=_maint,
+        )
+
+    async def run_daily_maintenance(
+        self,
+        *,
+        session_id: str,
+        for_date: str,
+        state: UserStateOut,
+        reflection: ReflectionRecord,
+    ) -> None:
+        """Expose maintenance for tests; same implementation as interaction helper."""
+        await self._interaction.run_daily_maintenance(
+            session_id=session_id,
+            for_date=for_date,
+            state=state,
+            reflection=reflection,
+        )
+
+    async def daily_loop(
+        self,
+        checkin: Optional[CheckinRecord] = None,
+        *,
+        session_id: str = "default",
+    ) -> DailyLoopResult:
+        return await self.run_daily_interaction(checkin=checkin, session_id=session_id)
 
     async def weekly_loop(self, *, session_id: str = "default") -> DailyLoopResult:
         sid = session_id or "default"
@@ -233,4 +359,4 @@ class Orchestrator:
         )
 
 
-__all__ = ["Orchestrator", "DailyLoopResult"]
+__all__ = ["Orchestrator", "InteractionOrchestrator", "DailyLoopResult"]
