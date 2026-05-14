@@ -14,13 +14,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any, List, Optional
 
 from app.agents import MemoryAgent, PlanningAgent, ReflectionAgent, StateAgent
 from app.core.llm import LLMClient
 from app.core.memory_maintenance import drain_maintenance_jobs
 from app.core.patterns import detect as detect_patterns
-from app.memory import checkin_repo, events_repo, reflection_repo
+from app.memory import events_repo
 from app.memory.maintenance_repo import (
     JOB_DAILY_MEMORY,
     JOB_WEEKLY_MEMORY,
@@ -34,19 +34,6 @@ from app.memory.session_buffer import append as buffer_append
 
 def _today_iso() -> str:
     return date.today().isoformat()
-
-
-def _event_lines_for_day(session_id: str, for_date: str, limit: int = 25) -> List[str]:
-    evs = events_repo.recent(limit=160, session_id=session_id)
-    lines: list[str] = []
-    for e in evs:
-        ts = e.timestamp[:10] if e.timestamp else ""
-        if ts != for_date:
-            continue
-        lines.append(f"{e.type}: {(e.content or '').strip()[:200]}")
-        if len(lines) >= limit:
-            break
-    return lines
 
 
 @dataclass
@@ -88,46 +75,11 @@ class InteractionOrchestrator:
             lines.append(f"- [{code}] {label}: {expl}")
         return "\n".join(lines)
 
-    async def run_daily_maintenance(
-        self,
-        *,
-        session_id: str,
-        for_date: str,
-        state: UserStateOut,
-        reflection: ReflectionRecord,
-    ) -> None:
-        """Markdown → extract → compress (no episodic ingest — used by tests / direct calls)."""
-        event_lines = _event_lines_for_day(session_id, for_date)
-        await self.memory_agent.write_daily_markdown(
-            for_date=for_date,
-            state=state,
-            reflection=reflection,
-            event_lines=event_lines or None,
-            semantic_hints=None,
-        )
-
-        recent_checkins = checkin_repo.recent(limit=7)
-        recent_refs = reflection_repo.recent(limit=5)
-        try:
-            await self.memory_agent.extract(
-                recent_checkins=recent_checkins,
-                recent_reflections=recent_refs,
-            )
-        except Exception:
-            pass
-
-        await self.memory_agent.compress_to_long_term(
-            for_date=for_date,
-            reflection=reflection,
-            extra_context="",
-        )
-
     async def run_daily_interaction(
         self,
         checkin: Optional[CheckinRecord] = None,
         *,
         session_id: str = "default",
-        run_maintenance: Optional[Callable[..., Awaitable[None]]] = None,
         enqueue_maintenance: bool = True,
     ) -> DailyLoopResult:
         sid = session_id or "default"
@@ -190,14 +142,6 @@ class InteractionOrchestrator:
                     "reflection_id": reflection.id,
                     "state": state.model_dump(),
                 },
-            )
-
-        if run_maintenance is not None:
-            await run_maintenance(
-                session_id=sid,
-                for_date=for_date,
-                state=state,
-                reflection=reflection,
             )
 
         mem_ctx = await gather_memory_context(
@@ -274,23 +218,7 @@ class Orchestrator:
         return await self._interaction.run_daily_interaction(
             checkin=checkin,
             session_id=session_id,
-            run_maintenance=None,
             enqueue_maintenance=enqueue_maintenance,
-        )
-
-    async def run_daily_maintenance(
-        self,
-        *,
-        session_id: str,
-        for_date: str,
-        state: UserStateOut,
-        reflection: ReflectionRecord,
-    ) -> None:
-        await self._interaction.run_daily_maintenance(
-            session_id=session_id,
-            for_date=for_date,
-            state=state,
-            reflection=reflection,
         )
 
     async def daily_loop(
