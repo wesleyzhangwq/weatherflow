@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { HypothesisReview } from "@/components/HypothesisReview";
 import { SuggestionFeedback } from "@/components/SuggestionFeedback";
 import { api, type CheckinResponse } from "@/lib/api";
 import {
@@ -94,6 +95,7 @@ export default function CheckinPage() {
             </ul>
           </div>
         ) : null}
+        <HypothesisReview items={result.pending_hypotheses ?? []} />
         {result.suggestion ? (
           <div className="card">
             <div className="text-xs uppercase tracking-widest muted">

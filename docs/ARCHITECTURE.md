@@ -84,9 +84,13 @@ machine, and never send raw content off-device.
 | `wf scan-workspace`        | `POST /api/sensors/workspace`  | active project count, touched paths, `fragmentation_score` |
 | `wf sensors` (one-shot)    | `POST /api/sensors/sweep`      | runs all of the above and recomputes state once           |
 
-After any non-dry ingest, the backend recomputes `UserState` so the dashboard
-reflects new behavioral signal immediately. The scheduler can run the bundled
-sweep on a cron (`SENSOR_SWEEP_*`) so the user does not have to think about it.
+Sensor rows are treated as weak signals. After ingest, the backend stores the
+aggregate row and derives low-confidence hypotheses (for example, "project
+switching may be up") instead of recomputing `UserState` immediately. Check-in
+and reflection surfaces can ask the user to confirm or reject pending hypotheses.
+Only confirmed or repeatedly observed hypotheses are allowed to influence state
+or long-term memory. The scheduler can run the bundled sweep on a cron
+(`SENSOR_SWEEP_*`) so the user does not have to think about it.
 
 ## Storage Layout
 
@@ -107,6 +111,7 @@ collection for long-term vectors.
 | `git_activity`          | per-window commit / switch metrics                            |
 | `notes_activity`        | Markdown / Obsidian read-vs-write signal                      |
 | `workspace_activity`    | directory activity + fragmentation                            |
+| `sensor_hypotheses`     | weak interpretations from sensors, pending until confirmed or repeated |
 
 **Mid-term memory** is a Markdown vault under `MEMORY_MARKDOWN_DIR`
 (defaults to `DATA_DIR/memory`): a daily note per day, a rolling weekly digest,

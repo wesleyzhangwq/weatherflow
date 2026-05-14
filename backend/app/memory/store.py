@@ -147,6 +147,29 @@ CREATE TABLE IF NOT EXISTS workspace_activity (
     window_days          INTEGER NOT NULL DEFAULT 7
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_ts ON workspace_activity(ts DESC);
+
+-- Weak interpretations produced from deterministic sensor rows.
+-- They are questions for the user until confirmed or seen repeatedly.
+CREATE TABLE IF NOT EXISTS sensor_hypotheses (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_seen_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    source_type      TEXT    NOT NULL CHECK (source_type IN ('git','notes','workspace','patterns')),
+    source_record_id INTEGER,
+    key              TEXT    NOT NULL UNIQUE,
+    label            TEXT    NOT NULL,
+    summary          TEXT    NOT NULL,
+    evidence         TEXT,
+    confidence       REAL    NOT NULL DEFAULT 0.2,
+    seen_count       INTEGER NOT NULL DEFAULT 1,
+    status           TEXT    NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','confirmed','rejected','superseded')),
+    user_feedback    TEXT CHECK (user_feedback IN ('confirmed','rejected') OR user_feedback IS NULL),
+    confirmed_at     TEXT,
+    rejected_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_status ON sensor_hypotheses(status, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_source ON sensor_hypotheses(source_type, last_seen_at DESC);
 """
 
 

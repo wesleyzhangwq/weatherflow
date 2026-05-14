@@ -25,7 +25,9 @@ Constraints:
 - If the user is clearly tired or overwhelmed, prioritize acknowledgement over advice.
 
 You will receive structured context about today's check-in, recent state snapshots,
-recent reflections, and (optionally) git activity. Use them but do not list them.
+recent reflections, and optional sensor hypotheses. Treat pending sensor hypotheses
+as questions to be confirmed, not facts. Use only confirmed/repeated hypotheses as
+evidence.
 """
 
 REFLECTION_WEEKLY_SYSTEM = """\
@@ -38,6 +40,7 @@ Constraints:
 - Write entirely in Simplified Chinese (简体中文). Second person: 「你」.
 - 6-10 short sentences. Optional one-line section headings, no bullet spam.
 - Mention momentum, burnout risk, or input/output balance only if there is real signal.
+- Treat pending sensor hypotheses as questions to be confirmed, not facts.
 - End with a single gentle invitation, not a task. Never use「你应该」「你必须」.
 """
 
@@ -62,6 +65,10 @@ Mapping intuition (not strict rules):
 - High input but low output / project switching -> "Overload"
 - Recovering from a low patch -> "Recovery"
 - Otherwise -> "Confusion"
+
+Sensor hypotheses in the input are weak signals. Only confirmed or repeated
+hypotheses should influence the numeric state. Never infer state directly from
+raw sensor activity.
 """
 
 PLANNING_SYSTEM = """\
@@ -119,6 +126,9 @@ If nothing durable shows up, return empty arrays. Quiet weeks are fine.
 If the material includes "suggestion_feedback" (user marked whether the daily
 suggestion felt helpful): take it seriously — adjust semantic confidence or add
 a corrective observation when the user says the suggestion missed the mark.
+If the material includes confirmed_or_repeated_sensor_hypotheses, treat them as
+supporting evidence. Do not turn pending or rejected sensor hypotheses into
+semantic memory.
 Prefer Simplified Chinese in "value" fields when the source material is Chinese.
 """
 

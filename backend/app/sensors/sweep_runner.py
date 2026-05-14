@@ -15,7 +15,15 @@ from typing import Any, List, Optional
 
 from app.config import Settings, get_settings
 from app.memory import git_repo, notes_repo, workspace_repo
-from app.memory.schemas import GitActivityIn, NotesActivityIn, WorkspaceActivityIn
+from app.memory.schemas import (
+    GitActivityIn,
+    GitActivityRecord,
+    NotesActivityIn,
+    NotesActivityRecord,
+    WorkspaceActivityIn,
+    WorkspaceActivityRecord,
+)
+from app.sensors import hypotheses as hypothesis_builder
 
 _SKIP_WS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".idea", "__pycache__"}
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -103,14 +111,16 @@ def _sweep_git(roots: List[Path], window: int, dry_run: bool) -> dict[str, Any]:
     for repo, commits in active:
         if dry_run:
             continue
-        git_repo.add(
-            GitActivityIn(
-                repo=str(repo),
-                commit_count=int(commits),
-                project_count=int(project_count),
-                switch_score=round(switch_score, 3),
-                window_days=int(window),
-            )
+        payload = GitActivityIn(
+            repo=str(repo),
+            commit_count=int(commits),
+            project_count=int(project_count),
+            switch_score=round(switch_score, 3),
+            window_days=int(window),
+        )
+        rid = git_repo.add(payload)
+        hypothesis_builder.from_git(
+            GitActivityRecord(id=rid, ts="", **payload.model_dump())
         )
         out["records_written"] += 1
     if dry_run:
@@ -192,7 +202,10 @@ def _sweep_notes(roots: List[Path], window: int, dry_run: bool) -> dict[str, Any
             window_days=window,
         )
         if not dry_run:
-            notes_repo.add(payload)
+            rid = notes_repo.add(payload)
+            hypothesis_builder.from_notes(
+                NotesActivityRecord(id=rid, ts="", **payload.model_dump())
+            )
         out["records_written"] += 1
     return out
 
@@ -241,7 +254,10 @@ def _sweep_workspace(roots: List[Path], window: int, dry_run: bool) -> dict[str,
             window_days=window,
         )
         if not dry_run:
-            workspace_repo.add(payload)
+            rid = workspace_repo.add(payload)
+            hypothesis_builder.from_workspace(
+                WorkspaceActivityRecord(id=rid, ts="", **payload.model_dump())
+            )
         out["records_written"] += 1
     return out
 

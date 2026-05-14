@@ -16,7 +16,7 @@ from app.core.prompts import (
     MEMORY_EXTRACT_SYSTEM,
     PROFILE_REFRESH_SYSTEM,
 )
-from app.memory import episodic, events_repo, midterm_md, semantic, timeline
+from app.memory import episodic, events_repo, hypothesis_repo, midterm_md, semantic, timeline
 from app.memory.long_term_vector import get_long_term_store
 from app.memory.schemas import CheckinRecord, ReflectionRecord, SemanticItem, UserStateOut
 
@@ -66,6 +66,11 @@ class MemoryAgent(BaseAgent):
                 break
         if fb_parsed:
             material["suggestion_feedback"] = fb_parsed
+        active_hypotheses = hypothesis_repo.active(limit=8)
+        if active_hypotheses:
+            material["confirmed_or_repeated_sensor_hypotheses"] = [
+                h.model_dump() for h in active_hypotheses
+            ]
         try:
             data = await chat_json(
                 self.llm,
