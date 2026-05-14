@@ -1,6 +1,7 @@
 "use client";
 
 import type { UserState } from "@/lib/api";
+import { displayRationaleZh } from "@/lib/rationaleZh";
 import { WEATHER_BLURB, WEATHER_GLYPH, WEATHER_LABEL_ZH } from "@/lib/weather";
 
 export function WeatherCard({ state }: { state: UserState | null }) {
@@ -8,13 +9,14 @@ export function WeatherCard({ state }: { state: UserState | null }) {
     return (
       <div className="card">
         <div className="text-sm muted">还没有读数。</div>
-        <div className="mt-1">可以先做一次晨间签到。</div>
+        <div className="mt-1">可以先做一次签到。</div>
       </div>
     );
   }
   const glyph = WEATHER_GLYPH[state.weather_label];
   const blurb = WEATHER_BLURB[state.weather_label];
   const zh = WEATHER_LABEL_ZH[state.weather_label];
+  const rationaleZh = displayRationaleZh(state.rationale);
   return (
     <div className="card">
       <div className="text-xs uppercase tracking-widest muted">今日天气</div>
@@ -26,8 +28,8 @@ export function WeatherCard({ state }: { state: UserState | null }) {
           <div className="muted mt-1">{blurb}</div>
         </div>
       </div>
-      {state.rationale ? (
-        <p className="mt-5 text-sm leading-relaxed">{state.rationale}</p>
+      {rationaleZh ? (
+        <p className="mt-5 text-sm leading-relaxed">{rationaleZh}</p>
       ) : null}
     </div>
   );
