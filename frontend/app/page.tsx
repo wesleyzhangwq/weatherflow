@@ -41,9 +41,6 @@ export default async function Home() {
     <div className="space-y-8">
       <section>
         <h1 className="font-serif text-4xl tracking-tight">今日</h1>
-        <p className="muted mt-1">
-          长期成长的伴侣，不是替你干活的助理。
-        </p>
       </section>
 
       <section className="grid grid-cols-1 md:grid-cols-3 gap-5">

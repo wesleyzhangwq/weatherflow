@@ -55,6 +55,9 @@ def _heuristic_state(
             "疲惫",
             "耗尽",
             "没电",
+            "压力",
+            "焦虑",
+            "失控",
         )
     )
     overload_kw = any(
@@ -68,6 +71,8 @@ def _heuristic_state(
             "太多",
             "混乱",
             "信息太多",
+            "有点乱",
+            "分散",
         )
     )
     momentum_kw = any(
@@ -81,6 +86,8 @@ def _heuristic_state(
             "发布",
             "交付",
             "收尾",
+            "有动力",
+            "清晰",
         )
     )
     stuck_kw = bool(checkin and (checkin.stuck_on or "").strip())

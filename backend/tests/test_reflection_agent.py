@@ -35,3 +35,24 @@ async def test_weekly_reflection_includes_grounding_sources(fake_llm) -> None:
     source_types = {source["type"] for source in sources}
     assert {"checkin", "state", "patterns"}.issubset(source_types)
     assert all(source["label"] and source["summary"] for source in sources)
+
+
+async def test_daily_reflection_fallback_is_simplified_chinese(fake_llm) -> None:
+    checkin_repo.add(CheckinIn(status="有点累", did_today="写了几句"))
+    state_repo.add(
+        UserStateOut(
+            focus=55,
+            stress=50,
+            burnout=45,
+            momentum=48,
+            confidence=50,
+            motivation=50,
+            weather_label="Confusion",
+            rationale="今天节奏不算快，但你还在场。",
+        )
+    )
+    # No queue_chat -> chat raises -> fallback path
+    reflection = await ReflectionAgent(fake_llm).run("daily")
+    assert "你" in reflection.content
+    assert "Today was today" not in reflection.content
+    assert reflection.kind == "daily"

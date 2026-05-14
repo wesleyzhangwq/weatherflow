@@ -31,15 +31,16 @@ from app.memory.schemas import (
 
 
 _FALLBACK_DAILY = (
-    "Today was today. You showed up enough to write this down, and that counts. "
-    "If something is stuck, it's allowed to stay stuck for now. "
-    "Tomorrow can be quiet too."
+    "今天就到这里也很好。你愿意写下来，这一点本身就值得被看见。"
+    "若有什么还卡着，先允许它卡一会儿也没关系。"
+    "明天可以还是轻轻的，一步一步来。"
 )
 
 _FALLBACK_WEEKLY = (
-    "This week did not need to be impressive. "
-    "Notice what kept you here, even on the dim days; that is the through-line. "
-    "It might be enough, this week, to close one small loop instead of starting a new one."
+    "这一周不必非要「了不起」才算数。回头看看，是什么样的线索让你愿意留下、愿意继续试，"
+    "那往往就是这一周真正的主线。"
+    "若能量不高，也没关系：这周也许只要把手边最小的一个闭环收好，"
+    "就比再开一头新事更温柔、也更有用。"
 )
 
 
@@ -74,8 +75,9 @@ class ReflectionAgent(BaseAgent):
 
         system = REFLECTION_DAILY_SYSTEM if kind == "daily" else REFLECTION_WEEKLY_SYSTEM
         user = (
-            "Write the reflection. Use this structured context as background, but do NOT list it back.\n\n"
-            f"CONTEXT:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
+            "请根据下列结构化背景写反思正文：只输出给用户的正文，不要复述或罗列原始字段，"
+            "不要使用 JSON 或代码块。\n\n"
+            f"背景：\n{json.dumps(context, ensure_ascii=False, indent=2)}"
         )
 
         try:
