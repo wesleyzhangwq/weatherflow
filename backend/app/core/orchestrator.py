@@ -1,15 +1,12 @@
 """Orchestrator — hybrid memory write path + four agents.
 
-Daily flow is split for clarity (Phase 1, behavior unchanged):
+Daily / weekly **interaction** (hot path): check-in signals, state estimate,
+single pattern pass, explicit ``ReflectionContext``, reflection + planning.
 
-- **Hot path** (`Orchestrator.run_daily_interaction` / `InteractionOrchestrator`):
-  ingest check-in, estimate state, reflect, then (after synchronous maintenance)
-  gather hybrid memory context, detect patterns, and produce the suggestion payload.
-- **Maintenance path** (`Orchestrator.run_daily_maintenance`): markdown digest,
-  long-term compression, and semantic/timeline extraction.
-
-Maintenance still runs synchronously inside the interaction method so API
-semantics stay identical until a later phase moves it async/off-thread.
+**Maintenance** (slow path): episodic ingest, markdown digest, semantic/timeline
+extract, long-term compression — queued in SQLite and drained explicitly
+(``drain_maintenance=True`` on ``daily_loop`` for scheduled jobs, or call
+``drain_maintenance_jobs`` in tests after a check-in).
 """
 
 from __future__ import annotations
@@ -21,10 +18,17 @@ from typing import Any, Awaitable, Callable, List, Optional
 
 from app.agents import MemoryAgent, PlanningAgent, ReflectionAgent, StateAgent
 from app.core.llm import LLMClient
+from app.core.memory_maintenance import drain_maintenance_jobs
 from app.core.patterns import detect as detect_patterns
 from app.memory import checkin_repo, events_repo, reflection_repo
+from app.memory.maintenance_repo import (
+    JOB_DAILY_MEMORY,
+    JOB_WEEKLY_MEMORY,
+    enqueue as enqueue_maintenance_job,
+)
 from app.memory.context import gather_memory_context
-from app.memory.schemas import CheckinRecord, ReflectionRecord, UserStateOut
+from app.memory.reflection_context import gather_reflection_context
+from app.memory.schemas import CheckinRecord, ReflectionKind, ReflectionRecord, UserStateOut
 from app.memory.session_buffer import append as buffer_append
 
 
@@ -55,11 +59,7 @@ class DailyLoopResult:
 
 
 class InteractionOrchestrator:
-    """Coordinates the daily **hot** path with an explicit **maintenance** boundary.
-
-    Phase 1: `run_daily_interaction` still `await`s maintenance synchronously so
-    check-in responses and memory context stay identical to the pre-split loop.
-    """
+    """Coordinates the daily interaction hot path and maintenance enqueue/drain."""
 
     def __init__(
         self,
@@ -75,10 +75,6 @@ class InteractionOrchestrator:
         self.planning_agent = planning_agent
         self.memory_agent = memory_agent
         self._llm = llm
-
-    @staticmethod
-    def _pattern_window_days() -> int:
-        return 7
 
     @staticmethod
     def _patterns_summary_for_planning(pat_list: List[dict[str, Any]]) -> str:
@@ -100,7 +96,7 @@ class InteractionOrchestrator:
         state: UserStateOut,
         reflection: ReflectionRecord,
     ) -> None:
-        """Slow memory factory: digest, vectors, semantic/timeline extraction."""
+        """Markdown → extract → compress (no episodic ingest — used by tests / direct calls)."""
         event_lines = _event_lines_for_day(session_id, for_date)
         await self.memory_agent.write_daily_markdown(
             for_date=for_date,
@@ -108,12 +104,6 @@ class InteractionOrchestrator:
             reflection=reflection,
             event_lines=event_lines or None,
             semantic_hints=None,
-        )
-
-        await self.memory_agent.compress_to_long_term(
-            for_date=for_date,
-            reflection=reflection,
-            extra_context="",
         )
 
         recent_checkins = checkin_repo.recent(limit=7)
@@ -126,27 +116,24 @@ class InteractionOrchestrator:
         except Exception:
             pass
 
+        await self.memory_agent.compress_to_long_term(
+            for_date=for_date,
+            reflection=reflection,
+            extra_context="",
+        )
+
     async def run_daily_interaction(
         self,
         checkin: Optional[CheckinRecord] = None,
         *,
         session_id: str = "default",
-        run_maintenance: Optional[
-            Callable[..., Awaitable[None]]
-        ] = None,
+        run_maintenance: Optional[Callable[..., Awaitable[None]]] = None,
+        enqueue_maintenance: bool = True,
     ) -> DailyLoopResult:
-        """Understand the moment and produce the user-facing loop result.
-
-        Still invokes maintenance synchronously after reflection (Phase 1 —
-        ordering and side effects unchanged). When ``run_maintenance`` is set
-        (by ``Orchestrator``), it is used so outer subclasses can wrap the slow
-        path without duplicating interaction logic.
-        """
         sid = session_id or "default"
         for_date = checkin.date if checkin else _today_iso()
 
         if checkin is not None:
-            await self.memory_agent.ingest_checkin(checkin)
             cbody = json.dumps(
                 {
                     "date": checkin.date,
@@ -176,7 +163,15 @@ class InteractionOrchestrator:
             },
         )
 
-        reflection = await self.reflection_agent.run("daily")
+        pw = 7
+        try:
+            pr = detect_patterns(window_days=pw).to_dict()
+        except Exception:
+            pr = {"window_days": pw, "metrics": [], "patterns": []}
+        pat_list: List[dict[str, Any]] = list(pr.get("patterns") or [])
+
+        rctx = gather_reflection_context("daily", pr)
+        reflection = await self.reflection_agent.run("daily", rctx)
         events_repo.add(
             type="reflection",
             content=reflection.content,
@@ -185,24 +180,31 @@ class InteractionOrchestrator:
         )
         buffer_append(sid, {"type": "reflection", "content": reflection.content[:900]})
 
-        await self.memory_agent.ingest_reflection(reflection)
+        if enqueue_maintenance:
+            enqueue_maintenance_job(
+                JOB_DAILY_MEMORY,
+                {
+                    "session_id": sid,
+                    "for_date": for_date,
+                    "checkin_id": checkin.id if checkin else None,
+                    "reflection_id": reflection.id,
+                    "state": state.model_dump(),
+                },
+            )
 
-        maint = run_maintenance or self.run_daily_maintenance
-        await maint(
-            session_id=sid,
-            for_date=for_date,
-            state=state,
-            reflection=reflection,
-        )
+        if run_maintenance is not None:
+            await run_maintenance(
+                session_id=sid,
+                for_date=for_date,
+                state=state,
+                reflection=reflection,
+            )
 
         mem_ctx = await gather_memory_context(
             self._llm,
             query_text=reflection.content,
             session_id=sid,
         )
-        pw = self._pattern_window_days()
-        pr = detect_patterns(window_days=pw).to_dict()
-        pat_list: List[dict[str, Any]] = list(pr.get("patterns") or [])
         pat_summary = self._patterns_summary_for_planning(pat_list)
         suggestion = await self.planning_agent.suggest(
             state,
@@ -215,7 +217,7 @@ class InteractionOrchestrator:
             reflection=reflection,
             suggestion=suggestion,
             patterns=pat_list,
-            pattern_window_days=pw,
+            pattern_window_days=int(pr.get("window_days") or pw),
         )
 
 
@@ -235,10 +237,6 @@ class Orchestrator:
         )
 
     @staticmethod
-    def _pattern_window_days() -> int:
-        return 7
-
-    @staticmethod
     def _patterns_summary_for_planning(pat_list: List[dict[str, Any]]) -> str:
         if not pat_list:
             return "（本窗口暂无显著模式信号。）"
@@ -250,21 +248,34 @@ class Orchestrator:
             lines.append(f"- [{code}] {label}: {expl}")
         return "\n".join(lines)
 
+    async def run_reflection_only(
+        self,
+        kind: ReflectionKind = "daily",
+        *,
+        session_id: str = "default",
+    ) -> ReflectionRecord:
+        """Persist a reflection only (no state loop, planning, or memory maintenance)."""
+        _ = session_id
+        pw = 7 if kind == "daily" else 14
+        try:
+            pr = detect_patterns(window_days=pw).to_dict()
+        except Exception:
+            pr = {"window_days": pw, "metrics": [], "patterns": []}
+        rctx = gather_reflection_context(kind, pr)
+        return await self.reflection_agent.run(kind, rctx)
+
     async def run_daily_interaction(
         self,
         checkin: Optional[CheckinRecord] = None,
         *,
         session_id: str = "default",
+        enqueue_maintenance: bool = True,
     ) -> DailyLoopResult:
-        """Hot path plus planning; maintenance runs via ``run_daily_maintenance`` hook."""
-
-        async def _maint(**kw: Any) -> None:
-            await self.run_daily_maintenance(**kw)
-
         return await self._interaction.run_daily_interaction(
             checkin=checkin,
             session_id=session_id,
-            run_maintenance=_maint,
+            run_maintenance=None,
+            enqueue_maintenance=enqueue_maintenance,
         )
 
     async def run_daily_maintenance(
@@ -275,7 +286,6 @@ class Orchestrator:
         state: UserStateOut,
         reflection: ReflectionRecord,
     ) -> None:
-        """Expose maintenance for tests; same implementation as interaction helper."""
         await self._interaction.run_daily_maintenance(
             session_id=session_id,
             for_date=for_date,
@@ -288,13 +298,31 @@ class Orchestrator:
         checkin: Optional[CheckinRecord] = None,
         *,
         session_id: str = "default",
+        drain_maintenance: bool = False,
     ) -> DailyLoopResult:
-        return await self.run_daily_interaction(checkin=checkin, session_id=session_id)
+        result = await self.run_daily_interaction(checkin=checkin, session_id=session_id)
+        if drain_maintenance:
+            await drain_maintenance_jobs(self.memory_agent)
+        return result
 
-    async def weekly_loop(self, *, session_id: str = "default") -> DailyLoopResult:
+    async def weekly_loop(
+        self,
+        *,
+        session_id: str = "default",
+        drain_maintenance: bool = False,
+    ) -> DailyLoopResult:
         sid = session_id or "default"
         state = await self.state_agent.estimate()
-        reflection = await self.reflection_agent.run("weekly")
+
+        pw = 14
+        try:
+            pr = detect_patterns(window_days=pw).to_dict()
+        except Exception:
+            pr = {"window_days": pw, "metrics": [], "patterns": []}
+        pat_list = list(pr.get("patterns") or [])
+
+        rctx = gather_reflection_context("weekly", pr)
+        reflection = await self.reflection_agent.run("weekly", rctx)
 
         events_repo.add(
             type="reflection",
@@ -304,45 +332,23 @@ class Orchestrator:
         )
         buffer_append(sid, {"type": "reflection_weekly", "content": reflection.content[:900]})
 
-        await self.memory_agent.ingest_reflection(reflection)
-
-        # Weekly digest bullets — light compression from reflection sentences
         raw_lines = [ln.strip() for ln in reflection.content.replace("。", ".").split(".") if ln.strip()]
         summary_bullets = raw_lines[:6] if raw_lines else [reflection.content[:240]]
-        await self.memory_agent.append_weekly_markdown(
-            reflection=reflection,
-            summary_bullets=summary_bullets,
+
+        enqueue_maintenance_job(
+            JOB_WEEKLY_MEMORY,
+            {
+                "session_id": sid,
+                "reflection_id": reflection.id,
+                "summary_bullets": summary_bullets,
+            },
         )
-
-        await self.memory_agent.compress_to_long_term(
-            for_date=_today_iso(),
-            reflection=reflection,
-            extra_context="weekly_review",
-        )
-
-        recent_checkins = checkin_repo.recent(limit=14)
-        recent_refs = reflection_repo.recent(limit=10)
-        try:
-            await self.memory_agent.extract(
-                recent_checkins=recent_checkins,
-                recent_reflections=recent_refs,
-            )
-        except Exception:
-            pass
-
-        try:
-            await self.memory_agent.refresh_profiles()
-        except Exception:
-            pass
 
         mem_ctx = await gather_memory_context(
             self._llm,
             query_text=reflection.content,
             session_id=sid,
         )
-        pw = self._pattern_window_days()
-        pr = detect_patterns(window_days=pw).to_dict()
-        pat_list = list(pr.get("patterns") or [])
         pat_summary = self._patterns_summary_for_planning(pat_list)
         suggestion = await self.planning_agent.suggest(
             state,
@@ -350,13 +356,16 @@ class Orchestrator:
             patterns_summary=pat_summary,
         )
 
-        return DailyLoopResult(
+        result = DailyLoopResult(
             state=state,
             reflection=reflection,
             suggestion=suggestion,
             patterns=pat_list,
-            pattern_window_days=pw,
+            pattern_window_days=int(pr.get("window_days") or pw),
         )
+        if drain_maintenance:
+            await drain_maintenance_jobs(self.memory_agent)
+        return result
 
 
 __all__ = ["Orchestrator", "InteractionOrchestrator", "DailyLoopResult"]

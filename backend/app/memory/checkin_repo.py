@@ -46,4 +46,20 @@ def latest() -> Optional[CheckinRecord]:
     return items[0] if items else None
 
 
-__all__ = ["add", "recent", "latest"]
+def get_by_id(cid: int) -> Optional[CheckinRecord]:
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id, date, status, did_today, stuck_on, anxiety, raw, created_at
+            FROM checkins WHERE id = ?
+            """,
+            (cid,),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d.setdefault("session_id", "default")
+    return CheckinRecord(**d)
+
+
+__all__ = ["add", "recent", "latest", "get_by_id"]

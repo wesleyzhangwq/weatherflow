@@ -52,4 +52,24 @@ def recent(limit: int = 10, kind: Optional[ReflectionKind] = None) -> List[Refle
     return out
 
 
-__all__ = ["add", "recent"]
+def get_by_id(rid: int) -> Optional[ReflectionRecord]:
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id, date, kind, content, insights, created_at
+            FROM reflections WHERE id = ?
+            """,
+            (rid,),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("insights"):
+        try:
+            d["insights"] = json.loads(d["insights"])
+        except json.JSONDecodeError:
+            d["insights"] = None
+    return ReflectionRecord(**d)
+
+
+__all__ = ["add", "recent", "get_by_id"]

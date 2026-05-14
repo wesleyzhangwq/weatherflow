@@ -9,18 +9,12 @@ import json
 
 from app.agents.base import BaseAgent
 from app.core.model_router import model_for
-from app.core.patterns import detect as detect_patterns
 from app.core.prompts import REFLECTION_DAILY_SYSTEM, REFLECTION_WEEKLY_SYSTEM
-from app.memory import (
-    checkin_repo,
-    hypothesis_repo,
-    reflection_repo,
-    semantic,
-    state_repo,
-)
+from app.memory import reflection_repo
 from app.memory.schemas import (
     CheckinRecord,
     GroundingSource,
+    ReflectionContext,
     ReflectionKind,
     ReflectionRecord,
     SemanticItem,
@@ -45,22 +39,23 @@ _FALLBACK_WEEKLY = (
 
 
 class ReflectionAgent(BaseAgent):
-    async def run(self, kind: ReflectionKind = "daily") -> ReflectionRecord:
-        latest_checkin = checkin_repo.latest()
-        recent_checkins = checkin_repo.recent(limit=7 if kind == "daily" else 14)
-        latest_state = state_repo.latest()
-        recent_states = state_repo.trend(days=7 if kind == "daily" else 14)
-        recent_semantic = semantic.all(limit=6)
-        active_hypotheses = hypothesis_repo.active(limit=8)
-        pending_hypotheses = hypothesis_repo.pending(limit=8)
-        try:
-            pattern_report = detect_patterns(
-                window_days=7 if kind == "daily" else 14
-            ).to_dict()
-        except Exception:
-            pattern_report = {"metrics": [], "patterns": []}
+    async def run(
+        self,
+        kind: ReflectionKind = "daily",
+        context: ReflectionContext | None = None,
+    ) -> ReflectionRecord:
+        if context is None:
+            raise TypeError("ReflectionAgent.run requires a ReflectionContext (orchestrator-assembled)")
+        latest_checkin = context.latest_checkin
+        recent_checkins = context.recent_checkins
+        latest_state = context.latest_state
+        recent_states = context.recent_states
+        recent_semantic = context.recent_semantic
+        active_hypotheses = context.active_hypotheses
+        pending_hypotheses = context.pending_hypotheses
+        pattern_report = context.pattern_report or {"metrics": [], "patterns": []}
 
-        context = {
+        llm_context = {
             "latest_checkin": latest_checkin.model_dump() if latest_checkin else None,
             "recent_checkins": [c.model_dump() for c in recent_checkins],
             "latest_state": latest_state.model_dump() if latest_state else None,
@@ -77,7 +72,7 @@ class ReflectionAgent(BaseAgent):
         user = (
             "请根据下列结构化背景写反思正文：只输出给用户的正文，不要复述或罗列原始字段，"
             "不要使用 JSON 或代码块。\n\n"
-            f"背景：\n{json.dumps(context, ensure_ascii=False, indent=2)}"
+            f"背景：\n{json.dumps(llm_context, ensure_ascii=False, indent=2)}"
         )
 
         try:
@@ -109,7 +104,7 @@ class ReflectionAgent(BaseAgent):
                     latest_state=latest_state,
                     recent_states=recent_states,
                     active_hypotheses=active_hypotheses,
-                    patterns=pattern_report.get("patterns", []),
+                    patterns=list(pattern_report.get("patterns") or []),
                     recent_semantic=recent_semantic,
                 )
             ],
@@ -128,6 +123,7 @@ class ReflectionAgent(BaseAgent):
 
 def _today() -> str:
     from datetime import date
+
     return date.today().isoformat()
 
 

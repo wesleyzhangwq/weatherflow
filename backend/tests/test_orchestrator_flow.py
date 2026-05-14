@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from app.core.orchestrator import DailyLoopResult, Orchestrator
-from app.memory import checkin_repo
+from app.memory import checkin_repo, maintenance_repo
 from app.memory.schemas import CheckinIn, UserStateOut
 
 pytestmark = pytest.mark.asyncio
@@ -30,10 +30,6 @@ def _queue_minimal_daily(fake_llm: Any) -> None:
         )
     )
     fake_llm.queue_chat("今天的记录比较安静。")
-    fake_llm.queue_chat(json.dumps({"patterns": []}))
-    fake_llm.queue_chat(
-        json.dumps({"semantic": [], "milestones": [], "phases": []}),
-    )
     fake_llm.queue_chat("先保留一个小闭环。")
 
 
@@ -53,42 +49,27 @@ async def test_daily_loop_delegates_to_run_daily_interaction(fake_llm: Any) -> N
             checkin: Any = None,
             *,
             session_id: str = "default",
+            **kwargs: Any,
         ) -> DailyLoopResult:
             self.interaction_calls += 1
-            return await super().run_daily_interaction(checkin=checkin, session_id=session_id)
+            return await super().run_daily_interaction(
+                checkin=checkin, session_id=session_id, **kwargs
+            )
 
     orch = CountingOrchestrator(fake_llm)
     await orch.daily_loop(checkin=record)
     assert orch.interaction_calls == 1
 
 
-async def test_run_daily_interaction_invokes_maintenance_once(fake_llm: Any) -> None:
+async def test_run_daily_interaction_enqueues_maintenance_job(fake_llm: Any) -> None:
     _queue_minimal_daily(fake_llm)
     checkin_repo.add(CheckinIn(status="ok", did_today="wrote notes"))
     record = checkin_repo.latest()
     assert record is not None
 
-    calls: list[int] = []
-
-    class CountingOrchestrator(Orchestrator):
-        async def run_daily_maintenance(
-            self,
-            *,
-            session_id: str,
-            for_date: str,
-            state: UserStateOut,
-            reflection: Any,
-        ) -> None:
-            calls.append(1)
-            return await super().run_daily_maintenance(
-                session_id=session_id,
-                for_date=for_date,
-                state=state,
-                reflection=reflection,
-            )
-
-    await CountingOrchestrator(fake_llm).run_daily_interaction(checkin=record)
-    assert calls == [1]
+    before = maintenance_repo.pending_count()
+    await Orchestrator(fake_llm).run_daily_interaction(checkin=record)
+    assert maintenance_repo.pending_count() == before + 1
 
 
 async def test_daily_loop_result_field_types(fake_llm: Any) -> None:

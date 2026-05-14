@@ -166,9 +166,9 @@ async def test_checkin_response_returns_pending_hypotheses(fake_llm) -> None:
             }
         ),
         "你今天的记录比较安静，但有一点稳定的回到现场。",
+        "今天先保留一个小闭环就好。",
         json.dumps({"patterns": []}),
         json.dumps({"semantic": [], "milestones": [], "phases": []}),
-        "今天先保留一个小闭环就好。",
     )
 
     response = await submit_checkin(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -177,6 +177,19 @@ class HypothesisFeedbackIn(BaseModel):
     feedback: HypothesisFeedback
 
 
+class ReflectionContext(BaseModel):
+    """Structured snapshot for `ReflectionAgent` — assembled by the orchestrator."""
+
+    latest_checkin: Optional[CheckinRecord] = None
+    recent_checkins: List[CheckinRecord] = Field(default_factory=list)
+    latest_state: Optional[UserStateOut] = None
+    recent_states: List[StateTrendPoint] = Field(default_factory=list)
+    recent_semantic: List[SemanticItem] = Field(default_factory=list)
+    active_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
+    pending_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
+    pattern_report: Dict[str, Any] = Field(default_factory=dict)
+
+
 # ----------------------------- Short-term events -----------------------------
 class EventIn(BaseModel):
     type: str = Field(..., description="chat / action / reflection / state / sensor / ...")
@@ -208,6 +221,7 @@ class WorkspaceActivityRecord(WorkspaceActivityIn):
 __all__ = [
     "CheckinIn",
     "CheckinRecord",
+    "ReflectionContext",
     "ReflectionKind",
     "GroundingSourceType",
     "GroundingSource",

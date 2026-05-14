@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from app.core.memory_maintenance import drain_maintenance_jobs
 from app.core.orchestrator import Orchestrator
 from app.memory import checkin_repo, episodic, reflection_repo, semantic, state_repo, timeline
 from app.memory.schemas import CheckinIn
@@ -34,9 +35,9 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
     fake_llm.queue_chat(
         "你来了，也把卡住的东西说了出来。这是一种很安静、也很真实的进展。"
     )
-    # 3) MemoryAgent.compress (long-term pattern extraction)
-    fake_llm.queue_chat(json.dumps({"patterns": []}))
-    # 4) MemoryAgent.extract JSON
+    # 3) PlanningAgent (after reflection; maintenance runs later)
+    fake_llm.queue_chat("今天也许只需要把一个已经开头的小闭环收个尾。")
+    # 4–5) Queued maintenance: extract then compress
     fake_llm.queue_chat(
         json.dumps(
             {
@@ -58,8 +59,7 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
             }
         )
     )
-    # 5) PlanningAgent (gentle suggestion; after hybrid memory context)
-    fake_llm.queue_chat("今天也许只需要把一个已经开头的小闭环收个尾。")
+    fake_llm.queue_chat(json.dumps({"patterns": []}))
 
     payload = CheckinIn(
         status="okay-ish",
@@ -73,6 +73,7 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
 
     orch = Orchestrator(fake_llm)
     result = await orch.daily_loop(checkin=record)
+    await drain_maintenance_jobs(orch.memory_agent)
 
     assert result.state.weather_label == "Recovery"
     assert "小闭环" in result.suggestion or len(result.suggestion) > 3

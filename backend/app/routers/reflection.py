@@ -21,10 +21,8 @@ async def run_reflection(
     orch: Orchestrator = Depends(get_orchestrator),
 ) -> ReflectionRecord:
     if kind == "weekly":
-        result = await orch.weekly_loop(session_id=session_id)
-    else:
-        result = await orch.daily_loop(session_id=session_id)
-    return result.reflection
+        return await orch.run_reflection_only("weekly", session_id=session_id)
+    return await orch.run_reflection_only("daily", session_id=session_id)
 
 
 @router.get("", response_model=list[ReflectionRecord])
