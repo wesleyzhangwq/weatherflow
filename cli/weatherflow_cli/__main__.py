@@ -7,7 +7,6 @@ import typer
 from weatherflow_cli import checkin as checkin_cmd
 from weatherflow_cli import dashboard_cmd
 from weatherflow_cli import git_scan as git_cmd
-from weatherflow_cli import loops as loops_cmd
 from weatherflow_cli import notes_scan as notes_cmd
 from weatherflow_cli import patterns as patterns_cmd
 from weatherflow_cli import reflect as reflect_cmd
@@ -35,7 +34,6 @@ app.command(name="dashboard", help="Open the web dashboard in your browser.")(da
 app.command(name="checkin", help="1–3 minute morning check-in. Triggers daily loop.")(checkin_cmd.run)
 app.command(name="weather", help="Show today's life weather + state at a glance.")(weather_cmd.run)
 app.command(name="reflect", help="Show today's reflection. Use --run to regenerate.")(reflect_cmd.run)
-app.add_typer(loops_cmd.app, name="loops", help="Run full daily/weekly orchestration (not reflection-only).")
 app.command(
     name="sensors",
     help="All behavior sensors in one shot (git + notes + workspace).",

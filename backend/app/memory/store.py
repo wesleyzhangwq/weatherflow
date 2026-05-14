@@ -170,19 +170,6 @@ CREATE TABLE IF NOT EXISTS sensor_hypotheses (
 );
 CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_status ON sensor_hypotheses(status, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_source ON sensor_hypotheses(source_type, last_seen_at DESC);
-
-CREATE TABLE IF NOT EXISTS maintenance_jobs (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    type          TEXT    NOT NULL,
-    payload_json  TEXT    NOT NULL,
-    status        TEXT    NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','running','done','failed')),
-    attempts      INTEGER NOT NULL DEFAULT 0,
-    last_error    TEXT,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_maintenance_jobs_status ON maintenance_jobs(status, id);
 """
 
 

@@ -5,13 +5,10 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi import BackgroundTasks
 
-from app.core.memory_maintenance import drain_maintenance_jobs
 from app.core.orchestrator import Orchestrator
-from app.memory import checkin_repo, episodic, maintenance_repo, reflection_repo, semantic, state_repo, timeline
+from app.memory import checkin_repo, episodic, reflection_repo, semantic, state_repo, timeline
 from app.memory.schemas import CheckinIn
-from app.routers.checkin import submit_checkin
 
 pytestmark = pytest.mark.asyncio
 
@@ -37,9 +34,11 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
     fake_llm.queue_chat(
         "你来了，也把卡住的东西说了出来。这是一种很安静、也很真实的进展。"
     )
-    # 3) PlanningAgent (after reflection; maintenance runs later)
+    # 3) PlanningAgent (gentle suggestion; after hybrid memory context)
     fake_llm.queue_chat("今天也许只需要把一个已经开头的小闭环收个尾。")
-    # 4–5) Queued maintenance: extract then compress
+    # 4) MemoryAgent.compress (long-term pattern extraction)
+    fake_llm.queue_chat(json.dumps({"patterns": []}))
+    # 5) MemoryAgent.extract JSON
     fake_llm.queue_chat(
         json.dumps(
             {
@@ -61,7 +60,6 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
             }
         )
     )
-    fake_llm.queue_chat(json.dumps({"patterns": []}))
 
     payload = CheckinIn(
         status="okay-ish",
@@ -75,7 +73,6 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
 
     orch = Orchestrator(fake_llm)
     result = await orch.daily_loop(checkin=record)
-    await drain_maintenance_jobs(orch.memory_agent)
 
     assert result.state.weather_label == "Recovery"
     assert "小闭环" in result.suggestion or len(result.suggestion) > 3
@@ -104,39 +101,3 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
     assert episodic.count() >= 2  # ingested checkin + reflection
     assert any(t.title == "Returned to the project" for t in timeline.recent())
     assert any(s.key == "shipping_pattern" for s in semantic.all())
-
-
-async def test_checkin_endpoint_schedules_background_maintenance(fake_llm) -> None:
-    fake_llm.queue_chat(
-        json.dumps(
-            {
-                "focus": 60,
-                "stress": 40,
-                "burnout": 30,
-                "momentum": 55,
-                "confidence": 50,
-                "motivation": 55,
-                "weather_label": "Recovery",
-                "rationale": "今天比较稳。",
-            }
-        )
-    )
-    fake_llm.queue_chat("你今天的记录比较安静。")
-    fake_llm.queue_chat("先保留一个小闭环。")
-    fake_llm.queue_chat(json.dumps({"semantic": [], "milestones": [], "phases": []}))
-    fake_llm.queue_chat(json.dumps({"patterns": []}))
-
-    background_tasks = BackgroundTasks()
-    response = await submit_checkin(
-        CheckinIn(status="还可以", did_today="写了一点东西"),
-        background_tasks=background_tasks,
-        orch=Orchestrator(fake_llm),
-    )
-
-    assert response.reflection.content
-    assert maintenance_repo.pending_count() == 1
-
-    await background_tasks()
-
-    assert maintenance_repo.pending_count() == 0
-    assert episodic.count() >= 2
