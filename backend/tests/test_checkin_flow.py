@@ -78,10 +78,26 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
     assert "小闭环" in result.suggestion or len(result.suggestion) > 3
     assert isinstance(result.patterns, list)
     assert "进展" in result.reflection.content
+    assert result.reflection.insights is not None
+    sources = result.reflection.insights.get("grounding_sources")
+    assert isinstance(sources, list)
+    source_types = {source["type"] for source in sources}
+    assert {"checkin", "state", "patterns"}.issubset(source_types)
+    for source in sources:
+        assert set(source) == {"type", "label", "summary"}
+        assert source["label"]
+        assert source["summary"]
+        assert len(source["summary"]) <= 140
+    summaries = " ".join(source["summary"] for source in sources)
+    assert "too many tutorials open" not in summaries
+    assert "Write the reflection" not in summaries
 
     # Persistence checks
     assert state_repo.latest() is not None
-    assert reflection_repo.recent(limit=1)[0].kind == "daily"
+    saved_reflection = reflection_repo.recent(limit=1)[0]
+    assert saved_reflection.kind == "daily"
+    assert saved_reflection.insights is not None
+    assert isinstance(saved_reflection.insights.get("grounding_sources"), list)
     assert episodic.count() >= 2  # ingested checkin + reflection
     assert any(t.title == "Returned to the project" for t in timeline.recent())
     assert any(s.key == "shipping_pattern" for s in semantic.all())
