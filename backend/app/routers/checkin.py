@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.core.orchestrator import Orchestrator
-from app.core.memory_maintenance import drain_maintenance_jobs
 from app.memory import checkin_repo, hypothesis_repo
 from app.memory.schemas import (
     CheckinIn,
@@ -36,7 +35,6 @@ class CheckinResponse(BaseModel):
 @router.post("", response_model=CheckinResponse)
 async def submit_checkin(
     payload: CheckinIn,
-    background_tasks: BackgroundTasks,
     orch: Orchestrator = Depends(get_orchestrator),
 ) -> CheckinResponse:
     cid = checkin_repo.add(payload)
@@ -45,7 +43,6 @@ async def submit_checkin(
     assert record is not None
 
     result = await orch.daily_loop(checkin=record, session_id=payload.session_id)
-    background_tasks.add_task(drain_maintenance_jobs, orch.memory_agent, max_jobs=8)
     codes = [str(p.get("code", "")) for p in result.patterns if p.get("code")]
 
     return CheckinResponse(

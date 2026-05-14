@@ -16,7 +16,7 @@ from app.core.orchestrator import Orchestrator
 from app.core.scheduler import build_scheduler
 from app.memory.store import init_db
 from app.sensors.sweep_runner import run_sensor_sweep
-from app.routers import checkin, feedback, loops, mcp, memory, reflection, sensors, state, timeline
+from app.routers import checkin, feedback, mcp, memory, reflection, sensors, state, timeline
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +34,14 @@ async def lifespan(app: FastAPI):
     async def _evening_job() -> None:
         try:
             logger.info("Evening reflection job firing.")
-            await Orchestrator(app.state.llm).daily_loop(drain_maintenance=True)
+            await Orchestrator(app.state.llm).daily_loop()
         except Exception:
             logger.exception("Evening reflection job failed.")
 
     async def _weekly_job() -> None:
         try:
             logger.info("Weekly review job firing.")
-            await Orchestrator(app.state.llm).weekly_loop(drain_maintenance=True)
+            await Orchestrator(app.state.llm).weekly_loop()
         except Exception:
             logger.exception("Weekly review job failed.")
 
@@ -96,7 +96,6 @@ def create_app() -> FastAPI:
     app.include_router(checkin.router)
     app.include_router(feedback.router)
     app.include_router(reflection.router)
-    app.include_router(loops.router)
     app.include_router(state.router)
     app.include_router(timeline.router)
     app.include_router(sensors.router)
