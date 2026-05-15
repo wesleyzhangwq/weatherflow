@@ -165,12 +165,19 @@ CREATE TABLE IF NOT EXISTS sensor_hypotheses (
     status           TEXT    NOT NULL DEFAULT 'pending'
                          CHECK (status IN ('pending','confirmed','rejected','superseded')),
     user_feedback    TEXT CHECK (user_feedback IN ('confirmed','rejected') OR user_feedback IS NULL),
+    user_rating      TEXT CHECK (user_rating IN ('accurate','unsure','inaccurate') OR user_rating IS NULL),
     confirmed_at     TEXT,
-    rejected_at      TEXT
+    rejected_at      TEXT,
+    rated_at         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_status ON sensor_hypotheses(status, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_source ON sensor_hypotheses(source_type, last_seen_at DESC);
 """
+
+_MIGRATIONS = [
+    "ALTER TABLE sensor_hypotheses ADD COLUMN user_rating TEXT",
+    "ALTER TABLE sensor_hypotheses ADD COLUMN rated_at TEXT",
+]
 
 
 _DB_PATH_OVERRIDE: Optional[str] = None
@@ -198,6 +205,12 @@ def init_db(db_path: Optional[str] = None) -> None:
     with _LOCK, sqlite3.connect(path) as conn:
         conn.executescript("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         conn.executescript(_SCHEMA)
+        for stmt in _MIGRATIONS:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         conn.commit()
 
 

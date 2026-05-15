@@ -152,7 +152,7 @@ class SensorSweepIn(BaseModel):
 # ----------------------------- Sensor hypotheses -----------------------------
 HypothesisSourceType = Literal["git", "notes", "workspace", "patterns"]
 HypothesisStatus = Literal["pending", "confirmed", "rejected", "superseded"]
-HypothesisFeedback = Literal["confirmed", "rejected"]
+HypothesisFeedback = Literal["accurate", "unsure", "inaccurate"]
 
 
 class SensorHypothesis(BaseModel):
@@ -168,9 +168,11 @@ class SensorHypothesis(BaseModel):
     confidence: float = 0.2
     seen_count: int = 1
     status: HypothesisStatus = "pending"
-    user_feedback: Optional[HypothesisFeedback] = None
+    user_feedback: Optional[str] = None
+    user_rating: Optional[HypothesisFeedback] = None
     confirmed_at: Optional[str] = None
     rejected_at: Optional[str] = None
+    rated_at: Optional[str] = None
 
 
 class HypothesisFeedbackIn(BaseModel):
@@ -184,9 +186,10 @@ class ReflectionContext(BaseModel):
     recent_checkins: List[CheckinRecord] = Field(default_factory=list)
     latest_state: Optional[UserStateOut] = None
     recent_states: List[StateTrendPoint] = Field(default_factory=list)
-    recent_semantic: List[SemanticItem] = Field(default_factory=list)
+    profile: str = ""
     active_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
     pending_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
+    rated_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
     pattern_report: Dict[str, Any] = Field(default_factory=dict)
 
 

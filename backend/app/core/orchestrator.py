@@ -4,7 +4,7 @@ The public loop stays synchronous and easy to reason about. Internally it is
 split into two phases:
 
 1. Interaction phase: state, reflection, and one gentle suggestion.
-2. Memory phase: durable writes derived from the interaction result.
+2. Profile phase: refresh one readable Markdown user profile.
 
 This keeps the data flow readable without introducing a job queue or extra API
 surface for the current product scale.
@@ -12,7 +12,6 @@ surface for the current product scale.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, List, Optional
@@ -20,28 +19,13 @@ from typing import Any, List, Optional
 from app.agents import MemoryAgent, PlanningAgent, ReflectionAgent, StateAgent
 from app.core.llm import LLMClient
 from app.core.patterns import detect as detect_patterns
-from app.memory import checkin_repo, events_repo, reflection_repo
-from app.memory.context import gather_memory_context
+from app.memory import hypothesis_repo, profile_md, reflection_repo
 from app.memory.reflection_context import gather_reflection_context
 from app.memory.schemas import CheckinRecord, ReflectionKind, ReflectionRecord, UserStateOut
-from app.memory.session_buffer import append as buffer_append
 
 
 def _today_iso() -> str:
     return date.today().isoformat()
-
-
-def _event_lines_for_day(session_id: str, for_date: str, limit: int = 25) -> List[str]:
-    evs = events_repo.recent(limit=160, session_id=session_id)
-    lines: list[str] = []
-    for e in evs:
-        ts = e.timestamp[:10] if e.timestamp else ""
-        if ts != for_date:
-            continue
-        lines.append(f"{e.type}: {(e.content or '').strip()[:200]}")
-        if len(lines) >= limit:
-            break
-    return lines
 
 
 @dataclass
@@ -59,7 +43,6 @@ class Orchestrator:
         self.reflection_agent = ReflectionAgent(llm)
         self.planning_agent = PlanningAgent(llm)
         self.memory_agent = MemoryAgent(llm)
-        self._llm = llm
 
     @staticmethod
     def _pattern_window_days(kind: ReflectionKind = "daily") -> int:
@@ -84,57 +67,6 @@ class Orchestrator:
         except Exception:
             return {"window_days": window, "metrics": [], "patterns": []}
 
-    def _record_checkin_event(self, checkin: CheckinRecord, session_id: str) -> None:
-        body = json.dumps(
-            {
-                "date": checkin.date,
-                "status": checkin.status,
-                "did_today": checkin.did_today,
-                "stuck_on": checkin.stuck_on,
-                "anxiety": checkin.anxiety,
-                "raw": checkin.raw,
-            },
-            ensure_ascii=False,
-        )
-        events_repo.add(type="checkin", content=body, session_id=session_id)
-        buffer_append(session_id, {"type": "checkin", "content": body[:800]})
-
-    def _record_state_event(self, state: UserStateOut, session_id: str) -> None:
-        events_repo.add(
-            type="state",
-            content=json.dumps(state.model_dump(), ensure_ascii=False)[:4000],
-            session_id=session_id,
-            tags=["snapshot"],
-        )
-        buffer_append(
-            session_id,
-            {
-                "type": "state",
-                "content": f"{state.weather_label} | {state.rationale or ''}"[:600],
-            },
-        )
-
-    def _record_reflection_event(
-        self,
-        reflection: ReflectionRecord,
-        session_id: str,
-        *,
-        tag: ReflectionKind,
-    ) -> None:
-        events_repo.add(
-            type="reflection",
-            content=reflection.content,
-            session_id=session_id,
-            tags=[tag],
-        )
-        buffer_append(
-            session_id,
-            {
-                "type": "reflection" if tag == "daily" else "reflection_weekly",
-                "content": reflection.content[:900],
-            },
-        )
-
     async def run_reflection_only(
         self,
         kind: ReflectionKind = "daily",
@@ -152,11 +84,9 @@ class Orchestrator:
         checkin: Optional[CheckinRecord],
         session_id: str,
     ) -> DailyLoopResult:
-        if checkin is not None:
-            self._record_checkin_event(checkin, session_id)
+        _ = session_id
 
         state = await self.state_agent.estimate(checkin=checkin)
-        self._record_state_event(state, session_id)
 
         report = self._pattern_report("daily")
         patterns: List[dict[str, Any]] = list(report.get("patterns") or [])
@@ -164,18 +94,15 @@ class Orchestrator:
             "daily",
             gather_reflection_context("daily", report),
         )
-        self._record_reflection_event(reflection, session_id, tag="daily")
 
-        mem_ctx = await gather_memory_context(
-            self._llm,
-            query_text=reflection.content,
-            session_id=session_id,
-        )
         suggestion = await self.planning_agent.suggest(
             state,
-            recent_context=mem_ctx,
+            reflection_text=reflection.content,
+            profile=profile_md.read_profile(max_chars=3000),
+            hypothesis_summary=_hypothesis_summary(),
             patterns_summary=self._patterns_summary_for_planning(patterns),
         )
+        _attach_suggestion(reflection, suggestion)
 
         return DailyLoopResult(
             state=state,
@@ -193,33 +120,13 @@ class Orchestrator:
         session_id: str,
         for_date: str,
     ) -> None:
-        if checkin is not None:
-            await self.memory_agent.ingest_checkin(checkin)
-        await self.memory_agent.ingest_reflection(result.reflection)
-
-        await self.memory_agent.write_daily_markdown(
-            for_date=for_date,
+        _ = (session_id, for_date)
+        await self.memory_agent.refresh_profile(
+            checkin=checkin,
             state=result.state,
             reflection=result.reflection,
-            event_lines=_event_lines_for_day(session_id, for_date) or None,
-            semantic_hints=None,
+            suggestion=result.suggestion,
         )
-
-        await self.memory_agent.compress_to_long_term(
-            for_date=for_date,
-            reflection=result.reflection,
-            extra_context="",
-        )
-
-        recent_checkins = checkin_repo.recent(limit=7)
-        recent_refs = reflection_repo.recent(limit=5)
-        try:
-            await self.memory_agent.extract(
-                recent_checkins=recent_checkins,
-                recent_reflections=recent_refs,
-            )
-        except Exception:
-            pass
 
     async def daily_loop(
         self,
@@ -239,7 +146,7 @@ class Orchestrator:
         return result
 
     async def weekly_loop(self, *, session_id: str = "default") -> DailyLoopResult:
-        sid = session_id or "default"
+        _ = session_id or "default"
         state = await self.state_agent.estimate()
 
         report = self._pattern_report("weekly")
@@ -248,47 +155,18 @@ class Orchestrator:
             "weekly",
             gather_reflection_context("weekly", report),
         )
-        self._record_reflection_event(reflection, sid, tag="weekly")
-
-        await self.memory_agent.ingest_reflection(reflection)
-        summary_bullets = [
-            ln.strip()
-            for ln in reflection.content.replace("。", ".").split(".")
-            if ln.strip()
-        ][:6] or [reflection.content[:240]]
-        await self.memory_agent.append_weekly_markdown(
-            reflection=reflection,
-            summary_bullets=summary_bullets,
-        )
-        await self.memory_agent.compress_to_long_term(
-            for_date=_today_iso(),
-            reflection=reflection,
-            extra_context="weekly_review",
-        )
-
-        recent_checkins = checkin_repo.recent(limit=14)
-        recent_refs = reflection_repo.recent(limit=10)
-        try:
-            await self.memory_agent.extract(
-                recent_checkins=recent_checkins,
-                recent_reflections=recent_refs,
-            )
-        except Exception:
-            pass
-        try:
-            await self.memory_agent.refresh_profiles()
-        except Exception:
-            pass
-
-        mem_ctx = await gather_memory_context(
-            self._llm,
-            query_text=reflection.content,
-            session_id=sid,
-        )
         suggestion = await self.planning_agent.suggest(
             state,
-            recent_context=mem_ctx,
+            reflection_text=reflection.content,
+            profile=profile_md.read_profile(max_chars=3000),
+            hypothesis_summary=_hypothesis_summary(),
             patterns_summary=self._patterns_summary_for_planning(patterns),
+        )
+        _attach_suggestion(reflection, suggestion)
+        await self.memory_agent.refresh_profile(
+            reflection=reflection,
+            state=state,
+            suggestion=suggestion,
         )
 
         return DailyLoopResult(
@@ -298,6 +176,29 @@ class Orchestrator:
             patterns=patterns,
             pattern_window_days=int(report.get("window_days") or 14),
         )
+
+
+def _hypothesis_summary() -> str:
+    active = hypothesis_repo.active(limit=8)
+    rated = hypothesis_repo.rated(limit=8)
+    lines: list[str] = []
+    if active:
+        lines.append("Active hypotheses:")
+        for h in active:
+            source = "用户确认" if h.user_rating == "accurate" else "重复出现"
+            lines.append(f"- {source}: {h.label} — {h.summary}")
+    if rated:
+        lines.append("Recent hypothesis ratings:")
+        for h in rated:
+            lines.append(f"- {h.user_rating}: {h.label}")
+    return "\n".join(lines) or "（暂无已确认或已评分的弱信号。）"
+
+
+def _attach_suggestion(reflection: ReflectionRecord, suggestion: str) -> None:
+    insights = dict(reflection.insights or {})
+    insights["suggestion"] = suggestion
+    reflection.insights = insights
+    reflection_repo.update_insights(reflection.id, insights)
 
 
 __all__ = ["Orchestrator", "DailyLoopResult"]

@@ -16,7 +16,7 @@ from app.core.orchestrator import Orchestrator
 from app.core.scheduler import build_scheduler
 from app.memory.store import init_db
 from app.sensors.sweep_runner import run_sensor_sweep
-from app.routers import checkin, feedback, mcp, memory, reflection, sensors, state, timeline
+from app.routers import checkin, feedback, mcp, memory, reflection, sensors, state
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,6 @@ def create_app() -> FastAPI:
     app.include_router(feedback.router)
     app.include_router(reflection.router)
     app.include_router(state.router)
-    app.include_router(timeline.router)
     app.include_router(sensors.router)
     app.include_router(memory.router)
     app.include_router(mcp.router)

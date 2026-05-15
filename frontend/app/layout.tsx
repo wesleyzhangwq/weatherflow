@@ -19,7 +19,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <nav className="flex gap-5 text-sm muted">
               <Link href="/" className="hover:opacity-80">今日</Link>
               <Link href="/checkin" className="hover:opacity-80">签到</Link>
-              <Link href="/timeline" className="hover:opacity-80">时间线</Link>
               <Link href="/reflection" className="hover:opacity-80">反思</Link>
             </nav>
           </div>
