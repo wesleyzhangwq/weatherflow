@@ -102,7 +102,11 @@ def active(*, limit: int = 30, repeated_threshold: int = 2) -> List[SensorHypoth
             """
             SELECT * FROM sensor_hypotheses
             WHERE status = 'confirmed'
-               OR (status = 'pending' AND seen_count >= ?)
+               OR (
+                    status = 'pending'
+                    AND user_rating IS NULL
+                    AND seen_count >= ?
+               )
             ORDER BY
                 CASE WHEN status = 'confirmed' THEN 0 ELSE 1 END,
                 last_seen_at DESC,
@@ -114,17 +118,45 @@ def active(*, limit: int = 30, repeated_threshold: int = 2) -> List[SensorHypoth
     return [_row_to_hypothesis(r) for r in rows]
 
 
+def rated(*, limit: int = 30) -> List[SensorHypothesis]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM sensor_hypotheses
+            WHERE user_rating IS NOT NULL
+            ORDER BY rated_at DESC, last_seen_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [_row_to_hypothesis(r) for r in rows]
+
+
 def set_feedback(hypothesis_id: int, feedback: HypothesisFeedback) -> Optional[SensorHypothesis]:
-    status = "confirmed" if feedback == "confirmed" else "rejected"
-    timestamp_field = "confirmed_at" if feedback == "confirmed" else "rejected_at"
+    if feedback == "accurate":
+        status = "confirmed"
+        extra = "confirmed_at = datetime('now'), rejected_at = NULL"
+        legacy_feedback = "confirmed"
+    elif feedback == "inaccurate":
+        status = "rejected"
+        extra = "rejected_at = datetime('now'), confirmed_at = NULL"
+        legacy_feedback = "rejected"
+    else:
+        status = "pending"
+        extra = "confirmed_at = NULL, rejected_at = NULL"
+        legacy_feedback = None
     with get_conn() as conn:
         conn.execute(
             f"""
             UPDATE sensor_hypotheses
-            SET status = ?, user_feedback = ?, {timestamp_field} = datetime('now')
+            SET status = ?,
+                user_feedback = ?,
+                user_rating = ?,
+                rated_at = datetime('now'),
+                {extra}
             WHERE id = ?
             """,
-            (status, feedback, hypothesis_id),
+            (status, legacy_feedback, feedback, hypothesis_id),
         )
         row = conn.execute(
             "SELECT * FROM sensor_hypotheses WHERE id = ?",
@@ -149,5 +181,6 @@ __all__ = [
     "recent",
     "pending",
     "active",
+    "rated",
     "set_feedback",
 ]

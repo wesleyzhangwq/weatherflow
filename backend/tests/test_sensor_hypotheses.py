@@ -9,7 +9,7 @@ import pytest
 
 from app.agents import MemoryAgent, StateAgent
 from app.core.orchestrator import Orchestrator
-from app.memory import hypothesis_repo, state_repo
+from app.memory import hypothesis_repo, profile_md, state_repo
 from app.memory.schemas import (
     CheckinIn,
     CheckinRecord,
@@ -55,12 +55,43 @@ async def test_hypothesis_feedback_confirms_or_rejects() -> None:
 
     confirmed = await hypothesis_feedback(
         item.id,
-        HypothesisFeedbackIn(feedback="confirmed"),
+        HypothesisFeedbackIn(feedback="accurate"),
     )
 
     assert confirmed.status == "confirmed"
     assert confirmed.user_feedback == "confirmed"
+    assert confirmed.user_rating == "accurate"
     assert confirmed.confirmed_at is not None
+
+    unsure_item = hypothesis_repo.add_or_bump(
+        source_type="notes",
+        key="notes.unsure_signal",
+        label="这个信号可能还不确定",
+        summary="用户可以先标记不确定。",
+        confidence=0.2,
+    )
+    unsure = await hypothesis_feedback(
+        unsure_item.id,
+        HypothesisFeedbackIn(feedback="unsure"),
+    )
+    assert unsure.status == "pending"
+    assert unsure.user_rating == "unsure"
+    assert unsure.confirmed_at is None
+
+    wrong_item = hypothesis_repo.add_or_bump(
+        source_type="git",
+        key="git.wrong_signal",
+        label="这个信号可能不准确",
+        summary="用户可以明确否定。",
+        confidence=0.2,
+    )
+    rejected = await hypothesis_feedback(
+        wrong_item.id,
+        HypothesisFeedbackIn(feedback="inaccurate"),
+    )
+    assert rejected.status == "rejected"
+    assert rejected.user_rating == "inaccurate"
+    assert rejected.rejected_at is not None
 
 
 async def test_hypothesis_repo_bumps_repeated_keys() -> None:
@@ -122,7 +153,7 @@ async def test_state_agent_uses_confirmed_hypotheses(fake_llm) -> None:
         label="项目切换可能增多",
         summary="用户确认过的假设可以进入状态上下文。",
     )
-    hypothesis_repo.set_feedback(item.id, "confirmed")
+    hypothesis_repo.set_feedback(item.id, "accurate")
     fake_llm.queue_chat(
         json.dumps(
             {
@@ -167,8 +198,13 @@ async def test_checkin_response_returns_pending_hypotheses(fake_llm) -> None:
         ),
         "你今天的记录比较安静，但有一点稳定的回到现场。",
         "今天先保留一个小闭环就好。",
-        json.dumps({"patterns": []}),
-        json.dumps({"semantic": [], "milestones": [], "phases": []}),
+        json.dumps(
+            {
+                "user_profile": "你正在恢复稳定。",
+                "behavior_patterns": "- 小闭环有帮助。",
+                "goals": "- 保持节奏。",
+            }
+        ),
     )
 
     response = await submit_checkin(
@@ -180,7 +216,7 @@ async def test_checkin_response_returns_pending_hypotheses(fake_llm) -> None:
     assert response.pending_hypotheses[0].key == "notes.input_up_output_down"
 
 
-async def test_memory_extract_uses_active_not_pending_hypotheses(fake_llm) -> None:
+async def test_profile_refresh_uses_rated_hypotheses(fake_llm) -> None:
     pending = hypothesis_repo.add_or_bump(
         source_type="notes",
         key="notes.pending_collection_mode",
@@ -193,39 +229,52 @@ async def test_memory_extract_uses_active_not_pending_hypotheses(fake_llm) -> No
         label="工作区比较分散",
         summary="用户确认过，可以作为长期记忆的辅助证据。",
     )
-    hypothesis_repo.set_feedback(confirmed.id, "confirmed")
-    fake_llm.queue_chat(json.dumps({"semantic": [], "milestones": [], "phases": []}))
+    unsure = hypothesis_repo.add_or_bump(
+        source_type="git",
+        key="git.unsure_switching",
+        label="项目切换是否真的影响你还不确定",
+        summary="用户标记为不确定，不应直接进入 active。",
+    )
+    hypothesis_repo.set_feedback(confirmed.id, "accurate")
+    hypothesis_repo.set_feedback(unsure.id, "unsure")
+    fake_llm.queue_chat(
+        json.dumps(
+            {
+                "user_profile": "你会受到工作区分散影响。",
+                "behavior_patterns": "- 已确认的分散信号值得参考。",
+                "goals": "- 不确定的切换信号先观察。",
+            }
+        )
+    )
 
-    await MemoryAgent(fake_llm).extract(
-        recent_checkins=[
-            CheckinRecord(
-                id=1,
-                date="2026-05-14",
-                created_at="2026-05-14T00:00:00Z",
-                status="还可以",
-                did_today="写了一点东西",
-                stuck_on=None,
-                anxiety=None,
-                raw=None,
-                session_id="default",
-            )
-        ],
-        recent_reflections=[
-            ReflectionRecord(
-                id=1,
-                date="2026-05-14",
-                kind="daily",
-                content="今天比较稳定。",
-                insights=None,
-                created_at="2026-05-14T00:00:00Z",
-            )
-        ],
+    await MemoryAgent(fake_llm).refresh_profile(
+        checkin=CheckinRecord(
+            id=1,
+            date="2026-05-14",
+            created_at="2026-05-14T00:00:00Z",
+            status="还可以",
+            did_today="写了一点东西",
+            stuck_on=None,
+            anxiety=None,
+            raw=None,
+            session_id="default",
+        ),
+        reflection=ReflectionRecord(
+            id=1,
+            date="2026-05-14",
+            kind="daily",
+            content="今天比较稳定。",
+            insights=None,
+            created_at="2026-05-14T00:00:00Z",
+        ),
     )
 
     chat_calls = [call for call in fake_llm.calls if call[0] == "chat"]
     user_content = chat_calls[0][1][1]["content"]
     assert confirmed.key in user_content
     assert pending.key not in user_content
+    assert unsure.key in user_content
+    assert "已确认的分散信号" in profile_md.read_profile()
 
 
 async def test_sensor_sweep_does_not_refresh_state(tmp_path: Path) -> None:

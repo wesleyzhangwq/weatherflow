@@ -7,7 +7,7 @@ import json
 import pytest
 
 from app.core.orchestrator import Orchestrator
-from app.memory import checkin_repo, episodic, reflection_repo, semantic, state_repo, timeline
+from app.memory import checkin_repo, profile_md, reflection_repo, state_repo
 from app.memory.schemas import CheckinIn
 
 pytestmark = pytest.mark.asyncio
@@ -34,29 +34,15 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
     fake_llm.queue_chat(
         "你来了，也把卡住的东西说了出来。这是一种很安静、也很真实的进展。"
     )
-    # 3) PlanningAgent (gentle suggestion; after hybrid memory context)
+    # 3) PlanningAgent (gentle suggestion)
     fake_llm.queue_chat("今天也许只需要把一个已经开头的小闭环收个尾。")
-    # 4) MemoryAgent.compress (long-term pattern extraction)
-    fake_llm.queue_chat(json.dumps({"patterns": []}))
-    # 5) MemoryAgent.extract JSON
+    # 4) MemoryAgent.refresh_profile JSON
     fake_llm.queue_chat(
         json.dumps(
             {
-                "semantic": [
-                    {
-                        "key": "shipping pattern",
-                        "value": "tends to ship after a quiet stretch",
-                        "confidence": 0.7,
-                    }
-                ],
-                "milestones": [
-                    {
-                        "title": "Returned to the project",
-                        "description": "Came back after a low patch.",
-                        "tags": ["recovery", "writing"],
-                    }
-                ],
-                "phases": [],
+                "user_profile": "你会在安静一阵之后重新回到项目。",
+                "behavior_patterns": "- 小闭环能帮助你恢复节奏。",
+                "goals": "- 避免同时打开太多教程。",
             }
         )
     )
@@ -97,7 +83,6 @@ async def test_full_daily_loop_writes_everything(fake_llm) -> None:
     saved_reflection = reflection_repo.recent(limit=1)[0]
     assert saved_reflection.kind == "daily"
     assert saved_reflection.insights is not None
+    assert saved_reflection.insights.get("suggestion") == result.suggestion
     assert isinstance(saved_reflection.insights.get("grounding_sources"), list)
-    assert episodic.count() >= 2  # ingested checkin + reflection
-    assert any(t.title == "Returned to the project" for t in timeline.recent())
-    assert any(s.key == "shipping_pattern" for s in semantic.all())
+    assert "小闭环" in profile_md.read_profile()

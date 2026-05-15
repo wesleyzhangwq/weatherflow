@@ -17,7 +17,6 @@ from app.memory.schemas import (
     ReflectionContext,
     ReflectionKind,
     ReflectionRecord,
-    SemanticItem,
     SensorHypothesis,
     StateTrendPoint,
     UserStateOut,
@@ -50,9 +49,10 @@ class ReflectionAgent(BaseAgent):
         recent_checkins = context.recent_checkins
         latest_state = context.latest_state
         recent_states = context.recent_states
-        recent_semantic = context.recent_semantic
+        profile = context.profile
         active_hypotheses = context.active_hypotheses
         pending_hypotheses = context.pending_hypotheses
+        rated_hypotheses = context.rated_hypotheses
         pattern_report = context.pattern_report or {"metrics": [], "patterns": []}
 
         llm_context = {
@@ -60,11 +60,12 @@ class ReflectionAgent(BaseAgent):
             "recent_checkins": [c.model_dump() for c in recent_checkins],
             "latest_state": latest_state.model_dump() if latest_state else None,
             "recent_states": [s.model_dump() for s in recent_states],
-            "recent_semantic": [s.model_dump() for s in recent_semantic],
+            "profile": profile[:3000],
             "active_sensor_hypotheses": [h.model_dump() for h in active_hypotheses],
             "pending_sensor_hypotheses_to_ask_about": [
                 h.model_dump() for h in pending_hypotheses
             ],
+            "recent_hypothesis_feedback": [h.model_dump() for h in rated_hypotheses],
             "patterns": pattern_report.get("patterns", []),
         }
 
@@ -105,7 +106,7 @@ class ReflectionAgent(BaseAgent):
                     recent_states=recent_states,
                     active_hypotheses=active_hypotheses,
                     patterns=list(pattern_report.get("patterns") or []),
-                    recent_semantic=recent_semantic,
+                    profile=profile,
                 )
             ],
         }
@@ -135,7 +136,7 @@ def _build_grounding_sources(
     recent_states: list[StateTrendPoint],
     active_hypotheses: list[SensorHypothesis],
     patterns: list[dict],
-    recent_semantic: list[SemanticItem],
+    profile: str,
 ) -> list[GroundingSource]:
     sources: list[GroundingSource] = []
 
@@ -191,9 +192,14 @@ def _build_grounding_sources(
             )
         )
 
-    if recent_semantic:
-        summary = f"参考了 {len(recent_semantic)} 条长期印象，用来校准持续偏好和重复模式。"
-        sources.append(GroundingSource(type="memory", label="最近长期记忆", summary=summary))
+    if profile.strip():
+        sources.append(
+            GroundingSource(
+                type="memory",
+                label="长期画像",
+                summary="参考了 profile.md 中的长期画像，用来校准持续偏好和重复模式。",
+            )
+        )
 
     return sources
 

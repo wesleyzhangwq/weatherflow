@@ -39,20 +39,20 @@ export function HypothesisReview({
               <div className="font-medium">{item.label}</div>
               <p className="muted mt-1 text-sm leading-relaxed">{item.summary}</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void send(item.id, "confirmed")}
-                  className="rounded-full px-3 py-1 text-xs border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10"
-                >
-                  准
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void send(item.id, "rejected")}
-                  className="rounded-full px-3 py-1 text-xs border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10"
-                >
-                  不太对
-                </button>
+                {[
+                  ["accurate", "准确"],
+                  ["unsure", "不确定"],
+                  ["inaccurate", "不准确"]
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => void send(item.id, value as HypothesisFeedback)}
+                    className="rounded-full px-3 py-1 text-xs border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10"
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </li>
           ))}

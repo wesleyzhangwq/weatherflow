@@ -78,16 +78,8 @@ export interface ReflectionInsights {
   weather_label?: WeatherLabel | null;
   checkins_considered?: number;
   git_records_considered?: number;
+  suggestion?: string;
   grounding_sources?: GroundingSource[];
-}
-
-export interface TimelineEvent {
-  id: number | null;
-  ts: string;
-  kind: "milestone" | "phase" | "event";
-  title: string;
-  description?: string | null;
-  tags: string[];
 }
 
 export interface CheckinIn {
@@ -133,7 +125,7 @@ export interface CheckinResponse {
 
 export type HypothesisSourceType = "git" | "notes" | "workspace" | "patterns";
 export type HypothesisStatus = "pending" | "confirmed" | "rejected" | "superseded";
-export type HypothesisFeedback = "confirmed" | "rejected";
+export type HypothesisFeedback = "accurate" | "unsure" | "inaccurate";
 
 export interface SensorHypothesis {
   id: number;
@@ -148,9 +140,11 @@ export interface SensorHypothesis {
   confidence: number;
   seen_count: number;
   status: HypothesisStatus;
-  user_feedback?: HypothesisFeedback | null;
+  user_feedback?: string | null;
+  user_rating?: HypothesisFeedback | null;
   confirmed_at?: string | null;
   rejected_at?: string | null;
+  rated_at?: string | null;
 }
 
 export interface SuggestionFeedbackIn {
@@ -175,11 +169,9 @@ export interface MemoryFeedbackIn {
   session_id?: string;
 }
 
-export interface SemanticItem {
-  key: string;
-  value: string;
-  confidence: number;
-  last_updated?: string | null;
+export interface ProfileOut {
+  markdown: string;
+  path: string;
 }
 
 // ---- Endpoints ----
@@ -193,8 +185,6 @@ export const api = {
     request<Reflection[]>(`/api/reflection?limit=${limit}`),
   runReflection: (kind: "daily" | "weekly" = "daily") =>
     request<Reflection>(`/api/reflection/run?kind=${kind}`, { method: "POST" }),
-  timeline: (limit = 50) =>
-    request<TimelineEvent[]>(`/api/timeline?limit=${limit}`),
   submitCheckin: (body: CheckinIn) =>
     request<CheckinResponse>("/api/checkin", {
       method: "POST",
@@ -227,6 +217,5 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ feedback })
     }),
-  semantic: (limit = 50) =>
-    request<SemanticItem[]>(`/api/memory/semantic?limit=${limit}`)
+  profile: () => request<ProfileOut>("/api/memory/profile")
 };

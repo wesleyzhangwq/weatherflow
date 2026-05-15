@@ -72,4 +72,12 @@ def get_by_id(rid: int) -> Optional[ReflectionRecord]:
     return ReflectionRecord(**d)
 
 
-__all__ = ["add", "recent", "get_by_id"]
+def update_insights(rid: int, insights: dict) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE reflections SET insights = ? WHERE id = ?",
+            (json.dumps(insights, ensure_ascii=False), rid),
+        )
+
+
+__all__ = ["add", "recent", "get_by_id", "update_insights"]

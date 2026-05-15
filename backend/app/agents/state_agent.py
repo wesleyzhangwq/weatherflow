@@ -9,7 +9,7 @@ from app.agents.base import BaseAgent
 from app.core.llm import chat_json
 from app.core.model_router import model_for
 from app.core.prompts import STATE_SYSTEM
-from app.memory import checkin_repo, hypothesis_repo, state_repo
+from app.memory import checkin_repo, hypothesis_repo, profile_md, state_repo
 from app.memory.schemas import CheckinRecord, GitActivityRecord, SensorHypothesis, UserStateOut
 
 _VALID_LABELS = {"Momentum", "Confusion", "Burnout", "Overload", "Recovery"}
@@ -149,9 +149,12 @@ class StateAgent(BaseAgent):
     ) -> UserStateOut:
         checkin = checkin or checkin_repo.latest()
         active_hypotheses = hypothesis_repo.active(limit=12)
+        recent_checkins = checkin_repo.recent(limit=7)
 
         context = {
             "checkin": checkin.model_dump() if checkin else None,
+            "recent_checkins": [c.model_dump() for c in recent_checkins],
+            "profile": profile_md.read_profile(max_chars=2500),
             "active_sensor_hypotheses": [h.model_dump() for h in active_hypotheses],
         }
 

@@ -23,7 +23,9 @@ class PlanningAgent(BaseAgent):
         self,
         state: UserStateOut,
         *,
-        recent_context: Optional[str] = None,
+        reflection_text: Optional[str] = None,
+        profile: Optional[str] = None,
+        hypothesis_summary: Optional[str] = None,
         patterns_summary: Optional[str] = None,
     ) -> str:
         pat = (patterns_summary or "").strip() or "（本窗口暂无需要单独强调的模式信号。）"
@@ -34,7 +36,9 @@ class PlanningAgent(BaseAgent):
             f"motivation={state.motivation}.\n"
             f"Rationale (may be Chinese): {state.rationale or '-'}\n\n"
             f"Deterministic pattern signals (for grounding; paraphrase in Chinese, do not quote codes):\n{pat}\n\n"
-            f"Hybrid memory context (optional):\n{recent_context or '-'}"
+            f"Latest reflection:\n{(reflection_text or '-')[:1600]}\n\n"
+            f"Long-term profile markdown:\n{(profile or '-')[:2600]}\n\n"
+            f"Sensor hypotheses / user ratings:\n{(hypothesis_summary or '-')[:1200]}"
         )
         try:
             text = await self.llm.chat(

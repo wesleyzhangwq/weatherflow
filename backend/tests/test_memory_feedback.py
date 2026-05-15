@@ -7,7 +7,7 @@ import json
 import pytest
 
 from app.agents.memory_agent import MemoryAgent
-from app.memory import events_repo, semantic
+from app.memory import events_repo, profile_md
 from app.memory.schemas import CheckinRecord, ReflectionRecord
 from app.routers.feedback import MemoryFeedbackIn, memory_feedback
 
@@ -39,7 +39,7 @@ async def test_memory_feedback_writes_event() -> None:
     assert payload["created_at"] == event.timestamp
 
 
-async def test_memory_agent_extract_includes_memory_feedback(fake_llm) -> None:
+async def test_memory_agent_profile_refresh_includes_memory_feedback(fake_llm) -> None:
     await memory_feedback(
         MemoryFeedbackIn(
             semantic_key="focus_style",
@@ -47,33 +47,37 @@ async def test_memory_agent_extract_includes_memory_feedback(fake_llm) -> None:
             semantic_value_snapshot="以前晚上效率更高",
         )
     )
-    fake_llm.queue_chat(json.dumps({"semantic": [], "milestones": [], "phases": []}))
+    fake_llm.queue_chat(
+        json.dumps(
+            {
+                "user_profile": "你正在更新一条过期画像。",
+                "behavior_patterns": "- 反馈会进入画像刷新。",
+                "goals": "- 不保留过期判断。",
+            }
+        )
+    )
 
     agent = MemoryAgent(fake_llm)
-    await agent.extract(
-        recent_checkins=[
-            CheckinRecord(
-                id=1,
-                date="2026-05-13",
-                created_at="2026-05-13T00:00:00Z",
-                status="steady",
-                did_today="整理了项目",
-                stuck_on=None,
-                anxiety=None,
-                raw=None,
-                session_id="default",
-            )
-        ],
-        recent_reflections=[
-            ReflectionRecord(
-                id=1,
-                date="2026-05-13",
-                kind="daily",
-                content="今天比较稳定。",
-                insights=None,
-                created_at="2026-05-13T00:00:00Z",
-            )
-        ],
+    await agent.refresh_profile(
+        checkin=CheckinRecord(
+            id=1,
+            date="2026-05-13",
+            created_at="2026-05-13T00:00:00Z",
+            status="steady",
+            did_today="整理了项目",
+            stuck_on=None,
+            anxiety=None,
+            raw=None,
+            session_id="default",
+        ),
+        reflection=ReflectionRecord(
+            id=1,
+            date="2026-05-13",
+            kind="daily",
+            content="今天比较稳定。",
+            insights=None,
+            created_at="2026-05-13T00:00:00Z",
+        ),
     )
 
     chat_calls = [call for call in fake_llm.calls if call[0] == "chat"]
@@ -84,7 +88,6 @@ async def test_memory_agent_extract_includes_memory_feedback(fake_llm) -> None:
 
 
 async def test_memory_agent_refresh_profiles_includes_memory_feedback(fake_llm) -> None:
-    semantic.upsert("focus_style", "以前晚上效率更高", confidence=0.7)
     await memory_feedback(
         MemoryFeedbackIn(
             semantic_key="focus_style",
@@ -110,3 +113,4 @@ async def test_memory_agent_refresh_profiles_includes_memory_feedback(fake_llm) 
     assert '"memory_feedback"' in user_content
     assert '"feedback_type": "important"' in user_content
     assert "现在早上更适合深度工作" in user_content
+    assert "早上更适合深度工作" in profile_md.read_profile()

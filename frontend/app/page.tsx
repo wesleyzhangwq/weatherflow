@@ -1,18 +1,13 @@
 import { BurnoutIndicator } from "@/components/BurnoutIndicator";
-import { FocusTrend } from "@/components/FocusTrend";
-import { GrowthTimeline } from "@/components/GrowthTimeline";
 import { MomentumGauge } from "@/components/MomentumGauge";
-import { PatternsCard } from "@/components/PatternsCard";
+import { HypothesisReview } from "@/components/HypothesisReview";
 import { ReflectionFeed } from "@/components/ReflectionFeed";
-import { UserModelCard } from "@/components/UserModelCard";
 import { WeatherCard } from "@/components/WeatherCard";
 import { API_BASE } from "@/lib/api";
 import type {
-  PatternReport,
+  ProfileOut,
   Reflection,
-  SemanticItem,
-  StateTrendPoint,
-  TimelineEvent,
+  SensorHypothesis,
   UserState
 } from "@/lib/api";
 
@@ -27,15 +22,14 @@ async function fetchOk<T>(path: string): Promise<T | null> {
 }
 
 export default async function Home() {
-  const [state, trend, reflections, timeline, semantic, patterns] =
+  const [state, reflections, profile, hypotheses] =
     await Promise.all([
       fetchOk<UserState>("/api/state/current"),
-      fetchOk<StateTrendPoint[]>("/api/state/trend?days=14"),
       fetchOk<Reflection[]>("/api/reflection?limit=3"),
-      fetchOk<TimelineEvent[]>("/api/timeline?limit=10"),
-      fetchOk<SemanticItem[]>("/api/memory/semantic?limit=8"),
-      fetchOk<PatternReport>("/api/state/patterns?window_days=7")
+      fetchOk<ProfileOut>("/api/memory/profile"),
+      fetchOk<SensorHypothesis[]>("/api/sensors/hypotheses?status=pending&limit=5")
     ]);
+  const latestSuggestion = reflections?.[0]?.insights?.suggestion;
 
   return (
     <div className="space-y-8">
@@ -52,17 +46,26 @@ export default async function Home() {
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <BurnoutIndicator value={state?.burnout ?? 0} />
-        <FocusTrend points={trend ?? []} />
+        <div className="card">
+          <div className="text-xs uppercase tracking-widest muted">下一步建议</div>
+          <p className="mt-3 leading-relaxed">
+            {latestSuggestion || "还没有建议。先做一次签到，WF 会给你一句很轻的下一步。"}
+          </p>
+        </div>
       </section>
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <PatternsCard patterns={patterns?.patterns ?? []} />
-        <UserModelCard items={semantic ?? []} />
+        <div className="card">
+          <div className="text-xs uppercase tracking-widest muted">长期画像</div>
+          <pre className="mt-3 whitespace-pre-wrap text-sm leading-relaxed font-sans max-h-80 overflow-auto">
+            {profile?.markdown || "profile.md 还没有建立。"}
+          </pre>
+        </div>
+        <HypothesisReview items={hypotheses ?? []} />
       </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <section>
         <ReflectionFeed items={reflections ?? []} />
-        <GrowthTimeline items={timeline ?? []} />
       </section>
     </div>
   );
