@@ -116,6 +116,48 @@ def test_init_db_migrates_legacy_dev_review_json_columns(tmp_path) -> None:
             );
             INSERT INTO agent_runs (run_type, status, input_json, steps_json)
             VALUES ('dev_review', 'success', '{"window_days": 7}', '[]');
+            CREATE TABLE dev_reviews_migrated (
+                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id                 INTEGER NOT NULL REFERENCES agent_runs(id),
+                window_days            INTEGER NOT NULL DEFAULT 7,
+                summary                TEXT    NOT NULL,
+                dev_weather            TEXT    NOT NULL
+                                       CHECK (dev_weather IN ('Deep Work','Shipping','Collaboration Heavy','Fragmented','Blocked')),
+                main_work_threads_json TEXT    NOT NULL DEFAULT '[]',
+                shipping_progress_json TEXT    NOT NULL DEFAULT '[]',
+                collaboration_load_json TEXT   NOT NULL DEFAULT '[]',
+                meeting_load_json      TEXT    NOT NULL DEFAULT '[]',
+                rhythm_risks_json      TEXT    NOT NULL DEFAULT '[]',
+                next_week_suggestion   TEXT    NOT NULL,
+                source_coverage_json   TEXT    NOT NULL DEFAULT '{}',
+                created_at             TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO dev_reviews_migrated (
+                id,
+                run_id,
+                summary,
+                dev_weather,
+                main_work_threads_json,
+                shipping_progress_json,
+                collaboration_load_json,
+                meeting_load_json,
+                rhythm_risks_json,
+                next_week_suggestion,
+                source_coverage_json
+            )
+            VALUES (
+                99,
+                1,
+                'Stale partial migration row',
+                'Blocked',
+                '["stale"]',
+                '[]',
+                '[]',
+                '[]',
+                '[]',
+                'Ignore stale table.',
+                '{}'
+            );
             INSERT INTO dev_reviews (
                 run_id,
                 window_days,
@@ -152,6 +194,13 @@ def test_init_db_migrates_legacy_dev_review_json_columns(tmp_path) -> None:
     assert old_review is not None
     assert old_review.main_work_threads == ["legacy thread"]
     assert old_review.source_coverage["github"]["status"] == "success"
+    assert dev_review_repo.get_review(99) is None
+
+    with sqlite3.connect(db_path) as conn:
+        stale = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dev_reviews_migrated'"
+        ).fetchone()
+    assert stale is None
 
     new_run_id = dev_review_repo.create_run(AgentRunCreate(input={"window_days": 7}))
     new_review_id = dev_review_repo.create_review(
@@ -172,3 +221,7 @@ def test_init_db_migrates_legacy_dev_review_json_columns(tmp_path) -> None:
     new_review = dev_review_repo.get_review(new_review_id)
     assert new_review is not None
     assert new_review.main_work_threads == ["current thread"]
+
+    init_db(db_path)
+    assert dev_review_repo.get_review(1) is not None
+    assert dev_review_repo.get_review(new_review_id) is not None

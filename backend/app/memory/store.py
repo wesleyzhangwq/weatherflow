@@ -275,9 +275,14 @@ def _migrate_dev_reviews_json_columns(conn: sqlite3.Connection) -> None:
     if not _DEV_REVIEW_LEGACY_COLUMNS.issubset(columns):
         return
 
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS dev_reviews_migrated (
+    conn.execute("DROP TABLE IF EXISTS dev_reviews_migrated")
+    conn.commit()
+
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            """
+            CREATE TABLE dev_reviews_migrated (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id                 INTEGER NOT NULL REFERENCES agent_runs(id),
             window_days            INTEGER NOT NULL DEFAULT 7,
@@ -292,9 +297,12 @@ def _migrate_dev_reviews_json_columns(conn: sqlite3.Connection) -> None:
             next_week_suggestion   TEXT    NOT NULL,
             source_coverage_json   TEXT    NOT NULL DEFAULT '{}',
             created_at             TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-
-        INSERT INTO dev_reviews_migrated (
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO dev_reviews_migrated (
             id,
             run_id,
             window_days,
@@ -308,8 +316,8 @@ def _migrate_dev_reviews_json_columns(conn: sqlite3.Connection) -> None:
             next_week_suggestion,
             source_coverage_json,
             created_at
-        )
-        SELECT
+            )
+            SELECT
             id,
             run_id,
             window_days,
@@ -323,14 +331,17 @@ def _migrate_dev_reviews_json_columns(conn: sqlite3.Connection) -> None:
             next_week_suggestion,
             source_coverage,
             created_at
-        FROM dev_reviews;
-
-        DROP TABLE dev_reviews;
-        ALTER TABLE dev_reviews_migrated RENAME TO dev_reviews;
-        CREATE INDEX IF NOT EXISTS idx_dev_reviews_created ON dev_reviews(created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_dev_reviews_run ON dev_reviews(run_id);
-        """
-    )
+            FROM dev_reviews
+            """
+        )
+        conn.execute("DROP TABLE dev_reviews")
+        conn.execute("ALTER TABLE dev_reviews_migrated RENAME TO dev_reviews")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dev_reviews_created ON dev_reviews(created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dev_reviews_run ON dev_reviews(run_id)")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 @contextmanager
