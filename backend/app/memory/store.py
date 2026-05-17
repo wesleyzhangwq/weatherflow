@@ -212,6 +212,23 @@ _MIGRATIONS = [
     "ALTER TABLE sensor_hypotheses ADD COLUMN rated_at TEXT",
 ]
 
+_DEV_REVIEW_CURRENT_COLUMNS = {
+    "main_work_threads_json",
+    "shipping_progress_json",
+    "collaboration_load_json",
+    "meeting_load_json",
+    "rhythm_risks_json",
+    "source_coverage_json",
+}
+_DEV_REVIEW_LEGACY_COLUMNS = {
+    "main_work_threads",
+    "shipping_progress",
+    "collaboration_load",
+    "meeting_load",
+    "rhythm_risks",
+    "source_coverage",
+}
+
 
 _DB_PATH_OVERRIDE: Optional[str] = None
 _LOCK = threading.Lock()
@@ -238,6 +255,7 @@ def init_db(db_path: Optional[str] = None) -> None:
     with _LOCK, sqlite3.connect(path) as conn:
         conn.executescript("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         conn.executescript(_SCHEMA)
+        _migrate_dev_reviews_json_columns(conn)
         for stmt in _MIGRATIONS:
             try:
                 conn.execute(stmt)
@@ -245,6 +263,74 @@ def init_db(db_path: Optional[str] = None) -> None:
                 if "duplicate column name" not in str(exc).lower():
                     raise
         conn.commit()
+
+
+def _migrate_dev_reviews_json_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(dev_reviews)").fetchall()
+    }
+    if _DEV_REVIEW_CURRENT_COLUMNS.issubset(columns):
+        return
+    if not _DEV_REVIEW_LEGACY_COLUMNS.issubset(columns):
+        return
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS dev_reviews_migrated (
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id                 INTEGER NOT NULL REFERENCES agent_runs(id),
+            window_days            INTEGER NOT NULL DEFAULT 7,
+            summary                TEXT    NOT NULL,
+            dev_weather            TEXT    NOT NULL
+                                   CHECK (dev_weather IN ('Deep Work','Shipping','Collaboration Heavy','Fragmented','Blocked')),
+            main_work_threads_json TEXT    NOT NULL DEFAULT '[]',
+            shipping_progress_json TEXT    NOT NULL DEFAULT '[]',
+            collaboration_load_json TEXT   NOT NULL DEFAULT '[]',
+            meeting_load_json      TEXT    NOT NULL DEFAULT '[]',
+            rhythm_risks_json      TEXT    NOT NULL DEFAULT '[]',
+            next_week_suggestion   TEXT    NOT NULL,
+            source_coverage_json   TEXT    NOT NULL DEFAULT '{}',
+            created_at             TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        INSERT INTO dev_reviews_migrated (
+            id,
+            run_id,
+            window_days,
+            summary,
+            dev_weather,
+            main_work_threads_json,
+            shipping_progress_json,
+            collaboration_load_json,
+            meeting_load_json,
+            rhythm_risks_json,
+            next_week_suggestion,
+            source_coverage_json,
+            created_at
+        )
+        SELECT
+            id,
+            run_id,
+            window_days,
+            summary,
+            dev_weather,
+            main_work_threads,
+            shipping_progress,
+            collaboration_load,
+            meeting_load,
+            rhythm_risks,
+            next_week_suggestion,
+            source_coverage,
+            created_at
+        FROM dev_reviews;
+
+        DROP TABLE dev_reviews;
+        ALTER TABLE dev_reviews_migrated RENAME TO dev_reviews;
+        CREATE INDEX IF NOT EXISTS idx_dev_reviews_created ON dev_reviews(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_dev_reviews_run ON dev_reviews(run_id);
+        """
+    )
 
 
 @contextmanager
