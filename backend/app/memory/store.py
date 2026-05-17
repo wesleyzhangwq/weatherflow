@@ -172,6 +172,39 @@ CREATE TABLE IF NOT EXISTS sensor_hypotheses (
 );
 CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_status ON sensor_hypotheses(status, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_source ON sensor_hypotheses(source_type, last_seen_at DESC);
+
+-- Dev review agent run persistence.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_type     TEXT    NOT NULL CHECK (run_type IN ('dev_review')),
+    status       TEXT    NOT NULL DEFAULT 'running'
+                         CHECK (status IN ('running','success','partial','failed')),
+    started_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    finished_at  TEXT,
+    input_json   TEXT    NOT NULL DEFAULT '{}',
+    steps_json   TEXT    NOT NULL DEFAULT '[]',
+    error        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_type_started ON agent_runs(run_type, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS dev_reviews (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                INTEGER NOT NULL REFERENCES agent_runs(id),
+    window_days           INTEGER NOT NULL,
+    summary               TEXT    NOT NULL,
+    dev_weather           TEXT    NOT NULL
+                                  CHECK (dev_weather IN ('Deep Work','Shipping','Collaboration Heavy','Fragmented','Blocked')),
+    main_work_threads     TEXT    NOT NULL,
+    shipping_progress     TEXT    NOT NULL,
+    collaboration_load    TEXT    NOT NULL,
+    meeting_load          TEXT    NOT NULL,
+    rhythm_risks          TEXT    NOT NULL,
+    next_week_suggestion  TEXT    NOT NULL,
+    source_coverage       TEXT    NOT NULL,
+    created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dev_reviews_created ON dev_reviews(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dev_reviews_run ON dev_reviews(run_id);
 """
 
 _MIGRATIONS = [
