@@ -42,12 +42,13 @@ class GoogleCalendarConnector(MCPConnector):
 
     async def fetch(self, *, days: int = 7, **_: Any) -> ProviderContext:
         now = datetime.now(timezone.utc)
-        time_max = now + timedelta(days=days)
+        time_min = now - timedelta(days=days)
+        time_max = now
         async with self._client() as client:
             r = await client.get(
                 f"/calendars/{_calendar_path(self.calendar_id)}/events",
                 params={
-                    "timeMin": now.isoformat(),
+                    "timeMin": time_min.isoformat(),
                     "timeMax": time_max.isoformat(),
                     "singleEvents": "true",
                     "orderBy": "startTime",

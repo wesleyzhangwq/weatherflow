@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from app.mcp.github import normalize_github_summary
@@ -110,6 +111,8 @@ def test_sanitize_calendar_events_returns_zero_duration_for_all_day_events() -> 
 async def test_google_calendar_fetch_normalizes_events_without_counting_all_day_as_after_hours(
     monkeypatch,
 ) -> None:
+    captured: dict[str, Any] = {}
+
     class FakeResponse:
         def raise_for_status(self) -> None:
             return None
@@ -138,6 +141,9 @@ async def test_google_calendar_fetch_normalizes_events_without_counting_all_day_
             return None
 
         async def get(self, *args: Any, **kwargs: Any) -> FakeResponse:
+            captured["path"] = args[0]
+            captured["params"] = kwargs["params"]
+            captured["called_at"] = datetime.now(timezone.utc)
             return FakeResponse()
 
     connector = GoogleCalendarConnector("token", calendar_id="primary")
@@ -151,3 +157,12 @@ async def test_google_calendar_fetch_normalizes_events_without_counting_all_day_
     assert context.signals["meeting_hours"] == 1.0
     assert context.signals["after_hours_events"] == 0
     assert context.coverage == {"calendar_id": "primary", "event_count": 2}
+
+    assert captured["path"] == "/calendars/primary/events"
+    assert captured["params"]["singleEvents"] == "true"
+    assert captured["params"]["orderBy"] == "startTime"
+    assert captured["params"]["maxResults"] == 100
+    time_min = datetime.fromisoformat(captured["params"]["timeMin"])
+    time_max = datetime.fromisoformat(captured["params"]["timeMax"])
+    assert time_min < time_max
+    assert time_max <= captured["called_at"]
