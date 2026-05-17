@@ -190,17 +190,17 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_type_started ON agent_runs(run_type, s
 CREATE TABLE IF NOT EXISTS dev_reviews (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id                INTEGER NOT NULL REFERENCES agent_runs(id),
-    window_days           INTEGER NOT NULL,
+    window_days           INTEGER NOT NULL DEFAULT 7,
     summary               TEXT    NOT NULL,
     dev_weather           TEXT    NOT NULL
                                   CHECK (dev_weather IN ('Deep Work','Shipping','Collaboration Heavy','Fragmented','Blocked')),
-    main_work_threads     TEXT    NOT NULL,
-    shipping_progress     TEXT    NOT NULL,
-    collaboration_load    TEXT    NOT NULL,
-    meeting_load          TEXT    NOT NULL,
-    rhythm_risks          TEXT    NOT NULL,
+    main_work_threads_json TEXT   NOT NULL DEFAULT '[]',
+    shipping_progress_json TEXT   NOT NULL DEFAULT '[]',
+    collaboration_load_json TEXT  NOT NULL DEFAULT '[]',
+    meeting_load_json      TEXT   NOT NULL DEFAULT '[]',
+    rhythm_risks_json      TEXT   NOT NULL DEFAULT '[]',
     next_week_suggestion  TEXT    NOT NULL,
-    source_coverage       TEXT    NOT NULL,
+    source_coverage_json   TEXT   NOT NULL DEFAULT '{}',
     created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_dev_reviews_created ON dev_reviews(created_at DESC);

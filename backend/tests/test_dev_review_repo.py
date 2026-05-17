@@ -2,6 +2,31 @@ from __future__ import annotations
 
 from app.memory import dev_review_repo
 from app.memory.schemas import AgentRunCreate, AgentRunStep, DevReviewCreate
+from app.memory.store import get_conn
+
+
+def test_dev_review_schema_uses_json_column_names_and_defaults() -> None:
+    with get_conn() as conn:
+        rows = conn.execute("PRAGMA table_info(dev_reviews)").fetchall()
+
+    columns = {row["name"]: dict(row) for row in rows}
+
+    expected_json_defaults = {
+        "main_work_threads_json": "'[]'",
+        "shipping_progress_json": "'[]'",
+        "collaboration_load_json": "'[]'",
+        "meeting_load_json": "'[]'",
+        "rhythm_risks_json": "'[]'",
+        "source_coverage_json": "'{}'",
+    }
+    for column_name, default in expected_json_defaults.items():
+        assert columns[column_name]["type"] == "TEXT"
+        assert columns[column_name]["notnull"] == 1
+        assert columns[column_name]["dflt_value"] == default
+
+    assert columns["window_days"]["type"] == "INTEGER"
+    assert columns["window_days"]["notnull"] == 1
+    assert columns["window_days"]["dflt_value"] == "7"
 
 
 def test_dev_review_roundtrip_with_attached_partial_run() -> None:
