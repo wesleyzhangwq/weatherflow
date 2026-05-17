@@ -108,3 +108,37 @@ async def test_dev_review_agent_fallback_weather_heuristic_precedence(
     )
 
     assert review.dev_weather == expected
+
+
+@pytest.mark.parametrize(
+    ("events", "meeting_hours", "repos", "expected"),
+    [
+        (0, 10.0, ["owner/weatherflow"], "Blocked"),
+        (
+            4,
+            10.0,
+            ["owner/api", "owner/web", "owner/docs", "owner/infra"],
+            "Collaboration Heavy",
+        ),
+        (
+            8,
+            7.5,
+            ["owner/api", "owner/web", "owner/docs", "owner/infra"],
+            "Fragmented",
+        ),
+    ],
+)
+async def test_dev_review_agent_fallback_weather_uses_first_matching_rule(
+    events: int,
+    meeting_hours: float,
+    repos: list[str],
+    expected: DevWeather,
+) -> None:
+    agent = DevReviewAgent(FailingLLM())
+
+    review = await agent.synthesize(
+        window_days=7,
+        contexts=_contexts(events=events, meeting_hours=meeting_hours, repos=repos),
+    )
+
+    assert review.dev_weather == expected
