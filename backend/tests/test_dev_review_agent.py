@@ -142,3 +142,55 @@ async def test_dev_review_agent_fallback_weather_uses_first_matching_rule(
     )
 
     assert review.dev_weather == expected
+
+
+async def test_dev_review_agent_fallback_ignores_failed_and_skipped_provider_signals() -> None:
+    agent = DevReviewAgent(FailingLLM())
+    contexts = [
+        ProviderContext(
+            source="github",
+            status="failed",
+            window_days=7,
+            signals={
+                "events": 12,
+                "repos": ["owner/weatherflow"],
+                "event_types": {"PullRequestEvent": 3},
+            },
+            warnings=["GitHub auth failed."],
+        ),
+        ProviderContext(
+            source="google_calendar",
+            status="skipped",
+            window_days=7,
+            signals={
+                "meeting_count": 14,
+                "meeting_hours": 11.0,
+                "events": [{"title": "WeatherFlow planning"}],
+            },
+            warnings=["Calendar is not configured."],
+        ),
+    ]
+
+    review = await agent.synthesize(window_days=7, contexts=contexts)
+
+    assert review.dev_weather == "Blocked"
+    assert "不可用" in review.summary
+    assert "provider" in review.next_week_suggestion
+    assert "继续" not in review.next_week_suggestion
+    assert review.shipping_progress == []
+    assert review.meeting_load == []
+    assert review.source_coverage["github"]["status"] == "failed"
+    assert review.source_coverage["google_calendar"]["status"] == "skipped"
+
+
+async def test_dev_review_agent_fallback_empty_contexts_does_not_claim_deep_work() -> None:
+    agent = DevReviewAgent(FailingLLM())
+
+    review = await agent.synthesize(window_days=7, contexts=[])
+
+    assert review.dev_weather == "Blocked"
+    assert "不可用" in review.summary
+    assert "provider" in review.next_week_suggestion
+    assert "继续" not in review.next_week_suggestion
+    assert review.main_work_threads == []
+    assert review.source_coverage == {}

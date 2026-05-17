@@ -99,8 +99,17 @@ def _fallback_review(
     contexts: list[ProviderContext],
     source_coverage: dict[str, Any],
 ) -> DevReviewCreate:
-    github = _signals_for(contexts, "github")
-    calendar = _signals_for(contexts, "google_calendar")
+    usable_contexts = _usable_contexts(contexts)
+    if not usable_contexts:
+        return _unavailable_review(
+            window_days=window_days,
+            source_coverage=source_coverage,
+        )
+
+    github = _signals_for(usable_contexts, "github")
+    calendar = _signals_for(usable_contexts, "google_calendar")
+    has_github = bool(github)
+    has_calendar = bool(calendar)
 
     events = _as_int(github.get("events"))
     repos = [str(repo) for repo in github.get("repos") or [] if str(repo)]
@@ -118,10 +127,14 @@ def _fallback_review(
         repos_count=repos_count,
     )
 
-    main_work_threads = _main_work_threads(repos, events, repos_count)
-    shipping_progress = _shipping_progress(events, event_types)
-    collaboration_load = _collaboration_load(event_types, meeting_count, meeting_hours)
-    meeting_load = _meeting_load(meeting_count, meeting_hours, event_titles)
+    main_work_threads = _main_work_threads(repos, events, repos_count) if has_github else []
+    shipping_progress = _shipping_progress(events, event_types) if has_github else []
+    collaboration_load = _collaboration_load(
+        event_types if has_github else {},
+        meeting_count if has_calendar else 0,
+        meeting_hours if has_calendar else 0.0,
+    )
+    meeting_load = _meeting_load(meeting_count, meeting_hours, event_titles) if has_calendar else []
     rhythm_risks = _rhythm_risks(
         events=events,
         repos_count=repos_count,
@@ -129,11 +142,16 @@ def _fallback_review(
         meeting_count=meeting_count,
     )
 
-    summary = (
-        f"过去 {window_days} 天，工具信号显示 GitHub 有 {events} 个事件，"
-        f"涉及 {repos_count} 个仓库；日历记录 {meeting_count} 场会议，约 {meeting_hours:g} 小时。"
-        f"本次判断为「{dev_weather}」，仅基于这些 provider evidence。"
-    )
+    evidence_parts = []
+    if has_github:
+        evidence_parts.append(f"GitHub 有 {events} 个事件，涉及 {repos_count} 个仓库")
+    if has_calendar:
+        evidence_parts.append(f"日历记录 {meeting_count} 场会议，约 {meeting_hours:g} 小时")
+    summary = f"过去 {window_days} 天，工具信号显示" + "；".join(evidence_parts)
+    summary += f"。本次判断为「{dev_weather}」，仅基于可用 provider evidence。"
+    next_week_suggestion = _next_week_suggestion(dev_weather)
+    if dev_weather == "Deep Work" and not (has_github and has_calendar):
+        next_week_suggestion = "下周可以先检查 provider 覆盖，再判断工作节奏。"
 
     return DevReviewCreate(
         run_id=0,
@@ -145,7 +163,40 @@ def _fallback_review(
         collaboration_load=collaboration_load,
         meeting_load=meeting_load,
         rhythm_risks=rhythm_risks,
-        next_week_suggestion=_next_week_suggestion(dev_weather),
+        next_week_suggestion=next_week_suggestion,
+        source_coverage=source_coverage,
+    )
+
+
+def _usable_contexts(contexts: list[ProviderContext]) -> list[ProviderContext]:
+    # Be conservative: partial/failed/skipped contexts remain visible in coverage,
+    # but only successful providers with explicit signals may drive fallback claims.
+    return [
+        context
+        for context in contexts
+        if context.status == "success" and bool(context.signals)
+    ]
+
+
+def _unavailable_review(
+    *,
+    window_days: int,
+    source_coverage: dict[str, Any],
+) -> DevReviewCreate:
+    return DevReviewCreate(
+        run_id=0,
+        window_days=window_days,
+        summary=(
+            f"过去 {window_days} 天，成功 provider evidence 不可用，"
+            "因此无法可靠判断主要工作节奏或交付状态。"
+        ),
+        dev_weather="Blocked",
+        main_work_threads=[],
+        shipping_progress=[],
+        collaboration_load=[],
+        meeting_load=[],
+        rhythm_risks=["provider evidence 不可用，本次回顾不能据此判断工作节奏。"],
+        next_week_suggestion="下周可以先检查或配置 provider，让回顾有可靠证据来源。",
         source_coverage=source_coverage,
     )
 
