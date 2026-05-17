@@ -194,3 +194,55 @@ async def test_dev_review_agent_fallback_empty_contexts_does_not_claim_deep_work
     assert "继续" not in review.next_week_suggestion
     assert review.main_work_threads == []
     assert review.source_coverage == {}
+
+
+@pytest.mark.parametrize("github_status", ["failed", "skipped"])
+async def test_dev_review_agent_fallback_calendar_only_low_load_does_not_claim_deep_work(
+    github_status: str,
+) -> None:
+    agent = DevReviewAgent(FailingLLM())
+    contexts = [
+        ProviderContext(
+            source="github",
+            status=github_status,
+            window_days=7,
+            signals={},
+            warnings=["GitHub evidence unavailable."],
+        ),
+        ProviderContext(
+            source="google_calendar",
+            status="success",
+            window_days=7,
+            signals={
+                "meeting_count": 2,
+                "meeting_hours": 2.0,
+                "events": [{"title": "WeatherFlow sync"}],
+            },
+        ),
+    ]
+
+    review = await agent.synthesize(window_days=7, contexts=contexts)
+
+    assert review.dev_weather == "Blocked"
+    assert "开发证据" in review.summary
+    assert "provider" in review.next_week_suggestion
+    assert "继续" not in review.next_week_suggestion
+    assert review.source_coverage["github"]["status"] == github_status
+    assert review.source_coverage["google_calendar"]["status"] == "success"
+
+
+async def test_dev_review_agent_fallback_deep_work_requires_work_provider_evidence() -> None:
+    agent = DevReviewAgent(FailingLLM())
+
+    review = await agent.synthesize(
+        window_days=7,
+        contexts=_contexts(
+            events=3,
+            meeting_hours=2.0,
+            repos=["owner/weatherflow"],
+        ),
+    )
+
+    assert review.dev_weather == "Deep Work"
+    assert "owner/weatherflow" in review.main_work_threads[0]
+    assert "继续" in review.next_week_suggestion

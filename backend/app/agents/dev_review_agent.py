@@ -121,10 +121,12 @@ def _fallback_review(
     meeting_count = _as_int(calendar.get("meeting_count"))
     meeting_hours = _as_float(calendar.get("meeting_hours"))
     event_titles = _calendar_titles(calendar.get("events"))[:3]
+    has_work_evidence = has_github and (events > 0 or repos_count > 0)
     dev_weather = _fallback_weather(
         events=events,
         meeting_hours=meeting_hours,
         repos_count=repos_count,
+        has_work_evidence=has_work_evidence,
     )
 
     main_work_threads = _main_work_threads(repos, events, repos_count) if has_github else []
@@ -141,6 +143,8 @@ def _fallback_review(
         meeting_hours=meeting_hours,
         meeting_count=meeting_count,
     )
+    if not has_work_evidence:
+        rhythm_risks.insert(0, "可用开发证据不可用，不能据此判断 Deep Work 或交付节奏。")
 
     evidence_parts = []
     if has_github:
@@ -148,10 +152,12 @@ def _fallback_review(
     if has_calendar:
         evidence_parts.append(f"日历记录 {meeting_count} 场会议，约 {meeting_hours:g} 小时")
     summary = f"过去 {window_days} 天，工具信号显示" + "；".join(evidence_parts)
+    if not has_work_evidence:
+        summary += "；可用开发证据不可用"
     summary += f"。本次判断为「{dev_weather}」，仅基于可用 provider evidence。"
     next_week_suggestion = _next_week_suggestion(dev_weather)
-    if dev_weather == "Deep Work" and not (has_github and has_calendar):
-        next_week_suggestion = "下周可以先检查 provider 覆盖，再判断工作节奏。"
+    if not has_work_evidence:
+        next_week_suggestion = "下周可以先检查工作 provider 覆盖，再判断开发节奏。"
 
     return DevReviewCreate(
         run_id=0,
@@ -208,7 +214,13 @@ def _signals_for(contexts: list[ProviderContext], source: str) -> dict[str, Any]
     return {}
 
 
-def _fallback_weather(*, events: int, meeting_hours: float, repos_count: int) -> str:
+def _fallback_weather(
+    *,
+    events: int,
+    meeting_hours: float,
+    repos_count: int,
+    has_work_evidence: bool,
+) -> str:
     if events == 0 and meeting_hours >= 8:
         return "Blocked"
     if meeting_hours >= 10:
@@ -217,6 +229,8 @@ def _fallback_weather(*, events: int, meeting_hours: float, repos_count: int) ->
         return "Fragmented"
     if events >= 8:
         return "Shipping"
+    if not has_work_evidence:
+        return "Blocked"
     return "Deep Work"
 
 
