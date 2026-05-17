@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     # ----- GitHub MCP (optional) -----
     github_token: str = Field(default="", alias="GITHUB_TOKEN")
 
+    # ----- Google Calendar MCP (optional) -----
+    google_calendar_access_token: str = Field(default="", alias="GOOGLE_CALENDAR_ACCESS_TOKEN")
+    google_calendar_calendar_id: str = Field(default="primary", alias="GOOGLE_CALENDAR_CALENDAR_ID")
+    google_calendar_base_url: str = Field(
+        default="https://www.googleapis.com/calendar/v3",
+        alias="GOOGLE_CALENDAR_BASE_URL",
+    )
+
     # ----- Bundled sensor sweep (CLI ``wf sensors`` + optional scheduler) -----
     sensor_sweep_enabled: bool = Field(default=False, alias="SENSOR_SWEEP_ENABLED")
     sensor_sweep_cron: str = Field(default="09:00", alias="SENSOR_SWEEP_CRON")

@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from app.memory.schemas import ProviderContext
 from app.mcp.base import MCPConnector
 
 logger = logging.getLogger(__name__)
@@ -89,4 +90,31 @@ def _parse_dt(s: str | None) -> datetime | None:
         return None
 
 
-__all__ = ["GithubConnector"]
+def normalize_github_summary(summary: dict[str, Any], *, window_days: int) -> ProviderContext:
+    events = int(summary.get("events") or 0)
+    login = summary.get("login")
+    repos = list(summary.get("repo_list") or [])
+    warnings = []
+    if events == 0:
+        warnings.append("No recent GitHub events returned for this window.")
+
+    return ProviderContext(
+        source="github",
+        status="success",
+        window_days=window_days,
+        signals={
+            "login": login,
+            "events": events,
+            "event_types": dict(summary.get("by_type") or {}),
+            "repos_touched": int(summary.get("repos_touched") or len(repos)),
+            "repos": repos,
+        },
+        coverage={
+            "login": login,
+            "raw_event_count": events,
+        },
+        warnings=warnings,
+    )
+
+
+__all__ = ["GithubConnector", "normalize_github_summary"]
