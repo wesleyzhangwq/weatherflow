@@ -28,6 +28,7 @@ frontend/dist/
 
 # ===== CLI dev state =====
 .weatherflow/
+.worktrees/
 
 # ===== Tools / OS =====
 .DS_Store
