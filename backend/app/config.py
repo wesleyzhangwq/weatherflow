@@ -68,6 +68,7 @@ class Settings(BaseSettings):
 
     # ----- Google Calendar MCP (optional) -----
     google_calendar_access_token: str = Field(default="", alias="GOOGLE_CALENDAR_ACCESS_TOKEN")
+    google_calendar_token_file: str = Field(default="", alias="GOOGLE_CALENDAR_TOKEN_FILE")
     google_calendar_calendar_id: str = Field(default="primary", alias="GOOGLE_CALENDAR_CALENDAR_ID")
     google_calendar_base_url: str = Field(
         default="https://www.googleapis.com/calendar/v3",
