@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
 from app.memory.schemas import ProviderContext
 from app.mcp.base import MCPConnector
 
 DEFAULT_BASE_URL = "https://www.googleapis.com/calendar/v3"
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+logger = logging.getLogger(__name__)
 
 
 class GoogleCalendarConnector(MCPConnector):
@@ -19,11 +27,13 @@ class GoogleCalendarConnector(MCPConnector):
 
     def __init__(
         self,
-        access_token: str,
+        access_token: str = "",
+        token_file: str = "",
         calendar_id: str = "primary",
         base_url: str = DEFAULT_BASE_URL,
     ) -> None:
         self.access_token = access_token
+        self.token_file = token_file
         self.calendar_id = calendar_id
         self.base_url = base_url.rstrip("/")
 
@@ -86,14 +96,61 @@ class GoogleCalendarConnector(MCPConnector):
         )
 
     def _client(self) -> httpx.AsyncClient:
+        access_token = load_calendar_access_token(
+            token_file=self.token_file,
+            fallback_access_token=self.access_token,
+        )
+        if access_token is None:
+            raise RuntimeError("Google Calendar access is not configured.")
         return httpx.AsyncClient(
             base_url=self.base_url,
             headers={
-                "Authorization": f"Bearer {self.access_token}",
+                "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json",
             },
             timeout=httpx.Timeout(20.0, connect=10.0),
         )
+
+
+def default_calendar_token_file(data_dir: str) -> str:
+    return str(
+        Path(os.path.expandvars(data_dir)).expanduser()
+        / "google_calendar_token.json"
+    )
+
+
+def resolve_calendar_token_file(*, configured: str, data_dir: str) -> str:
+    configured = configured.strip()
+    if configured:
+        return str(Path(os.path.expandvars(configured)).expanduser())
+    return default_calendar_token_file(data_dir)
+
+
+def has_calendar_credentials(*, token_file: str, access_token: str) -> bool:
+    return Path(token_file).is_file() or bool(access_token.strip())
+
+
+def load_calendar_access_token(
+    *,
+    token_file: str = "",
+    fallback_access_token: str = "",
+) -> str | None:
+    path = Path(token_file).expanduser() if token_file.strip() else None
+    if path and path.is_file():
+        try:
+            creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+            if creds.valid and creds.token:
+                return str(creds.token)
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                path.write_text(creds.to_json(), encoding="utf-8")
+                if creds.token:
+                    return str(creds.token)
+        except Exception:
+            logger.exception("Failed to load Google Calendar token file.")
+
+    fallback = fallback_access_token.strip()
+    return fallback or None
 
 
 def sanitize_calendar_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -147,4 +204,11 @@ def _category(title: str) -> str:
     return "meeting"
 
 
-__all__ = ["GoogleCalendarConnector", "sanitize_calendar_events"]
+__all__ = [
+    "GoogleCalendarConnector",
+    "default_calendar_token_file",
+    "has_calendar_credentials",
+    "load_calendar_access_token",
+    "resolve_calendar_token_file",
+    "sanitize_calendar_events",
+]

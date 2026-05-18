@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.mcp.github import GithubConnector, normalize_github_summary
-from app.mcp.google_calendar import GoogleCalendarConnector, sanitize_calendar_events
+from app.mcp.google_calendar import (
+    GoogleCalendarConnector,
+    load_calendar_access_token,
+    resolve_calendar_token_file,
+    sanitize_calendar_events,
+)
 
 
 def test_normalize_github_summary_maps_connector_payload_to_provider_context() -> None:
@@ -148,6 +153,78 @@ def test_sanitize_calendar_events_returns_zero_duration_for_all_day_events() -> 
             "category": "meeting",
         }
     ]
+
+
+def test_resolve_calendar_token_file_uses_config_or_data_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WF_TOKEN_DIR", str(tmp_path))
+
+    configured = resolve_calendar_token_file(
+        configured="$WF_TOKEN_DIR/calendar.json",
+        data_dir="/unused",
+    )
+    defaulted = resolve_calendar_token_file(configured="", data_dir="$WF_TOKEN_DIR")
+
+    assert configured == str(tmp_path / "calendar.json")
+    assert defaulted == str(tmp_path / "google_calendar_token.json")
+
+
+def test_load_calendar_access_token_prefers_token_file(tmp_path, monkeypatch) -> None:
+    token_file = tmp_path / "google_calendar_token.json"
+    token_file.write_text("{}", encoding="utf-8")
+
+    class FakeCreds:
+        valid = True
+        expired = False
+        refresh_token = "refresh-token"
+        token = "file-token"
+
+    monkeypatch.setattr(
+        "app.mcp.google_calendar.Credentials.from_authorized_user_file",
+        lambda path, scopes: FakeCreds(),
+    )
+
+    token = load_calendar_access_token(
+        token_file=str(token_file),
+        fallback_access_token="env-token",
+    )
+
+    assert token == "file-token"
+
+
+def test_load_calendar_access_token_refreshes_expired_token(tmp_path, monkeypatch) -> None:
+    token_file = tmp_path / "google_calendar_token.json"
+    token_file.write_text("{}", encoding="utf-8")
+
+    class FakeCreds:
+        valid = False
+        expired = True
+        refresh_token = "refresh-token"
+        token = ""
+
+        def refresh(self, request) -> None:
+            self.token = "refreshed-token"
+
+        def to_json(self) -> str:
+            return '{"token": "refreshed-token"}'
+
+    monkeypatch.setattr(
+        "app.mcp.google_calendar.Credentials.from_authorized_user_file",
+        lambda path, scopes: FakeCreds(),
+    )
+
+    token = load_calendar_access_token(token_file=str(token_file))
+
+    assert token == "refreshed-token"
+    assert token_file.read_text(encoding="utf-8") == '{"token": "refreshed-token"}'
+
+
+def test_load_calendar_access_token_falls_back_when_token_file_missing(tmp_path) -> None:
+    token = load_calendar_access_token(
+        token_file=str(tmp_path / "missing.json"),
+        fallback_access_token="env-token",
+    )
+
+    assert token == "env-token"
 
 
 async def test_google_calendar_fetch_normalizes_events_without_counting_all_day_as_after_hours(

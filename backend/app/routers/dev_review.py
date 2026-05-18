@@ -10,7 +10,11 @@ from app.agents.dev_review_agent import DevReviewAgent
 from app.config import get_settings
 from app.core.agent_runs import AgentRunTracker
 from app.mcp.github import GithubConnector, normalize_github_summary
-from app.mcp.google_calendar import GoogleCalendarConnector
+from app.mcp.google_calendar import (
+    GoogleCalendarConnector,
+    has_calendar_credentials,
+    resolve_calendar_token_file,
+)
 from app.memory import dev_review_repo
 from app.memory.schemas import (
     AgentRunCreate,
@@ -33,6 +37,14 @@ _NO_PROVIDER_MESSAGE = "Configure at least one provider: GitHub or Google Calend
 @router.get("/providers", response_model=list[DevReviewProviderReadiness])
 def dev_review_providers() -> list[DevReviewProviderReadiness]:
     settings = get_settings()
+    calendar_token_file = resolve_calendar_token_file(
+        configured=settings.google_calendar_token_file,
+        data_dir=settings.data_dir,
+    )
+    calendar_ready = has_calendar_credentials(
+        token_file=calendar_token_file,
+        access_token=settings.google_calendar_access_token,
+    )
     return [
         DevReviewProviderReadiness(
             name="github",
@@ -45,12 +57,8 @@ def dev_review_providers() -> list[DevReviewProviderReadiness]:
         DevReviewProviderReadiness(
             name="google_calendar",
             label="Google Calendar",
-            status=(
-                "ready"
-                if settings.google_calendar_access_token.strip()
-                else "needs_config"
-            ),
-            required_env="GOOGLE_CALENDAR_ACCESS_TOKEN",
+            status="ready" if calendar_ready else "needs_config",
+            required_env="GOOGLE_CALENDAR_TOKEN_FILE or GOOGLE_CALENDAR_ACCESS_TOKEN",
             used_for="meeting load, focus windows, calendar event titles",
             blocking=False,
         ),
@@ -116,7 +124,14 @@ async def create_dev_review_run(
                 tracker.step("github", "failed", reason)
 
     if "google_calendar" in payload.providers:
-        if not settings.google_calendar_access_token.strip():
+        calendar_token_file = resolve_calendar_token_file(
+            configured=settings.google_calendar_token_file,
+            data_dir=settings.data_dir,
+        )
+        if not has_calendar_credentials(
+            token_file=calendar_token_file,
+            access_token=settings.google_calendar_access_token,
+        ):
             reason = "Google Calendar access is not configured."
             contexts.append(
                 _unavailable_provider_context(
@@ -130,7 +145,8 @@ async def create_dev_review_run(
         else:
             try:
                 context = await GoogleCalendarConnector(
-                    settings.google_calendar_access_token,
+                    access_token=settings.google_calendar_access_token,
+                    token_file=calendar_token_file,
                     calendar_id=settings.google_calendar_calendar_id,
                     base_url=settings.google_calendar_base_url,
                 ).fetch(days=payload.window_days)

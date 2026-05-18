@@ -8,7 +8,7 @@ from app.main import create_app
 from app.mcp.github import GithubConnector
 from app.mcp.google_calendar import GoogleCalendarConnector
 from app.memory import dev_review_repo
-from app.memory.schemas import AgentRunCreate, DevReviewCreate
+from app.memory.schemas import AgentRunCreate, DevReviewCreate, ProviderContext
 
 
 def _client() -> TestClient:
@@ -17,9 +17,10 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
-def test_dev_review_fails_when_no_provider_configured(monkeypatch) -> None:
+def test_dev_review_fails_when_no_provider_configured(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(tmp_path / "missing.json"))
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     client = _client()
@@ -36,9 +37,10 @@ def test_dev_review_fails_when_no_provider_configured(monkeypatch) -> None:
     assert dev_review_repo.latest_review() is None
 
 
-def test_dev_review_providers_need_config_when_env_missing(monkeypatch) -> None:
+def test_dev_review_providers_need_config_when_env_missing(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(tmp_path / "missing.json"))
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     client = _client()
@@ -49,14 +51,18 @@ def test_dev_review_providers_need_config_when_env_missing(monkeypatch) -> None:
     assert providers["github"]["status"] == "needs_config"
     assert providers["github"]["required_env"] == "GITHUB_TOKEN"
     assert providers["google_calendar"]["status"] == "needs_config"
-    assert providers["google_calendar"]["required_env"] == "GOOGLE_CALENDAR_ACCESS_TOKEN"
+    assert (
+        providers["google_calendar"]["required_env"]
+        == "GOOGLE_CALENDAR_TOKEN_FILE or GOOGLE_CALENDAR_ACCESS_TOKEN"
+    )
     assert providers["github"]["blocking"] is False
     assert providers["google_calendar"]["blocking"] is False
 
 
-def test_dev_review_providers_reports_each_ready_env(monkeypatch) -> None:
+def test_dev_review_providers_reports_each_ready_env(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "gh-token")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(tmp_path / "missing.json"))
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     client = _client()
@@ -71,6 +77,26 @@ def test_dev_review_providers_reports_each_ready_env(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "calendar-token")
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
+    response = client.get("/api/dev-review/providers")
+
+    assert response.status_code == 200
+    providers = {item["name"]: item for item in response.json()}
+    assert providers["github"]["status"] == "needs_config"
+    assert providers["google_calendar"]["status"] == "ready"
+
+
+def test_dev_review_providers_reports_calendar_ready_from_token_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    token_file = tmp_path / "google_calendar_token.json"
+    token_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(token_file))
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    client = _client()
     response = client.get("/api/dev-review/providers")
 
     assert response.status_code == 200
@@ -111,9 +137,10 @@ def test_get_run_returns_404_when_run_has_no_review() -> None:
     assert response.status_code == 404
 
 
-def test_dev_review_persists_review_when_provider_succeeds(monkeypatch) -> None:
+def test_dev_review_persists_review_when_provider_succeeds(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "configured-token")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(tmp_path / "missing.json"))
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     async def fake_fetch(self, *, days: int = 7, **kwargs):
@@ -166,9 +193,11 @@ def test_dev_review_persists_review_when_provider_succeeds(monkeypatch) -> None:
 
 def test_dev_review_persists_requested_provider_coverage_when_calendar_skipped(
     monkeypatch,
+    tmp_path,
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "configured-token")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(tmp_path / "missing.json"))
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     async def fake_fetch(self, *, days: int = 7, **kwargs):
@@ -236,11 +265,68 @@ def test_dev_review_persists_requested_provider_coverage_when_calendar_skipped(
     }
 
 
+def test_dev_review_uses_calendar_token_file_when_access_token_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    token_file = tmp_path / "google_calendar_token.json"
+    token_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(token_file))
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    async def fake_synthesize(self, window_days, contexts):
+        assert window_days == 7
+        assert [context.source for context in contexts] == ["google_calendar"]
+        assert contexts[0].status == "success"
+        return DevReviewCreate(
+            run_id=0,
+            window_days=window_days,
+            summary="Meetings shaped the week.",
+            dev_weather="Collaboration Heavy",
+            main_work_threads=[],
+            shipping_progress=[],
+            collaboration_load=["Several calendar events were present."],
+            meeting_load=["Calendar context was available."],
+            rhythm_risks=[],
+            next_week_suggestion="Protect a few focus blocks.",
+            source_coverage={"google_calendar": {"status": "success"}},
+        )
+
+    async def fake_calendar_fetch(self, *, days: int = 7):
+        assert days == 7
+        assert self.access_token == ""
+        assert self.token_file == str(token_file)
+        return ProviderContext(
+            source="google_calendar",
+            status="success",
+            window_days=days,
+            signals={"meeting_count": 1},
+            coverage={"calendar_id": "primary", "event_count": 1},
+            warnings=[],
+        )
+
+    monkeypatch.setattr(GoogleCalendarConnector, "fetch", fake_calendar_fetch)
+    monkeypatch.setattr(DevReviewAgent, "synthesize", fake_synthesize)
+
+    client = _client()
+    response = client.post(
+        "/api/dev-review/runs",
+        json={"window_days": 7, "providers": ["google_calendar"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source_coverage"]["google_calendar"]["status"] == "success"
+
+
 def test_dev_review_succeeds_with_partial_run_when_requested_provider_fails(
     monkeypatch,
+    tmp_path,
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "configured-token")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "configured-calendar-token")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(tmp_path / "missing.json"))
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     async def fake_github_fetch(self, *, days: int = 7, **kwargs):
@@ -316,9 +402,10 @@ def test_dev_review_succeeds_with_partial_run_when_requested_provider_fails(
     assert persisted.source_coverage["google_calendar"]["status"] == "failed"
 
 
-def test_dev_review_returns_400_when_configured_provider_fails(monkeypatch) -> None:
+def test_dev_review_returns_400_when_configured_provider_fails(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "configured-token")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(tmp_path / "missing.json"))
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     async def fake_fetch(self, *, days: int = 7, **kwargs):
