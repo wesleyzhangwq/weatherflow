@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app.mcp.github import normalize_github_summary
+from app.mcp.github import GithubConnector, normalize_github_summary
 from app.mcp.google_calendar import GoogleCalendarConnector, sanitize_calendar_events
 
 
@@ -50,6 +50,37 @@ def test_normalize_github_summary_warns_when_window_has_no_events() -> None:
 
     assert context.signals["events"] == 0
     assert context.warnings == ["No recent GitHub events returned for this window."]
+
+
+async def test_github_fetch_raises_when_user_auth_fails(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 401
+
+        def json(self) -> dict[str, Any]:
+            return {"message": "Bad credentials"}
+
+        def raise_for_status(self) -> None:
+            raise RuntimeError("401 bad credentials")
+
+    class FakeClient:
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> FakeResponse:
+            return FakeResponse()
+
+    connector = GithubConnector("invalid-token")
+    monkeypatch.setattr(connector, "_client", lambda: FakeClient())
+
+    try:
+        await connector.fetch(days=7)
+    except RuntimeError as exc:
+        assert "401 bad credentials" in str(exc)
+    else:
+        raise AssertionError("Expected GithubConnector.fetch to raise for auth failure")
 
 
 def test_sanitize_calendar_events_keeps_safe_event_title_time_duration_and_category() -> None:

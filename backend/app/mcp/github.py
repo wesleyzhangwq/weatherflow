@@ -39,10 +39,12 @@ class GithubConnector(MCPConnector):
     async def fetch(self, *, days: int = 7, **_: Any) -> dict[str, Any]:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         async with self._client() as client:
-            user = (await client.get("/user")).json()
+            user_response = await client.get("/user")
+            user_response.raise_for_status()
+            user = user_response.json()
             login = user.get("login")
             if not login:
-                return {"login": None, "events": 0}
+                raise ValueError("GitHub /user response did not include login.")
 
             r = await client.get(f"/users/{login}/events", params={"per_page": 100})
             r.raise_for_status()

@@ -101,16 +101,27 @@ async def create_dev_review_run(
         tracker.fail(_NO_PROVIDER_MESSAGE)
         raise HTTPException(status_code=400, detail=_NO_PROVIDER_MESSAGE)
 
-    review = await DevReviewAgent(get_llm(request)).synthesize(
-        payload.window_days,
-        contexts,
-    )
-    review_id = dev_review_repo.create_review(_with_run_id(review, run_id))
-    tracker.finish()
-    persisted = dev_review_repo.get_review(review_id)
-    if persisted is None:
-        raise HTTPException(status_code=500, detail="Dev review was not persisted.")
-    return persisted
+    try:
+        review = await DevReviewAgent(get_llm(request)).synthesize(
+            payload.window_days,
+            contexts,
+        )
+        review_id = dev_review_repo.create_review(_with_run_id(review, run_id))
+        tracker.finish()
+        persisted = dev_review_repo.get_review(review_id)
+        if persisted is None:
+            raise RuntimeError("Dev review was not persisted.")
+        return persisted
+    except Exception as exc:
+        logger.exception("Dev review synthesis or persistence failed.")
+        try:
+            tracker.fail("Dev review synthesis or persistence failed.")
+        except Exception:
+            logger.exception("Failed to mark dev review run as failed.")
+        raise HTTPException(
+            status_code=500,
+            detail="Dev review synthesis or persistence failed.",
+        ) from exc
 
 
 @router.get("/runs/latest", response_model=DevReviewRecord | None)
