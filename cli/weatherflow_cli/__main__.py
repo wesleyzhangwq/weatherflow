@@ -12,6 +12,7 @@ from weatherflow_cli import notes_scan as notes_cmd
 from weatherflow_cli import patterns as patterns_cmd
 from weatherflow_cli import reflect as reflect_cmd
 from weatherflow_cli import sensor_sweep as sensor_sweep_cmd
+from weatherflow_cli import setup_calendar as setup_calendar_cmd
 from weatherflow_cli import start_cmd
 from weatherflow_cli import stop_cmd
 from weatherflow_cli import weather as weather_cmd
@@ -36,6 +37,7 @@ app.command(name="checkin", help="1–3 minute morning check-in. Triggers daily 
 app.command(name="weather", help="Show today's life weather + state at a glance.")(weather_cmd.run)
 app.command(name="reflect", help="Show today's reflection. Use --run to regenerate.")(reflect_cmd.run)
 app.command(name="dev-review", help="Run or show the Dev Review Agent.")(dev_review_cmd.run)
+app.command(name="setup-calendar", help="Authorize Google Calendar for Dev Review.")(setup_calendar_cmd.run)
 app.command(
     name="sensors",
     help="All behavior sensors in one shot (git + notes + workspace).",
