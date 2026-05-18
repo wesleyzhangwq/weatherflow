@@ -15,6 +15,7 @@ from app.memory import dev_review_repo
 from app.memory.schemas import (
     AgentRunCreate,
     DevReviewCreate,
+    DevReviewProviderReadiness,
     DevReviewRecord,
     DevReviewRunRequest,
     ProviderContext,
@@ -27,6 +28,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dev-review", tags=["dev-review"])
 
 _NO_PROVIDER_MESSAGE = "Configure at least one provider: GitHub or Google Calendar."
+
+
+@router.get("/providers", response_model=list[DevReviewProviderReadiness])
+def dev_review_providers() -> list[DevReviewProviderReadiness]:
+    settings = get_settings()
+    return [
+        DevReviewProviderReadiness(
+            name="github",
+            label="GitHub",
+            status="ready" if settings.github_token.strip() else "needs_config",
+            required_env="GITHUB_TOKEN",
+            used_for="PRs, issues, reviews, repository activity",
+            blocking=False,
+        ),
+        DevReviewProviderReadiness(
+            name="google_calendar",
+            label="Google Calendar",
+            status=(
+                "ready"
+                if settings.google_calendar_access_token.strip()
+                else "needs_config"
+            ),
+            required_env="GOOGLE_CALENDAR_ACCESS_TOKEN",
+            used_for="meeting load, focus windows, calendar event titles",
+            blocking=False,
+        ),
+    ]
 
 
 @router.post("/runs", response_model=DevReviewRecord)

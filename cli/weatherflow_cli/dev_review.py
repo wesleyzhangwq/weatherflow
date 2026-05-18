@@ -16,8 +16,17 @@ def run(
         "--latest",
         help="Show latest saved review instead of running a new one.",
     ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Show Dev Review provider readiness without running a review.",
+    ),
 ) -> None:
     try:
+        if check:
+            data = api.get("/api/dev-review/providers")
+            _print_provider_check(data)
+            return
         if latest:
             data = api.get("/api/dev-review/runs/latest")
             if data is None:
@@ -49,6 +58,18 @@ def _print_review(data: dict[str, Any]) -> None:
     typer.echo("Source Coverage")
     _source_coverage(data.get("source_coverage") or {})
     _trace(data.get("run") or {})
+
+
+def _print_provider_check(items: list[dict[str, Any]]) -> None:
+    typer.echo("Dev Review Providers")
+    if not items:
+        typer.echo("-")
+        return
+    for item in items:
+        typer.echo(
+            f"- {_text(item.get('label') or item.get('name'))}: "
+            f"{_text(item.get('status'))} ({_text(item.get('required_env'))})"
+        )
 
 
 def _section(title: str, items: list[Any]) -> None:

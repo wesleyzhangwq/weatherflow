@@ -36,6 +36,63 @@ def test_dev_review_fails_when_no_provider_configured(monkeypatch) -> None:
     assert dev_review_repo.latest_review() is None
 
 
+def test_dev_review_providers_need_config_when_env_missing(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    client = _client()
+    response = client.get("/api/dev-review/providers")
+
+    assert response.status_code == 200
+    providers = {item["name"]: item for item in response.json()}
+    assert providers["github"]["status"] == "needs_config"
+    assert providers["github"]["required_env"] == "GITHUB_TOKEN"
+    assert providers["google_calendar"]["status"] == "needs_config"
+    assert providers["google_calendar"]["required_env"] == "GOOGLE_CALENDAR_ACCESS_TOKEN"
+    assert providers["github"]["blocking"] is False
+    assert providers["google_calendar"]["blocking"] is False
+
+
+def test_dev_review_providers_reports_each_ready_env(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-token")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    client = _client()
+    response = client.get("/api/dev-review/providers")
+
+    assert response.status_code == 200
+    providers = {item["name"]: item for item in response.json()}
+    assert providers["github"]["status"] == "ready"
+    assert providers["google_calendar"]["status"] == "needs_config"
+
+    monkeypatch.setenv("GITHUB_TOKEN", "")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "calendar-token")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    response = client.get("/api/dev-review/providers")
+
+    assert response.status_code == 200
+    providers = {item["name"]: item for item in response.json()}
+    assert providers["github"]["status"] == "needs_config"
+    assert providers["google_calendar"]["status"] == "ready"
+
+
+def test_dev_review_providers_reports_both_ready(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-token")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "calendar-token")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    client = _client()
+    response = client.get("/api/dev-review/providers")
+
+    assert response.status_code == 200
+    providers = {item["name"]: item for item in response.json()}
+    assert providers["github"]["status"] == "ready"
+    assert providers["google_calendar"]["status"] == "ready"
+
+
 def test_latest_returns_null_when_no_review_exists() -> None:
     client = _client()
 

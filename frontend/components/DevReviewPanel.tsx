@@ -1,12 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { api, type DevReview } from "@/lib/api";
+import { api, type DevReview, type DevReviewProviderReadiness } from "@/lib/api";
 
-export function DevReviewPanel({ initial }: { initial: DevReview | null }) {
+export function DevReviewPanel({
+  initial,
+  providers
+}: {
+  initial: DevReview | null;
+  providers: DevReviewProviderReadiness[];
+}) {
   const [review, setReview] = useState<DevReview | null>(initial);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const readinessKnown = providers.length > 0;
+  const readyCount = providers.filter((item) => item.status === "ready").length;
+  const canRun = !readinessKnown || readyCount > 0;
 
   async function runReview() {
     setRunning(true);
@@ -39,10 +48,27 @@ export function DevReviewPanel({ initial }: { initial: DevReview | null }) {
           className="w-fit rounded-full bg-black px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
           type="button"
           onClick={() => void runReview()}
-          disabled={running}
+          disabled={running || !canRun}
         >
           {running ? "Running..." : "Run"}
         </button>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {providers.length ? (
+          providers.map((provider) => (
+            <span
+              key={provider.name}
+              className="rounded-full border border-black/10 px-3 py-1 text-xs dark:border-white/10"
+              title={provider.used_for}
+            >
+              {provider.label}:{" "}
+              {provider.status === "ready" ? "Ready" : "Needs config"}
+            </span>
+          ))
+        ) : (
+          <span className="text-xs muted">Provider readiness unavailable.</span>
+        )}
       </div>
 
       {error ? (
@@ -51,8 +77,16 @@ export function DevReviewPanel({ initial }: { initial: DevReview | null }) {
 
       <p className="mt-4 text-sm leading-relaxed">
         {review?.summary ||
-          "Run a dev review to turn recent work and calendar signals into one development rhythm snapshot."}
+          (canRun
+            ? "Run a dev review to turn recent work and calendar signals into one development rhythm snapshot."
+            : "Configure GitHub or Google Calendar before running a Dev Review.")}
       </p>
+
+      {!canRun ? (
+        <p className="mt-2 text-xs muted">
+          Set GITHUB_TOKEN or GOOGLE_CALENDAR_ACCESS_TOKEN in your environment.
+        </p>
+      ) : null}
 
       {review ? (
         <>

@@ -216,6 +216,17 @@ export interface DevReview {
   run: AgentRunRecord;
 }
 
+export type DevReviewProviderReadinessStatus = "ready" | "needs_config";
+
+export interface DevReviewProviderReadiness {
+  name: "github" | "google_calendar";
+  label: string;
+  status: DevReviewProviderReadinessStatus;
+  required_env: string;
+  used_for: string;
+  blocking: boolean;
+}
+
 // ---- Endpoints ----
 export const api = {
   currentState: () => request<UserState>("/api/state/current"),
@@ -266,5 +277,7 @@ export const api = {
     request<DevReview>("/api/dev-review/runs", {
       method: "POST",
       body: JSON.stringify({ window_days: windowDays })
-    })
+    }),
+  devReviewProviders: () =>
+    request<DevReviewProviderReadiness[]>("/api/dev-review/providers")
 };

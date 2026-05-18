@@ -7,6 +7,7 @@ import { WeatherCard } from "@/components/WeatherCard";
 import { API_BASE } from "@/lib/api";
 import type {
   DevReview,
+  DevReviewProviderReadiness,
   ProfileOut,
   Reflection,
   SensorHypothesis,
@@ -24,13 +25,14 @@ async function fetchOk<T>(path: string): Promise<T | null> {
 }
 
 export default async function Home() {
-  const [state, reflections, profile, hypotheses, devReview] =
+  const [state, reflections, profile, hypotheses, devReview, devReviewProviders] =
     await Promise.all([
       fetchOk<UserState>("/api/state/current"),
       fetchOk<Reflection[]>("/api/reflection?limit=3"),
       fetchOk<ProfileOut>("/api/memory/profile"),
       fetchOk<SensorHypothesis[]>("/api/sensors/hypotheses?status=pending&limit=5"),
-      fetchOk<DevReview>("/api/dev-review/runs/latest")
+      fetchOk<DevReview>("/api/dev-review/runs/latest"),
+      fetchOk<DevReviewProviderReadiness[]>("/api/dev-review/providers")
     ]);
   const latestSuggestion = reflections?.[0]?.insights?.suggestion;
 
@@ -58,7 +60,10 @@ export default async function Home() {
       </section>
 
       <section>
-        <DevReviewPanel initial={devReview} />
+        <DevReviewPanel
+          initial={devReview}
+          providers={devReviewProviders ?? []}
+        />
       </section>
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-5">

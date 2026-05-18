@@ -225,6 +225,16 @@ class WorkspaceActivityRecord(WorkspaceActivityIn):
 DevWeather = Literal["Deep Work", "Shipping", "Collaboration Heavy", "Fragmented", "Blocked"]
 RunStatus = Literal["running", "success", "partial", "failed"]
 ProviderStatus = Literal["success", "partial", "failed", "skipped"]
+DevReviewProviderReadinessStatus = Literal["ready", "needs_config"]
+
+
+class DevReviewProviderReadiness(BaseModel):
+    name: Literal["github", "google_calendar"]
+    label: str
+    status: DevReviewProviderReadinessStatus
+    required_env: str
+    used_for: str
+    blocking: bool = False
 
 
 class ProviderContext(BaseModel):
@@ -315,6 +325,8 @@ __all__ = [
     "EventRecord",
     "WorkspaceActivityIn",
     "WorkspaceActivityRecord",
+    "DevReviewProviderReadinessStatus",
+    "DevReviewProviderReadiness",
     "DevWeather",
     "RunStatus",
     "ProviderStatus",
