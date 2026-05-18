@@ -64,7 +64,7 @@ Next.js dashboard  +  wf CLI (check-in, sensors, start/stop)
                     |
          Optional: scheduler (evening + weekly + sensor sweep)
                     |
-CLI sensors: git, notes, workspace  |  MCP: GitHub, notes sync
+CLI sensors: git, notes, workspace  |  MCP: GitHub, Google Calendar
 ```
 
 Details:
@@ -91,6 +91,7 @@ make dev-frontend      # http://localhost:3000
 uv run wf checkin             # interactive 1–3 min morning check-in
 uv run wf weather             # current life weather
 uv run wf reflect             # today's reflection
+uv run wf setup-calendar --credentials ./credentials.json
 uv run wf dev-review --days 7 # development rhythm review from GitHub + Calendar
 uv run wf dev-review --latest # latest saved dev review
 uv run wf patterns            # window-vs-window deterministic pattern report
@@ -151,6 +152,17 @@ for provider coverage and failures.
 Calendar storage keeps event titles, start times, durations, calendar names, and
 derived categories. It does not store descriptions, attendee emails, meeting
 links, locations, or attachments.
+
+Google Calendar setup is local-first. Enable the Google Calendar API in Google
+Cloud, create an OAuth Desktop client, download its `credentials.json`, then run:
+
+```bash
+uv run wf setup-calendar --credentials ./credentials.json
+```
+
+The command opens a browser consent flow and saves a refreshable token JSON under
+`DATA_DIR` by default. The backend prefers `GOOGLE_CALENDAR_TOKEN_FILE` when it
+exists and only uses `GOOGLE_CALENDAR_ACCESS_TOKEN` as a temporary fallback.
 
 ### Auto reflections
 
