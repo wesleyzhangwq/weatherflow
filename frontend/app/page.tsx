@@ -1,10 +1,12 @@
 import { BurnoutIndicator } from "@/components/BurnoutIndicator";
+import { DevReviewPanel } from "@/components/DevReviewPanel";
 import { MomentumGauge } from "@/components/MomentumGauge";
 import { HypothesisReview } from "@/components/HypothesisReview";
 import { ReflectionFeed } from "@/components/ReflectionFeed";
 import { WeatherCard } from "@/components/WeatherCard";
 import { API_BASE } from "@/lib/api";
 import type {
+  DevReview,
   ProfileOut,
   Reflection,
   SensorHypothesis,
@@ -22,12 +24,13 @@ async function fetchOk<T>(path: string): Promise<T | null> {
 }
 
 export default async function Home() {
-  const [state, reflections, profile, hypotheses] =
+  const [state, reflections, profile, hypotheses, devReview] =
     await Promise.all([
       fetchOk<UserState>("/api/state/current"),
       fetchOk<Reflection[]>("/api/reflection?limit=3"),
       fetchOk<ProfileOut>("/api/memory/profile"),
-      fetchOk<SensorHypothesis[]>("/api/sensors/hypotheses?status=pending&limit=5")
+      fetchOk<SensorHypothesis[]>("/api/sensors/hypotheses?status=pending&limit=5"),
+      fetchOk<DevReview>("/api/dev-review/runs/latest")
     ]);
   const latestSuggestion = reflections?.[0]?.insights?.suggestion;
 
@@ -52,6 +55,10 @@ export default async function Home() {
             {latestSuggestion || "还没有建议。先做一次签到，WF 会给你一句很轻的下一步。"}
           </p>
         </div>
+      </section>
+
+      <section>
+        <DevReviewPanel initial={devReview} />
       </section>
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-5">
