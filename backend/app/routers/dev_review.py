@@ -18,6 +18,7 @@ from app.memory.schemas import (
     DevReviewRecord,
     DevReviewRunRequest,
     ProviderContext,
+    ProviderStatus,
 )
 from app.routers._deps import get_llm
 
@@ -47,7 +48,16 @@ async def create_dev_review_run(
 
     if "github" in payload.providers:
         if not settings.github_token.strip():
-            tracker.step("github", "skipped", "GitHub access is not configured.")
+            reason = "GitHub access is not configured."
+            contexts.append(
+                _unavailable_provider_context(
+                    source="github",
+                    status="skipped",
+                    window_days=payload.window_days,
+                    reason=reason,
+                )
+            )
+            tracker.step("github", "skipped", reason)
         else:
             try:
                 summary = await GithubConnector(settings.github_token).fetch(
@@ -66,15 +76,29 @@ async def create_dev_review_run(
                 )
             except Exception:
                 logger.exception("GitHub dev review provider failed.")
-                tracker.step("github", "failed", "GitHub provider failed.")
+                reason = "GitHub provider failed."
+                contexts.append(
+                    _unavailable_provider_context(
+                        source="github",
+                        status="failed",
+                        window_days=payload.window_days,
+                        reason=reason,
+                    )
+                )
+                tracker.step("github", "failed", reason)
 
     if "google_calendar" in payload.providers:
         if not settings.google_calendar_access_token.strip():
-            tracker.step(
-                "google_calendar",
-                "skipped",
-                "Google Calendar access is not configured.",
+            reason = "Google Calendar access is not configured."
+            contexts.append(
+                _unavailable_provider_context(
+                    source="google_calendar",
+                    status="skipped",
+                    window_days=payload.window_days,
+                    reason=reason,
+                )
             )
+            tracker.step("google_calendar", "skipped", reason)
         else:
             try:
                 context = await GoogleCalendarConnector(
@@ -91,11 +115,16 @@ async def create_dev_review_run(
                 )
             except Exception:
                 logger.exception("Google Calendar dev review provider failed.")
-                tracker.step(
-                    "google_calendar",
-                    "failed",
-                    "Google Calendar provider failed.",
+                reason = "Google Calendar provider failed."
+                contexts.append(
+                    _unavailable_provider_context(
+                        source="google_calendar",
+                        status="failed",
+                        window_days=payload.window_days,
+                        reason=reason,
+                    )
                 )
+                tracker.step("google_calendar", "failed", reason)
 
     if not _has_usable_context(contexts):
         tracker.fail(_NO_PROVIDER_MESSAGE)
@@ -142,6 +171,23 @@ def dev_review_run(run_id: int) -> DevReviewRecord:
 
 def _has_usable_context(contexts: list[ProviderContext]) -> bool:
     return any(context.status == "success" and bool(context.signals) for context in contexts)
+
+
+def _unavailable_provider_context(
+    *,
+    source: str,
+    status: ProviderStatus,
+    window_days: int,
+    reason: str,
+) -> ProviderContext:
+    return ProviderContext(
+        source=source,
+        status=status,
+        window_days=window_days,
+        signals={},
+        coverage={"reason": reason},
+        warnings=[reason],
+    )
 
 
 def _with_run_id(review: DevReviewCreate, run_id: int) -> DevReviewCreate:

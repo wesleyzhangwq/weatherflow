@@ -116,7 +116,7 @@ def sanitize_calendar_events(items: list[dict[str, Any]]) -> list[dict[str, Any]
                 "title": title,
                 "start": start_value,
                 "duration_minutes": duration_minutes,
-                "calendar_name": _calendar_name(item),
+                "calendar_name": "",
                 "category": _category(title),
             }
         )
@@ -134,12 +134,6 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-
-
-def _calendar_name(item: dict[str, Any]) -> str:
-    organizer = item.get("organizer") or {}
-    creator = item.get("creator") or {}
-    return organizer.get("displayName") or creator.get("displayName") or ""
 
 
 def _category(title: str) -> str:

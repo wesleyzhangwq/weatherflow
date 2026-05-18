@@ -96,7 +96,14 @@ def test_sanitize_calendar_events_keeps_safe_event_title_time_duration_and_categ
                 "attachments": [{"title": "confidential.pdf"}],
                 "start": {"dateTime": "2026-05-17T09:00:00-07:00"},
                 "end": {"dateTime": "2026-05-17T09:45:00-07:00"},
-                "organizer": {"displayName": "Work Calendar"},
+                "organizer": {
+                    "displayName": "Organizer Person",
+                    "email": "organizer@example.com",
+                },
+                "creator": {
+                    "displayName": "Creator Person",
+                    "email": "creator@example.com",
+                },
             }
         ]
     )
@@ -106,10 +113,14 @@ def test_sanitize_calendar_events_keeps_safe_event_title_time_duration_and_categ
             "title": "Review API design",
             "start": "2026-05-17T09:00:00-07:00",
             "duration_minutes": 45,
-            "calendar_name": "Work Calendar",
+            "calendar_name": "",
             "category": "review",
         }
     ]
+    assert "Organizer Person" not in str(events[0])
+    assert "organizer@example.com" not in str(events[0])
+    assert "Creator Person" not in str(events[0])
+    assert "creator@example.com" not in str(events[0])
     assert "description" not in events[0]
     assert "attendees" not in events[0]
     assert "hangoutLink" not in events[0]
