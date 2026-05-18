@@ -221,6 +221,71 @@ class WorkspaceActivityRecord(WorkspaceActivityIn):
     ts: str
 
 
+# ----------------------------- Dev review agent runs -----------------------------
+DevWeather = Literal["Deep Work", "Shipping", "Collaboration Heavy", "Fragmented", "Blocked"]
+RunStatus = Literal["running", "success", "partial", "failed"]
+ProviderStatus = Literal["success", "partial", "failed", "skipped"]
+
+
+class ProviderContext(BaseModel):
+    source: str
+    status: ProviderStatus
+    window_days: int = 7
+    signals: Dict[str, Any] = Field(default_factory=dict)
+    coverage: Dict[str, Any] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class AgentRunStep(BaseModel):
+    name: str
+    status: ProviderStatus
+    summary: str = ""
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunCreate(BaseModel):
+    run_type: Literal["dev_review"] = "dev_review"
+    input: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunRecord(BaseModel):
+    id: int
+    run_type: Literal["dev_review"]
+    status: RunStatus
+    started_at: str
+    finished_at: Optional[str] = None
+    input: Dict[str, Any] = Field(default_factory=dict)
+    steps: List[AgentRunStep] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class DevReviewCreate(BaseModel):
+    run_id: int
+    window_days: int = 7
+    summary: str
+    dev_weather: DevWeather
+    main_work_threads: List[str] = Field(default_factory=list)
+    shipping_progress: List[str] = Field(default_factory=list)
+    collaboration_load: List[str] = Field(default_factory=list)
+    meeting_load: List[str] = Field(default_factory=list)
+    rhythm_risks: List[str] = Field(default_factory=list)
+    next_week_suggestion: str
+    source_coverage: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DevReviewRecord(DevReviewCreate):
+    id: int
+    created_at: str
+    run: AgentRunRecord
+
+
+class DevReviewRunRequest(BaseModel):
+    window_days: int = Field(default=7, ge=1, le=31)
+    providers: List[Literal["github", "google_calendar"]] = Field(
+        default_factory=lambda: ["github", "google_calendar"]
+    )
+
+
 __all__ = [
     "CheckinIn",
     "CheckinRecord",
@@ -250,4 +315,14 @@ __all__ = [
     "EventRecord",
     "WorkspaceActivityIn",
     "WorkspaceActivityRecord",
+    "DevWeather",
+    "RunStatus",
+    "ProviderStatus",
+    "ProviderContext",
+    "AgentRunStep",
+    "AgentRunCreate",
+    "AgentRunRecord",
+    "DevReviewCreate",
+    "DevReviewRecord",
+    "DevReviewRunRequest",
 ]

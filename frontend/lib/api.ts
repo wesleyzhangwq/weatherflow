@@ -174,6 +174,48 @@ export interface ProfileOut {
   path: string;
 }
 
+export type DevWeather =
+  | "Deep Work"
+  | "Shipping"
+  | "Collaboration Heavy"
+  | "Fragmented"
+  | "Blocked";
+
+export interface AgentRunStep {
+  name: string;
+  status: "success" | "partial" | "failed" | "skipped";
+  summary: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface AgentRunRecord {
+  id: number;
+  run_type: "dev_review";
+  status: "running" | "success" | "partial" | "failed";
+  started_at: string;
+  finished_at?: string | null;
+  input: Record<string, unknown>;
+  steps: AgentRunStep[];
+  error?: string | null;
+}
+
+export interface DevReview {
+  id: number;
+  run_id: number;
+  window_days: number;
+  summary: string;
+  dev_weather: DevWeather;
+  main_work_threads: string[];
+  shipping_progress: string[];
+  collaboration_load: string[];
+  meeting_load: string[];
+  rhythm_risks: string[];
+  next_week_suggestion: string;
+  source_coverage: Record<string, unknown>;
+  created_at: string;
+  run: AgentRunRecord;
+}
+
 // ---- Endpoints ----
 export const api = {
   currentState: () => request<UserState>("/api/state/current"),
@@ -217,5 +259,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ feedback })
     }),
-  profile: () => request<ProfileOut>("/api/memory/profile")
+  profile: () => request<ProfileOut>("/api/memory/profile"),
+  latestDevReview: () =>
+    request<DevReview | null>("/api/dev-review/runs/latest"),
+  runDevReview: (windowDays = 7) =>
+    request<DevReview>("/api/dev-review/runs", {
+      method: "POST",
+      body: JSON.stringify({ window_days: windowDays })
+    })
 };

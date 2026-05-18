@@ -91,6 +91,8 @@ make dev-frontend      # http://localhost:3000
 uv run wf checkin             # interactive 1–3 min morning check-in
 uv run wf weather             # current life weather
 uv run wf reflect             # today's reflection
+uv run wf dev-review --days 7 # development rhythm review from GitHub + Calendar
+uv run wf dev-review --latest # latest saved dev review
 uv run wf patterns            # window-vs-window deterministic pattern report
 uv run wf scan-git       --root ~/Projects     # behavior sensor
 uv run wf scan-notes     --root ~/Notes        # notes / Obsidian sensor
@@ -138,6 +140,17 @@ uvicorn app.main:app --reload --port 8765
 
 The same OpenAI-compatible client is used; you just point `OPENAI_BASE_URL`
 at `http://127.0.0.1:11434/v1`. See `.env.example.ollama`.
+
+### Dev Review Agent
+
+The Dev Review Agent is a manually triggered agent run. It uses configured
+GitHub and Google Calendar providers to generate a structured development rhythm
+review, stores the user-facing review, and keeps a lightweight execution trace
+for provider coverage and failures.
+
+Calendar storage keeps event titles, start times, durations, calendar names, and
+derived categories. It does not store descriptions, attendee emails, meeting
+links, locations, or attachments.
 
 ### Auto reflections
 

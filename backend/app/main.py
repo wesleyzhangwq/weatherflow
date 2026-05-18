@@ -16,7 +16,7 @@ from app.core.orchestrator import Orchestrator
 from app.core.scheduler import build_scheduler
 from app.memory.store import init_db
 from app.sensors.sweep_runner import run_sensor_sweep
-from app.routers import checkin, feedback, mcp, memory, reflection, sensors, state
+from app.routers import checkin, dev_review, feedback, mcp, memory, reflection, sensors, state
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(sensors.router)
     app.include_router(memory.router)
     app.include_router(mcp.router)
+    app.include_router(dev_review.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
