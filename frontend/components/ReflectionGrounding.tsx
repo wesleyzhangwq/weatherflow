@@ -12,7 +12,7 @@ export function ReflectionGrounding({
   if (visible.length === 0) return null;
 
   return (
-    <div className="mt-3 rounded-xl border border-black/10 dark:border-white/10 px-3 py-2">
+    <div className="mt-3 rounded-lg border border-black/10 dark:border-white/10 px-3 py-2">
       <div className="text-xs uppercase tracking-widest muted">
         这次反思参考了
       </div>

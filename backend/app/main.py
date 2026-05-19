@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,8 +14,7 @@ from app.core.llm import build_llm_client
 from app.core.orchestrator import Orchestrator
 from app.core.scheduler import build_scheduler
 from app.memory.store import init_db
-from app.sensors.sweep_runner import run_sensor_sweep
-from app.routers import checkin, dev_review, feedback, mcp, memory, reflection, sensors, state
+from app.routers import checkin, dev_review, feedback, mcp, memory, reflection, state
 
 logger = logging.getLogger(__name__)
 
@@ -45,24 +43,10 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Weekly review job failed.")
 
-    async def _sensor_sweep_job() -> None:
-        if not get_settings().sensor_sweep_enabled:
-            return
-        try:
-            logger.info("Sensor sweep job firing.")
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: run_sensor_sweep(settings=get_settings(), dry_run=False),
-            )
-        except Exception:
-            logger.exception("Sensor sweep job failed.")
-
     scheduler = build_scheduler(
         settings,
         daily_job=_evening_job,
         weekly_job=_weekly_job,
-        sensor_sweep_job=_sensor_sweep_job,
     )
     app.state.scheduler = scheduler
     if scheduler is not None:
@@ -97,7 +81,6 @@ def create_app() -> FastAPI:
     app.include_router(feedback.router)
     app.include_router(reflection.router)
     app.include_router(state.router)
-    app.include_router(sensors.router)
     app.include_router(memory.router)
     app.include_router(mcp.router)
     app.include_router(dev_review.router)
@@ -133,10 +116,8 @@ def create_app() -> FastAPI:
                 "embedding_model": settings.embedding_model,
                 "embedding_dim": settings.embedding_dim,
             },
-            "long_term_memory": {
-                "backend": "qdrant" if settings.qdrant_url.strip() else "sqlite",
-                "qdrant_configured": bool(settings.qdrant_url.strip()),
-                "collection": settings.qdrant_collection,
+            "memory": {
+                "backend": "markdown_profile",
             },
             "cors_allowed_origins": settings.cors_origins,
         }

@@ -1,4 +1,4 @@
-"""SQLite + FTS5 schema and connection helpers."""
+"""SQLite schema and connection helpers."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from app.config import get_settings
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS checkins (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    date        TEXT    NOT NULL,                -- YYYY-MM-DD
+    date        TEXT    NOT NULL,
     status      TEXT,
     did_today   TEXT,
     stuck_on    TEXT,
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS reflections (
     date        TEXT    NOT NULL,
     kind        TEXT    NOT NULL CHECK (kind IN ('daily','weekly')),
     content     TEXT    NOT NULL,
-    insights    TEXT,                              -- JSON
+    insights    TEXT,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_reflections_kind_date ON reflections(kind, date DESC);
@@ -48,81 +48,6 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_state_ts ON state_snapshots(ts DESC);
 
-CREATE TABLE IF NOT EXISTS timeline_events (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts           TEXT    NOT NULL DEFAULT (datetime('now')),
-    kind         TEXT    NOT NULL CHECK (kind IN ('milestone','phase','event')),
-    title        TEXT    NOT NULL,
-    description  TEXT,
-    tags         TEXT                              -- comma-separated
-);
-CREATE INDEX IF NOT EXISTS idx_timeline_ts ON timeline_events(ts DESC);
-
-CREATE TABLE IF NOT EXISTS semantic_memory (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    key           TEXT    NOT NULL UNIQUE,
-    value         TEXT    NOT NULL,
-    confidence    REAL    NOT NULL DEFAULT 0.5,
-    last_updated  TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS episodic_memory (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT    NOT NULL DEFAULT (datetime('now')),
-    content     TEXT    NOT NULL,
-    source      TEXT    NOT NULL,                 -- checkin / reflection / git / cli / ...
-    embedding   BLOB
-);
-CREATE INDEX IF NOT EXISTS idx_episodic_ts ON episodic_memory(ts DESC);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS episodic_memory_fts
-USING fts5(content, source UNINDEXED, content='episodic_memory', content_rowid='id');
-
-CREATE TRIGGER IF NOT EXISTS episodic_memory_ai AFTER INSERT ON episodic_memory BEGIN
-    INSERT INTO episodic_memory_fts(rowid, content, source)
-    VALUES (new.id, new.content, new.source);
-END;
-CREATE TRIGGER IF NOT EXISTS episodic_memory_ad AFTER DELETE ON episodic_memory BEGIN
-    INSERT INTO episodic_memory_fts(episodic_memory_fts, rowid, content, source)
-    VALUES('delete', old.id, old.content, old.source);
-END;
-CREATE TRIGGER IF NOT EXISTS episodic_memory_au AFTER UPDATE ON episodic_memory BEGIN
-    INSERT INTO episodic_memory_fts(episodic_memory_fts, rowid, content, source)
-    VALUES('delete', old.id, old.content, old.source);
-    INSERT INTO episodic_memory_fts(rowid, content, source)
-    VALUES (new.id, new.content, new.source);
-END;
-
-CREATE TABLE IF NOT EXISTS git_activity (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts             TEXT    NOT NULL DEFAULT (datetime('now')),
-    repo           TEXT    NOT NULL,
-    commit_count   INTEGER NOT NULL DEFAULT 0,
-    project_count  INTEGER NOT NULL DEFAULT 0,
-    switch_score   REAL    NOT NULL DEFAULT 0.0,
-    window_days    INTEGER NOT NULL DEFAULT 14
-);
-CREATE INDEX IF NOT EXISTS idx_git_ts ON git_activity(ts DESC);
-
--- Notes activity (Obsidian / Markdown directory).
--- Captures the input/output ratio signal: how much you read/highlight/collect
--- versus how much you actually finish writing.
-CREATE TABLE IF NOT EXISTS notes_activity (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts              TEXT    NOT NULL DEFAULT (datetime('now')),
-    root            TEXT    NOT NULL,
-    file_count      INTEGER NOT NULL DEFAULT 0,
-    new_file_count  INTEGER NOT NULL DEFAULT 0,
-    edited_count    INTEGER NOT NULL DEFAULT 0,
-    total_words     INTEGER NOT NULL DEFAULT 0,
-    new_words       INTEGER NOT NULL DEFAULT 0,
-    avg_words       REAL    NOT NULL DEFAULT 0.0,
-    top_topics      TEXT,
-    window_days     INTEGER NOT NULL DEFAULT 14
-);
-CREATE INDEX IF NOT EXISTS idx_notes_ts ON notes_activity(ts DESC);
-
--- Short-term event log (high-frequency, source of truth for the session).
 CREATE TABLE IF NOT EXISTS events (
     id          TEXT PRIMARY KEY,
     timestamp   TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -135,45 +60,6 @@ CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 
--- Workspace behavior sensor (directory activity / fragmentation).
-CREATE TABLE IF NOT EXISTS workspace_activity (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts                   TEXT    NOT NULL DEFAULT (datetime('now')),
-    root                 TEXT    NOT NULL,
-    active_project_count INTEGER NOT NULL DEFAULT 0,
-    touched_paths        INTEGER NOT NULL DEFAULT 0,
-    fragmentation_score  REAL    NOT NULL DEFAULT 0.0,
-    top_dirs             TEXT,
-    window_days          INTEGER NOT NULL DEFAULT 7
-);
-CREATE INDEX IF NOT EXISTS idx_workspace_ts ON workspace_activity(ts DESC);
-
--- Weak interpretations produced from deterministic sensor rows.
--- They are questions for the user until confirmed or seen repeatedly.
-CREATE TABLE IF NOT EXISTS sensor_hypotheses (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
-    last_seen_at     TEXT    NOT NULL DEFAULT (datetime('now')),
-    source_type      TEXT    NOT NULL CHECK (source_type IN ('git','notes','workspace','patterns')),
-    source_record_id INTEGER,
-    key              TEXT    NOT NULL UNIQUE,
-    label            TEXT    NOT NULL,
-    summary          TEXT    NOT NULL,
-    evidence         TEXT,
-    confidence       REAL    NOT NULL DEFAULT 0.2,
-    seen_count       INTEGER NOT NULL DEFAULT 1,
-    status           TEXT    NOT NULL DEFAULT 'pending'
-                         CHECK (status IN ('pending','confirmed','rejected','superseded')),
-    user_feedback    TEXT CHECK (user_feedback IN ('confirmed','rejected') OR user_feedback IS NULL),
-    user_rating      TEXT CHECK (user_rating IN ('accurate','unsure','inaccurate') OR user_rating IS NULL),
-    confirmed_at     TEXT,
-    rejected_at      TEXT,
-    rated_at         TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_status ON sensor_hypotheses(status, last_seen_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sensor_hypotheses_source ON sensor_hypotheses(source_type, last_seen_at DESC);
-
--- Dev review agent run persistence.
 CREATE TABLE IF NOT EXISTS agent_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     run_type     TEXT    NOT NULL CHECK (run_type IN ('dev_review')),
@@ -207,10 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_dev_reviews_created ON dev_reviews(created_at DES
 CREATE INDEX IF NOT EXISTS idx_dev_reviews_run ON dev_reviews(run_id);
 """
 
-_MIGRATIONS = [
-    "ALTER TABLE sensor_hypotheses ADD COLUMN user_rating TEXT",
-    "ALTER TABLE sensor_hypotheses ADD COLUMN rated_at TEXT",
-]
+_MIGRATIONS: list[str] = []
 
 _DEV_REVIEW_CURRENT_COLUMNS = {
     "main_work_threads_json",

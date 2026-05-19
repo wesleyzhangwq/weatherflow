@@ -75,24 +75,12 @@ class Settings(BaseSettings):
         alias="GOOGLE_CALENDAR_BASE_URL",
     )
 
-    # ----- Bundled sensor sweep (CLI ``wf sensors`` + optional scheduler) -----
-    sensor_sweep_enabled: bool = Field(default=False, alias="SENSOR_SWEEP_ENABLED")
-    sensor_sweep_cron: str = Field(default="09:00", alias="SENSOR_SWEEP_CRON")
-    sensor_sweep_git_roots: str = Field(default="", alias="SENSOR_SWEEP_GIT_ROOTS")
-    sensor_sweep_notes_roots: str = Field(default="", alias="SENSOR_SWEEP_NOTES_ROOTS")
-    sensor_sweep_workspace_roots: str = Field(default="", alias="SENSOR_SWEEP_WORKSPACE_ROOTS")
-
-    # ----- Hybrid memory -----
+    # ----- Readable memory -----
     memory_markdown_dir: str = Field(
         default="",
         alias="MEMORY_MARKDOWN_DIR",
-        description="Mid-term Markdown root; default DATA_DIR/memory",
+        description="Profile Markdown root; default DATA_DIR/memory",
     )
-    # long_term: qdrant when QDRANT_URL set, else sqlite episodic (source=ltm_pattern)
-    qdrant_url: str = Field(default="", alias="QDRANT_URL")
-    qdrant_api_key: str = Field(default="", alias="QDRANT_API_KEY")
-    qdrant_collection: str = Field(default="weatherflow_ltm", alias="QDRANT_COLLECTION")
-    ltm_dedupe_threshold: float = Field(default=0.92, alias="LTM_DEDUPE_THRESHOLD")
 
     @property
     def db_path(self) -> str:

@@ -14,7 +14,7 @@ from app.agents.base import BaseAgent
 from app.core.llm import chat_json
 from app.core.model_router import model_for
 from app.core.prompts import PROFILE_REFRESH_SYSTEM
-from app.memory import checkin_repo, events_repo, hypothesis_repo, profile_md, reflection_repo
+from app.memory import checkin_repo, dev_review_repo, events_repo, profile_md, reflection_repo
 from app.memory.schemas import CheckinRecord, ReflectionRecord, UserStateOut
 
 logger = logging.getLogger(__name__)
@@ -32,8 +32,7 @@ class MemoryAgent(BaseAgent):
         """Refresh `profile.md` from recent user-visible material."""
         recent_checkins = checkin_repo.recent(limit=14)
         recent_reflections = reflection_repo.recent(limit=8)
-        active_hypotheses = hypothesis_repo.active(limit=12)
-        rated_hypotheses = hypothesis_repo.rated(limit=20)
+        latest_dev_review = dev_review_repo.latest_review()
         payload = {
             "existing_profile": profile_md.read_profile(max_chars=5000),
             "latest_checkin": checkin.model_dump() if checkin else None,
@@ -45,8 +44,19 @@ class MemoryAgent(BaseAgent):
                 {"date": r.date, "kind": r.kind, "content": r.content[:1200]}
                 for r in recent_reflections
             ],
-            "active_hypotheses": [h.model_dump() for h in active_hypotheses],
-            "hypothesis_feedback": [h.model_dump() for h in rated_hypotheses],
+            "latest_dev_review": (
+                {
+                    "created_at": latest_dev_review.created_at,
+                    "window_days": latest_dev_review.window_days,
+                    "dev_weather": latest_dev_review.dev_weather,
+                    "summary": latest_dev_review.summary,
+                    "main_work_threads": latest_dev_review.main_work_threads,
+                    "rhythm_risks": latest_dev_review.rhythm_risks,
+                    "next_week_suggestion": latest_dev_review.next_week_suggestion,
+                }
+                if latest_dev_review
+                else None
+            ),
             "suggestion_feedback": _recent_event_payloads("suggestion_feedback"),
             "memory_feedback": _recent_event_payloads("memory_feedback"),
         }
@@ -77,29 +87,6 @@ class MemoryAgent(BaseAgent):
         profile_md.write_profile(body)
         return profile_md.read_profile(max_chars=8000)
 
-    async def refresh_profiles(self, *_, **__) -> None:
-        """Compatibility shim for old weekly loop/tests."""
-        await self.refresh_profile()
-
-    async def ingest_checkin(self, _checkin: CheckinRecord) -> int:
-        return 0
-
-    async def ingest_reflection(self, _reflection: ReflectionRecord) -> int:
-        return 0
-
-    async def extract(self, *_, **__) -> dict:
-        return {"profile": profile_md.read_profile(max_chars=8000)}
-
-    async def write_daily_markdown(self, *_, **__) -> None:
-        return None
-
-    async def compress_to_long_term(self, *_, **__) -> list[str]:
-        return []
-
-    async def append_weekly_markdown(self, *_, **__) -> None:
-        return None
-
-
 def _profile_body_from_json(data: dict) -> str:
     user_profile = str(data.get("user_profile") or "").strip()
     behavior = str(data.get("behavior_patterns") or "").strip()
@@ -114,7 +101,7 @@ def _profile_body_from_json(data: dict) -> str:
             user_profile or "- 暂无稳定画像。",
             "## Useful patterns",
             behavior or "- 暂无。",
-            "## Hypothesis feedback",
+            "## Feedback",
             goals or "- 暂无。",
         ]
     )
@@ -122,18 +109,16 @@ def _profile_body_from_json(data: dict) -> str:
 
 def _fallback_profile(payload: dict) -> str:
     checkins = payload.get("recent_checkins") or []
-    active = payload.get("active_hypotheses") or []
-    rated = payload.get("hypothesis_feedback") or []
+    dev_review = payload.get("latest_dev_review") or {}
     latest = payload.get("latest_state") or {}
     weather = latest.get("weather_label") or "Unknown"
-    active_lines = [
-        f"- {h.get('label')}: {h.get('summary')}"
-        for h in active[:6]
-    ] or ["- 暂无稳定模式。"]
-    rated_lines = [
-        f"- {h.get('user_rating')}: {h.get('label')}"
-        for h in rated[:8]
-    ] or ["- 暂无。"]
+    dev_lines = []
+    if dev_review:
+        dev_lines.append(f"- 最近 Dev Review：{dev_review.get('dev_weather')}。")
+        if dev_review.get("summary"):
+            dev_lines.append(f"- {dev_review.get('summary')}")
+    else:
+        dev_lines.append("- 暂无 Dev Review，可运行一次开发节奏回顾来补充画像。")
     return "\n\n".join(
         [
             "# WeatherFlow Profile",
@@ -142,9 +127,9 @@ def _fallback_profile(payload: dict) -> str:
             f"- 最近已有 {len(checkins)} 条 check-in 可参考。",
             f"- 当前天气判断偏向：{weather}。",
             "## Useful patterns",
-            *active_lines,
-            "## Hypothesis feedback",
-            *rated_lines,
+            *dev_lines,
+            "## Feedback",
+            "- 暂无需要单独记录的反馈。",
         ]
     )
 

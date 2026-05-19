@@ -27,9 +27,9 @@ MemoryFeedbackType = Literal["accurate", "inaccurate", "stale", "important"]
 
 
 class MemoryFeedbackIn(BaseModel):
-    semantic_key: str = Field(..., min_length=1, max_length=128)
+    profile_key: str = Field(..., min_length=1, max_length=128)
     feedback_type: MemoryFeedbackType
-    semantic_value_snapshot: str = ""
+    profile_value_snapshot: str = ""
     session_id: str = "default"
 
 
@@ -59,9 +59,9 @@ async def suggestion_feedback(body: SuggestionFeedbackIn) -> dict[str, str]:
 async def memory_feedback(body: MemoryFeedbackIn) -> dict[str, str]:
     created_at = _now_iso()
     payload = {
-        "semantic_key": body.semantic_key.strip()[:128],
+        "profile_key": body.profile_key.strip()[:128],
         "feedback_type": body.feedback_type,
-        "semantic_value_snapshot": (body.semantic_value_snapshot or "")[:2000],
+        "profile_value_snapshot": (body.profile_value_snapshot or "")[:2000],
         "created_at": created_at,
     }
     events_repo.add(

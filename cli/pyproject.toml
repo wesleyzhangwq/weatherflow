@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "weatherflow-cli"
 version = "0.1.0"
-description = "WeatherFlow CLI: life-state companion and behavior sensors"
+description = "WeatherFlow CLI: developer rhythm companion"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [

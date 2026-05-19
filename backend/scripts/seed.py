@@ -9,14 +9,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from app.memory import (
-    checkin_repo,
-    episodic,
-    reflection_repo,
-    semantic,
-    state_repo,
-    timeline,
-)
+from app.memory import checkin_repo, profile_md, reflection_repo, state_repo
 from app.memory.schemas import CheckinIn, UserStateOut
 from app.memory.store import init_db
 
@@ -109,26 +102,24 @@ def seed() -> None:
             when=when,
         )
 
-        episodic.add(d["reflection"], source="reflection:daily")
+    profile_md.write_profile(
+        """# WeatherFlow Profile
 
-    semantic.upsert("evening_efficiency", "drops sharply after 9pm", confidence=0.7)
-    semantic.upsert(
-        "shipping_pattern",
-        "tends to ship in short bursts after a quiet stretch",
-        confidence=0.6,
-    )
+_Auto-maintained by WeatherFlow. You can edit this file directly._
 
-    timeline.add(
-        "First RAG demo shipped",
-        kind="milestone",
-        description="A small but real end-to-end RAG demo, finished and posted.",
-        tags=["rag", "ship"],
-    )
-    timeline.add(
-        "Returned from a quiet stretch",
-        kind="phase",
-        description="Two days of rest, then a tiny PR closed; momentum re-entered.",
-        tags=["recovery"],
+## Current read
+
+你更适合用小闭环恢复开发动能。信息摄入一多，真正的输出节奏就容易被稀释。
+
+## Useful patterns
+
+- 当方向不清时，你容易用开新项目来制造动感。
+- 关闭一个很小的 PR 往往比重新规划更能带回节奏。
+
+## Feedback
+
+- 暂无。
+"""
     )
 
     print("Seeded WeatherFlow with synthetic data.")

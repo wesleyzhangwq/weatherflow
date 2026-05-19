@@ -1,4 +1,4 @@
-"""Pattern detector — compare time windows over state / git / notes signals.
+"""Pattern detector — compare time windows over WeatherFlow state snapshots.
 
 This is the pattern signal engine. It does NOT use an LLM; it produces structured
 deltas the LLM then narrates in human voice. Keeping it deterministic keeps
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from statistics import mean
 from typing import List, Optional
 
-from app.memory import git_repo, notes_repo, state_repo
+from app.memory import state_repo
 
 
 # ---------------------------------------------------------------------------
@@ -104,110 +104,10 @@ def detect(window_days: int = 7) -> PatternReport:
     for f in ("focus", "stress", "burnout", "momentum", "confidence", "motivation"):
         metrics.append(state_metric(f))
 
-    # ---- Git ----
-    git_rows = git_repo.recent(limit=200)
-    git_cur, git_prev = _split_two_windows(
-        git_rows, getter=lambda r: r.ts, days=window_days
-    )
-    cur_commits = sum(g.commit_count for g in git_cur)
-    prev_commits = sum(g.commit_count for g in git_prev)
-    metrics.append(
-        WindowMetric(
-            name="commits",
-            current=float(cur_commits),
-            previous=float(prev_commits),
-            delta=float(cur_commits - prev_commits),
-            pct_delta=_pct(cur_commits, prev_commits),
-        )
-    )
-    cur_switch = _avg([g.switch_score for g in git_cur])
-    prev_switch = _avg([g.switch_score for g in git_prev])
-    metrics.append(
-        WindowMetric(
-            name="switch_score",
-            current=round(cur_switch, 3),
-            previous=round(prev_switch, 3),
-            delta=round(cur_switch - prev_switch, 3),
-            pct_delta=_pct(cur_switch, prev_switch),
-        )
-    )
-
-    # ---- Notes ----
-    notes_rows = notes_repo.recent(limit=200)
-    n_cur, n_prev = _split_two_windows(
-        notes_rows, getter=lambda r: r.ts, days=window_days
-    )
-    cur_new_words = sum(n.new_words for n in n_cur)
-    prev_new_words = sum(n.new_words for n in n_prev)
-    metrics.append(
-        WindowMetric(
-            name="new_words",
-            current=float(cur_new_words),
-            previous=float(prev_new_words),
-            delta=float(cur_new_words - prev_new_words),
-            pct_delta=_pct(cur_new_words, prev_new_words),
-        )
-    )
-    cur_new_files = sum(n.new_file_count for n in n_cur)
-    prev_new_files = sum(n.new_file_count for n in n_prev)
-    metrics.append(
-        WindowMetric(
-            name="new_files",
-            current=float(cur_new_files),
-            previous=float(prev_new_files),
-            delta=float(cur_new_files - prev_new_files),
-            pct_delta=_pct(cur_new_files, prev_new_files),
-        )
-    )
-
     # ---- Pattern rules ----
     patterns: list[Pattern] = []
 
-    # 1) High input, low output: notes (new files) up, but commits/new-words down.
-    notes_files_up = (
-        cur_new_files > prev_new_files and cur_new_files >= 5
-    )
-    output_down = (cur_commits < prev_commits) or (cur_new_words < prev_new_words)
-    if notes_files_up and output_down:
-        patterns.append(
-            Pattern(
-                code="input_up_output_down",
-                severity="watch",
-                label="High input, low output",
-                explanation=(
-                    "Notes are accumulating faster than your code or writing output. "
-                    "Often a sign of pre-burnout collection mode."
-                ),
-                evidence={
-                    "new_files_now": cur_new_files,
-                    "new_files_prev": prev_new_files,
-                    "commits_now": cur_commits,
-                    "commits_prev": prev_commits,
-                    "new_words_now": cur_new_words,
-                    "new_words_prev": prev_new_words,
-                },
-            )
-        )
-
-    # 2) Project switching up.
-    if cur_switch > prev_switch + 0.15 and cur_switch >= 0.4:
-        patterns.append(
-            Pattern(
-                code="project_switching_up",
-                severity="watch",
-                label="Project switching is up",
-                explanation=(
-                    "You're moving between repos more this window than last. "
-                    "Closing one small loop usually helps more than starting a third."
-                ),
-                evidence={
-                    "switch_now": round(cur_switch, 3),
-                    "switch_prev": round(prev_switch, 3),
-                },
-            )
-        )
-
-    # 3) Burnout climbing.
+    # 1) Burnout climbing.
     burnout_metric = next((m for m in metrics if m.name == "burnout"), None)
     if burnout_metric and burnout_metric.delta >= 10:
         patterns.append(
@@ -226,7 +126,7 @@ def detect(window_days: int = 7) -> PatternReport:
             )
         )
 
-    # 4) Momentum recovering.
+    # 2) Momentum recovering.
     momentum_metric = next((m for m in metrics if m.name == "momentum"), None)
     if momentum_metric and momentum_metric.delta >= 10 and momentum_metric.previous < 50:
         patterns.append(

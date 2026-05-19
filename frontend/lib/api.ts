@@ -62,10 +62,8 @@ export interface Reflection {
 export type GroundingSourceType =
   | "checkin"
   | "state"
-  | "git"
-  | "notes"
-  | "workspace"
   | "patterns"
+  | "dev_review"
   | "memory";
 
 export interface GroundingSource {
@@ -77,7 +75,6 @@ export interface GroundingSource {
 export interface ReflectionInsights {
   weather_label?: WeatherLabel | null;
   checkins_considered?: number;
-  git_records_considered?: number;
   suggestion?: string;
   grounding_sources?: GroundingSource[];
 }
@@ -120,31 +117,6 @@ export interface CheckinResponse {
   patterns: PatternHit[];
   suggestion_pattern_codes: string[];
   pattern_window_days: number;
-  pending_hypotheses: SensorHypothesis[];
-}
-
-export type HypothesisSourceType = "git" | "notes" | "workspace" | "patterns";
-export type HypothesisStatus = "pending" | "confirmed" | "rejected" | "superseded";
-export type HypothesisFeedback = "accurate" | "unsure" | "inaccurate";
-
-export interface SensorHypothesis {
-  id: number;
-  created_at: string;
-  last_seen_at: string;
-  source_type: HypothesisSourceType;
-  source_record_id?: number | null;
-  key: string;
-  label: string;
-  summary: string;
-  evidence?: Record<string, unknown> | null;
-  confidence: number;
-  seen_count: number;
-  status: HypothesisStatus;
-  user_feedback?: string | null;
-  user_rating?: HypothesisFeedback | null;
-  confirmed_at?: string | null;
-  rejected_at?: string | null;
-  rated_at?: string | null;
 }
 
 export interface SuggestionFeedbackIn {
@@ -163,9 +135,9 @@ export type MemoryFeedbackType =
   | "important";
 
 export interface MemoryFeedbackIn {
-  semantic_key: string;
+  profile_key: string;
   feedback_type: MemoryFeedbackType;
-  semantic_value_snapshot?: string;
+  profile_value_snapshot?: string;
   session_id?: string;
 }
 
@@ -259,16 +231,11 @@ export const api = {
     request<{ status: string }>("/api/feedback/memory", {
       method: "POST",
       body: JSON.stringify({
-        semantic_key: body.semantic_key,
+        profile_key: body.profile_key,
         feedback_type: body.feedback_type,
-        semantic_value_snapshot: body.semantic_value_snapshot ?? "",
+        profile_value_snapshot: body.profile_value_snapshot ?? "",
         session_id: body.session_id ?? "default"
       })
-    }),
-  submitHypothesisFeedback: (id: number, feedback: HypothesisFeedback) =>
-    request<SensorHypothesis>(`/api/sensors/hypotheses/${id}/feedback`, {
-      method: "POST",
-      body: JSON.stringify({ feedback })
     }),
   profile: () => request<ProfileOut>("/api/memory/profile"),
   latestDevReview: () =>

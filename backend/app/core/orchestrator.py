@@ -19,7 +19,7 @@ from typing import Any, List, Optional
 from app.agents import MemoryAgent, PlanningAgent, ReflectionAgent, StateAgent
 from app.core.llm import LLMClient
 from app.core.patterns import detect as detect_patterns
-from app.memory import hypothesis_repo, profile_md, reflection_repo
+from app.memory import dev_review_repo, profile_md, reflection_repo
 from app.memory.reflection_context import gather_reflection_context
 from app.memory.schemas import CheckinRecord, ReflectionKind, ReflectionRecord, UserStateOut
 
@@ -99,7 +99,7 @@ class Orchestrator:
             state,
             reflection_text=reflection.content,
             profile=profile_md.read_profile(max_chars=3000),
-            hypothesis_summary=_hypothesis_summary(),
+            dev_review_summary=_dev_review_summary(),
             patterns_summary=self._patterns_summary_for_planning(patterns),
         )
         _attach_suggestion(reflection, suggestion)
@@ -159,7 +159,7 @@ class Orchestrator:
             state,
             reflection_text=reflection.content,
             profile=profile_md.read_profile(max_chars=3000),
-            hypothesis_summary=_hypothesis_summary(),
+            dev_review_summary=_dev_review_summary(),
             patterns_summary=self._patterns_summary_for_planning(patterns),
         )
         _attach_suggestion(reflection, suggestion)
@@ -178,20 +178,21 @@ class Orchestrator:
         )
 
 
-def _hypothesis_summary() -> str:
-    active = hypothesis_repo.active(limit=8)
-    rated = hypothesis_repo.rated(limit=8)
-    lines: list[str] = []
-    if active:
-        lines.append("Active hypotheses:")
-        for h in active:
-            source = "用户确认" if h.user_rating == "accurate" else "重复出现"
-            lines.append(f"- {source}: {h.label} — {h.summary}")
-    if rated:
-        lines.append("Recent hypothesis ratings:")
-        for h in rated:
-            lines.append(f"- {h.user_rating}: {h.label}")
-    return "\n".join(lines) or "（暂无已确认或已评分的弱信号。）"
+def _dev_review_summary() -> str:
+    review = dev_review_repo.latest_review()
+    if review is None:
+        return "（暂无 Dev Review。可运行开发节奏回顾来补充 GitHub 与日历证据。）"
+    lines = [
+        f"Dev weather: {review.dev_weather}",
+        f"Window: last {review.window_days} days",
+        f"Summary: {review.summary}",
+    ]
+    if review.rhythm_risks:
+        lines.append("Rhythm risks:")
+        lines.extend(f"- {item}" for item in review.rhythm_risks[:4])
+    if review.next_week_suggestion:
+        lines.append(f"Suggestion: {review.next_week_suggestion}")
+    return "\n".join(lines)
 
 
 def _attach_suggestion(reflection: ReflectionRecord, suggestion: str) -> None:

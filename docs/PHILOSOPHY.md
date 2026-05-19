@@ -1,90 +1,86 @@
 # WeatherFlow Philosophy
 
-## What this project is *not*
+WeatherFlow is a developer rhythm companion.
 
-WeatherFlow is **not**:
+It exists for the developer who can think deeply, collect information quickly,
+and start many things, but still struggles to sustain a healthy action rhythm
+over weeks.
 
-- a ChatBot
-- an AI girlfriend / companion in the romantic sense
-- a general-purpose assistant
-- AutoGPT / browser-driving agent
-- an OpenClaw clone
-- a "do-everything" AI
+## What It Is Not
 
-If you treat it as any of those, the design will not make sense.
+WeatherFlow is not:
 
-## What this project *is*
+- a chatbot
+- an AI girlfriend
+- a general assistant
+- a browser agent
+- a task execution agent
+- a productivity dashboard that tries to optimize everything
 
-A **long-term life-state and growth companionship system** — an external executive function
-that helps a high-cognition, high-information, *low-action* user maintain their long-term
-growth rhythm.
+## What It Is
 
-The goal is **not** to do tasks for the user. The goal is to help the user keep moving.
+WeatherFlow helps a developer answer:
 
-## The Real Problem
-
-Modern people don't lack information. They have collapsed long-term growth order:
-
-- High cognition, high goals, high information intake
-- But: low sustained action
-- Bookmark hoarding, plan-making, project switching
-- Chronic anxiety, frequent burnout
-- Inability to ship long-term
-
-WeatherFlow's question is **not** *"how can the user be more efficient?"*
-It is *"why can't the user become who they want to become over time?"*
-
-## The Weather Metaphor
-
-Life-state behaves like weather. It changes; it cannot be willed away.
-
-The State Agent maps the user's life-state vector
-(`focus / stress / burnout / momentum / confidence / motivation`) into exactly
-one of five weather labels:
-
+```text
+What is my current work weather?
+What is my development rhythm doing?
+What should I gently protect or reduce next?
+What has the system learned about how I work over time?
 ```
-Momentum   - shipping, in flow, things are moving
-Recovery   - climbing back, momentum returning
+
+The product is intentionally narrow. It reads the user's own check-ins plus
+GitHub and Calendar evidence. It does not watch the local filesystem or infer
+too much from private raw activity.
+
+## Weather
+
+The State Agent maps the current state vector into one label:
+
+```text
+Momentum   - shipping, focused, things are moving
+Recovery   - climbing back, rhythm returning
 Confusion  - direction unclear, motivation flat
-Overload   - too much input, too many open loops, project switching high
+Overload   - too much coordination/input, too many open loops
 Burnout    - drained, stress high, momentum collapsed
 ```
 
-WeatherFlow does **not** try to eliminate bad weather. It helps the user **understand and walk
-through** their own weather.
+WeatherFlow does not try to eliminate bad weather. It helps the user notice it
+early and move through it with less self-blame.
 
-## Difference from OpenClaw / Task Agents
+## Dev Review
 
-| OpenClaw                 | WeatherFlow                          |
-| ------------------------ | ------------------------------------ |
-| Task execution agent     | Long-term growth-companion agent     |
-| Tool use / MCP / browser | Memory / reflection / user modeling  |
-| Workflow automation      | Behavior analysis & gentle guidance  |
-| "Do it for me"           | "Help me keep walking"               |
+Dev Review is central. It turns GitHub and Google Calendar into a weekly or
+manual rhythm snapshot:
 
-## Engineering Principles
+- main work threads
+- shipping progress
+- collaboration load
+- meeting load
+- rhythm risks
+- one next-week suggestion
 
-1. **Small but Deep** — few files, clear structure, restrained features.
-2. **Local-first** — local first, SaaS later (or never).
-3. **Memory-centric** — memory is more important than the LLM.
-4. **Reflection-first** — reflection > tool use.
-5. **Human-centric** — understand the human, don't automate everything.
+This is the evidence-backed side of WeatherFlow. The check-in gives subjective
+state; Dev Review gives work-rhythm context.
+
+## Memory
+
+WeatherFlow's long-term memory is `profile.md`.
+
+That file should stay small, readable, and editable. The goal is not to store
+everything. The goal is for the user to feel:
+
+> It remembers the parts that actually help me keep moving.
 
 ## Voice
 
-Reflections and suggestions must be:
+Reflections and suggestions should be:
 
+- short
 - gentle
 - non-preachy
-- understanding
-- never feel like a TODO app
-- never feel like an HR review
+- peer-like
+- never a TODO flood
+- never an HR review
 
-When in doubt: speak the way a wise, patient friend would speak — not the way a productivity
-coach would.
-
-## Success Criterion (the only one that matters)
-
-Success is **not** "the agent is smart." Success is when the user starts to think:
-
-> *"It really does seem to understand me more and more."*
+WeatherFlow should sound like a wise, quiet collaborator, not a productivity
+coach.

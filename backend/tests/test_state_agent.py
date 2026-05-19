@@ -35,7 +35,7 @@ async def test_state_agent_persists_clean_json(fake_llm) -> None:
     assert record is not None and record.id == cid
 
     agent = StateAgent(fake_llm)
-    state = await agent.estimate(checkin=record, git_recent=[])
+    state = await agent.estimate(checkin=record)
 
     assert state.weather_label == "Momentum"
     assert state.focus == 72
@@ -78,7 +78,7 @@ async def test_state_agent_falls_back_to_heuristic_when_llm_fails(fake_llm) -> N
     assert record is not None and record.id == cid
 
     agent = StateAgent(fake_llm)
-    state = await agent.estimate(checkin=record, git_recent=[])
+    state = await agent.estimate(checkin=record)
 
     assert state.weather_label in {"Burnout", "Confusion", "Overload", "Recovery", "Momentum"}
     rat = (state.rationale or "").lower()
@@ -97,7 +97,7 @@ async def test_state_agent_heuristic_understands_chinese_overload(fake_llm) -> N
     assert record is not None and record.id == cid
 
     agent = StateAgent(fake_llm)
-    state = await agent.estimate(checkin=record, git_recent=[])
+    state = await agent.estimate(checkin=record)
 
     assert state.weather_label == "Overload"
     assert state.focus < 60
@@ -114,7 +114,7 @@ async def test_state_agent_heuristic_understands_chinese_momentum(fake_llm) -> N
     assert record is not None and record.id == cid
 
     agent = StateAgent(fake_llm)
-    state = await agent.estimate(checkin=record, git_recent=[])
+    state = await agent.estimate(checkin=record)
 
     assert state.weather_label == "Momentum"
     assert state.momentum >= 65

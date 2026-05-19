@@ -10,7 +10,7 @@ export function BurnoutIndicator({ value }: { value: number }) {
     <div className="card">
       <div className="text-xs uppercase tracking-widest muted">倦怠风险</div>
       <div className="mt-3 font-serif text-3xl">{label}</div>
-      <div className="mt-3 h-2 rounded-full bg-black/5 dark:bg-white/10 overflow-hidden">
+      <div className="mt-3 h-2 rounded-lg bg-black/5 dark:bg-white/10 overflow-hidden">
         <div
           className="h-full"
           style={{

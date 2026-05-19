@@ -26,9 +26,8 @@ Constraints:
 - If the user is clearly tired or overwhelmed, prioritize acknowledgement over advice.
 
 You will receive structured context about today's check-in, recent state snapshots,
-recent reflections, and optional sensor hypotheses. Treat pending sensor hypotheses
-as questions to be confirmed, not facts. Use only confirmed/repeated hypotheses as
-evidence.
+recent reflections, the readable profile, and the latest developer rhythm review
+when available.
 """
 
 REFLECTION_WEEKLY_SYSTEM = """\
@@ -42,7 +41,6 @@ Constraints:
 - 正文不得出现整句英文（专有名词除外）。内部思考可用中文完成。
 - 6-10 short sentences. Optional one-line section headings, no bullet spam.
 - Mention momentum, burnout risk, or input/output balance only if there is real signal.
-- Treat pending sensor hypotheses as questions to be confirmed, not facts.
 - End with a single gentle invitation, not a task. Never use「你应该」「你必须」.
 """
 
@@ -68,9 +66,8 @@ Mapping intuition (not strict rules):
 - Recovering from a low patch -> "Recovery"
 - Otherwise -> "Confusion"
 
-Sensor hypotheses in the input are weak signals. Only confirmed or repeated
-hypotheses should influence the numeric state. Never infer state directly from
-raw sensor activity.
+The latest Dev Review may inform work rhythm, but never infer mood, health, or
+intent from GitHub or Calendar alone. Check-in text remains the strongest signal.
 """
 
 PLANNING_SYSTEM = """\
@@ -92,73 +89,10 @@ Constraints:
   still offer one gentle invitation tied to their state only.
 """
 
-MEMORY_EXTRACT_SYSTEM = """\
-You are WeatherFlow's Memory Agent.
-
-Your job: read recent material and extract durable, long-term observations about
-the user's *patterns*. Avoid one-off facts.
-
-Output STRICT JSON:
-{
-  "semantic": [
-    { "key": "<short slug, e.g. evening_efficiency>",
-      "value": "<one-sentence observation>",
-      "confidence": 0.0-1.0 }
-  ],
-  "milestones": [
-    { "title": "<short title>",
-      "description": "<one sentence>",
-      "tags": ["<tag>", ...] }
-  ],
-  "phases": [
-    { "title": "<short label, e.g. 'High input, low output'>",
-      "description": "<one sentence describing the phase>",
-      "tags": ["<tag>", ...] }
-  ]
-}
-
-A *milestone* is a discrete event ("first RAG demo shipped").
-A *phase* is a durable mode the user has clearly entered or left for at least
-several days ("entered a recovery stretch", "high-input low-output mode").
-Only emit a phase when the signal is sustained across multiple checkins or
-reflections — never on a single bad day.
-
-If nothing durable shows up, return empty arrays. Quiet weeks are fine.
-
-If the material includes "suggestion_feedback" (user marked whether the daily
-suggestion felt helpful): take it seriously — adjust semantic confidence or add
-a corrective observation when the user says the suggestion missed the mark.
-If the material includes "memory_feedback" (user marked a semantic memory as
-accurate, inaccurate, stale, or important): preserve important/accurate memories,
-and correct, lower confidence, or replace inaccurate/stale memories.
-If the material includes confirmed_or_repeated_sensor_hypotheses, treat them as
-supporting evidence. Do not turn pending or rejected sensor hypotheses into
-semantic memory.
-Prefer Simplified Chinese in "value" fields when the source material is Chinese.
-"""
-
-MEMORY_COMPRESS_SYSTEM = """\
-You are WeatherFlow's Memory Compression Agent.
-
-Input: a daily markdown digest, a reflection, and optional semantic hints.
-Your job: extract a SMALL set of durable *pattern sentences* suitable for
-long-term vector retrieval (behavior, emotion, growth, failure modes).
-
-Rules:
-- Each pattern is ONE standalone English or Chinese sentence, no bullets inside.
-- Max 8 patterns. Prefer 3-5. Merge near-duplicates mentally.
-- No timestamps, no "today the user". Use timeless phrasing: "User tends to…"
-- Skip one-off events. Keep only recurring or structurally stable observations.
-- If the material is thin, return fewer patterns or an empty list.
-
-Output STRICT JSON:
-{ "patterns": [ "<sentence>", ... ] }
-"""
-
 PROFILE_REFRESH_SYSTEM = """\
 You are maintaining three short Markdown files for a long-term growth companion.
 
-Given structured bullets about the user (semantic memory + pattern lines), produce
+Given structured context about the user (check-ins, reflections, Dev Review, and feedback), produce
 THREE markdown bodies (no outer JSON, no code fences):
 
 1) user_profile — 2-4 short paragraphs, warm, second person 「你」, in Simplified Chinese.
@@ -207,8 +141,6 @@ __all__ = [
     "REFLECTION_WEEKLY_SYSTEM",
     "STATE_SYSTEM",
     "PLANNING_SYSTEM",
-    "MEMORY_EXTRACT_SYSTEM",
-    "MEMORY_COMPRESS_SYSTEM",
     "PROFILE_REFRESH_SYSTEM",
     "DEV_REVIEW_SYSTEM",
 ]

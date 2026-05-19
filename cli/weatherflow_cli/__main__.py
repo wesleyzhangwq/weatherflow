@@ -7,16 +7,12 @@ import typer
 from weatherflow_cli import checkin as checkin_cmd
 from weatherflow_cli import dashboard_cmd
 from weatherflow_cli import dev_review as dev_review_cmd
-from weatherflow_cli import git_scan as git_cmd
-from weatherflow_cli import notes_scan as notes_cmd
 from weatherflow_cli import patterns as patterns_cmd
 from weatherflow_cli import reflect as reflect_cmd
-from weatherflow_cli import sensor_sweep as sensor_sweep_cmd
 from weatherflow_cli import setup_calendar as setup_calendar_cmd
 from weatherflow_cli import start_cmd
 from weatherflow_cli import stop_cmd
 from weatherflow_cli import weather as weather_cmd
-from weatherflow_cli import workspace_scan as workspace_cmd
 
 app = typer.Typer(
     help="WeatherFlow — long-term growth companion. Low friction. Local first.",
@@ -38,16 +34,6 @@ app.command(name="weather", help="Show today's life weather + state at a glance.
 app.command(name="reflect", help="Show today's reflection. Use --run to regenerate.")(reflect_cmd.run)
 app.command(name="dev-review", help="Run or show the Dev Review Agent.")(dev_review_cmd.run)
 app.command(name="setup-calendar", help="Authorize Google Calendar for Dev Review.")(setup_calendar_cmd.run)
-app.command(
-    name="sensors",
-    help="All behavior sensors in one shot (git + notes + workspace).",
-)(sensor_sweep_cmd.run)
-app.command(name="scan-git", help="Behavior sensor: scan recent commits across project roots.")(git_cmd.run)
-app.command(name="scan-notes", help="Behavior sensor: scan markdown / Obsidian roots.")(notes_cmd.run)
-app.command(
-    name="scan-workspace",
-    help="Behavior sensor: filesystem activity + fragmentation under project roots.",
-)(workspace_cmd.run)
 app.command(name="patterns", help="Window-vs-window pattern report.")(patterns_cmd.run)
 
 
