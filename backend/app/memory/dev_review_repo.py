@@ -229,6 +229,40 @@ def latest_review() -> Optional[DevReviewRecord]:
     return _review_from_row(row, run)
 
 
+def list_reviews(limit: int = 5) -> list[DevReviewRecord]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                run_id,
+                window_days,
+                summary,
+                dev_weather,
+                main_work_threads_json,
+                shipping_progress_json,
+                collaboration_load_json,
+                meeting_load_json,
+                rhythm_risks_json,
+                next_week_suggestion,
+                source_coverage_json,
+                created_at
+            FROM dev_reviews
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    reviews: list[DevReviewRecord] = []
+    for row in rows:
+        run = get_run(int(row["run_id"]))
+        if run is None:
+            raise ValueError(f"agent run {row['run_id']} not found")
+        reviews.append(_review_from_row(row, run))
+    return reviews
+
+
 def latest_review_for_run(run_id: int) -> Optional[DevReviewRecord]:
     if get_run(run_id) is None:
         raise ValueError(f"agent run {run_id} not found")
@@ -274,5 +308,6 @@ __all__ = [
     "create_review",
     "get_review",
     "latest_review",
+    "list_reviews",
     "latest_review_for_run",
 ]
