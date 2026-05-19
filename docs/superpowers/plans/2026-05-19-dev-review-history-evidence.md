@@ -1,6 +1,6 @@
 # Dev Review History and Evidence Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add a compact Dev Review history surface across backend, CLI, and dashboard.
 
@@ -17,11 +17,11 @@
 - Modify: `backend/app/routers/dev_review.py`
 - Test: `backend/tests/test_dev_review_api.py`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 Add tests that create two persisted reviews, call `GET /api/dev-review/runs`, and assert newest-first ordering and limit behavior.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run:
 
@@ -31,11 +31,11 @@ cd backend && UV_CACHE_DIR=/private/tmp/uv-cache uv run pytest tests/test_dev_re
 
 Expected: failure because the route does not exist.
 
-- [ ] **Step 3: Implement repository list helper**
+- [x] **Step 3: Implement repository list helper**
 
 Add `list_reviews(limit: int = 5) -> list[DevReviewRecord]` to `dev_review_repo.py`, ordered by `created_at DESC, id DESC`.
 
-- [ ] **Step 4: Implement route**
+- [x] **Step 4: Implement route**
 
 Add:
 
@@ -45,7 +45,7 @@ def dev_review_runs(limit: int = Query(default=5, ge=1, le=20)) -> list[DevRevie
     return dev_review_repo.list_reviews(limit=limit)
 ```
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run the focused backend tests. Commit with:
 
@@ -58,15 +58,15 @@ git commit -m "feat: add dev review run history api"
 **Files:**
 - Modify: `cli/weatherflow_cli/dev_review.py`
 
-- [ ] **Step 1: Add CLI option**
+- [x] **Step 1: Add CLI option**
 
 Add `--history` to `wf dev-review`.
 
-- [ ] **Step 2: Add deterministic history formatter**
+- [x] **Step 2: Add deterministic history formatter**
 
 Add `_print_history(items)` and `_coverage_summary(coverage)` helpers.
 
-- [ ] **Step 3: Verify CLI help**
+- [x] **Step 3: Verify CLI help**
 
 Run:
 
@@ -76,7 +76,7 @@ UV_CACHE_DIR=/private/tmp/uv-cache uv run --package weatherflow-cli wf dev-revie
 
 Expected: `--history` appears.
 
-- [ ] **Step 4: Run lint and commit**
+- [x] **Step 4: Run lint and commit**
 
 Run ruff on CLI files and commit:
 
@@ -91,19 +91,19 @@ git commit -m "feat: add dev review history cli"
 - Modify: `frontend/app/page.tsx`
 - Modify: `frontend/components/DevReviewPanel.tsx`
 
-- [ ] **Step 1: Add API client method**
+- [x] **Step 1: Add API client method**
 
 Add `devReviewHistory(limit = 5)`.
 
-- [ ] **Step 2: Fetch history on dashboard**
+- [x] **Step 2: Fetch history on dashboard**
 
 Fetch `/api/dev-review/runs?limit=5` in `frontend/app/page.tsx` and pass it into `DevReviewPanel`.
 
-- [ ] **Step 3: Render compact history**
+- [x] **Step 3: Render compact history**
 
 Add a small history list below the current review details. Each row shows created time, weather, run status, and provider coverage summary.
 
-- [ ] **Step 4: Run frontend lint/build and commit**
+- [x] **Step 4: Run frontend lint/build and commit**
 
 Run:
 
@@ -122,7 +122,7 @@ git commit -m "feat: show dev review history"
 **Files:**
 - No new files expected.
 
-- [ ] **Step 1: Run full check**
+- [x] **Step 1: Run full check**
 
 Run:
 
@@ -130,7 +130,7 @@ Run:
 make check
 ```
 
-- [ ] **Step 2: Check git status**
+- [x] **Step 2: Check git status**
 
 Run:
 
@@ -138,6 +138,6 @@ Run:
 git status --short
 ```
 
-- [ ] **Step 3: Summarize result**
+- [x] **Step 3: Summarize result**
 
 Report commits, verification evidence, and remaining product gaps.
