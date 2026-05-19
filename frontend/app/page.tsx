@@ -25,13 +25,22 @@ async function fetchOk<T>(path: string): Promise<T | null> {
 }
 
 export default async function Home() {
-  const [state, reflections, profile, hypotheses, devReview, devReviewProviders] =
+  const [
+    state,
+    reflections,
+    profile,
+    hypotheses,
+    devReview,
+    devReviewHistory,
+    devReviewProviders
+  ] =
     await Promise.all([
       fetchOk<UserState>("/api/state/current"),
       fetchOk<Reflection[]>("/api/reflection?limit=3"),
       fetchOk<ProfileOut>("/api/memory/profile"),
       fetchOk<SensorHypothesis[]>("/api/sensors/hypotheses?status=pending&limit=5"),
       fetchOk<DevReview>("/api/dev-review/runs/latest"),
+      fetchOk<DevReview[]>("/api/dev-review/runs?limit=5"),
       fetchOk<DevReviewProviderReadiness[]>("/api/dev-review/providers")
     ]);
   const latestSuggestion = reflections?.[0]?.insights?.suggestion;
@@ -62,6 +71,7 @@ export default async function Home() {
       <section>
         <DevReviewPanel
           initial={devReview}
+          history={devReviewHistory ?? []}
           providers={devReviewProviders ?? []}
         />
       </section>

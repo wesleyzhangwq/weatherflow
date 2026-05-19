@@ -5,9 +5,11 @@ import { api, type DevReview, type DevReviewProviderReadiness } from "@/lib/api"
 
 export function DevReviewPanel({
   initial,
+  history,
   providers
 }: {
   initial: DevReview | null;
+  history: DevReview[];
   providers: DevReviewProviderReadiness[];
 }) {
   const [review, setReview] = useState<DevReview | null>(initial);
@@ -84,7 +86,7 @@ export function DevReviewPanel({
 
       {!canRun ? (
         <p className="mt-2 text-xs muted">
-          Set GITHUB_TOKEN or GOOGLE_CALENDAR_ACCESS_TOKEN in your environment.
+          Set GITHUB_TOKEN or GOOGLE_CALENDAR_TOKEN_FILE in your environment.
         </p>
       ) : null}
 
@@ -161,6 +163,38 @@ export function DevReviewPanel({
           </details>
         </>
       ) : null}
+
+      {history.length ? (
+        <div className="mt-5 border-t border-black/5 pt-4 dark:border-white/10">
+          <div className="text-xs uppercase tracking-widest muted">History</div>
+          <ul className="mt-3 space-y-3 text-sm">
+            {history.map((item) => (
+              <li
+                key={item.id}
+                className="grid grid-cols-1 gap-1 sm:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span className="font-medium">{item.dev_weather}</span>
+                    <span className="text-xs uppercase muted">
+                      {item.run.status}
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate text-xs muted">
+                    {coverageSummary(item.source_coverage)}
+                  </div>
+                </div>
+                <time
+                  className="text-xs muted sm:text-right"
+                  dateTime={item.created_at}
+                >
+                  {item.created_at}
+                </time>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -189,4 +223,17 @@ function formatValue(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value) ?? "-";
+}
+
+function coverageSummary(coverage: Record<string, unknown>): string {
+  const entries = Object.entries(coverage);
+  if (!entries.length) return "no provider coverage";
+  return entries
+    .map(([name, value]) => {
+      if (value && typeof value === "object" && "status" in value) {
+        return `${name}: ${formatValue((value as { status?: unknown }).status)}`;
+      }
+      return `${name}: ${formatValue(value)}`;
+    })
+    .join(" · ");
 }

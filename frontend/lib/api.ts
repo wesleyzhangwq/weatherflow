@@ -273,6 +273,8 @@ export const api = {
   profile: () => request<ProfileOut>("/api/memory/profile"),
   latestDevReview: () =>
     request<DevReview | null>("/api/dev-review/runs/latest"),
+  devReviewHistory: (limit = 5) =>
+    request<DevReview[]>(`/api/dev-review/runs?limit=${limit}`),
   runDevReview: (windowDays = 7) =>
     request<DevReview>("/api/dev-review/runs", {
       method: "POST",
