@@ -1,4 +1,4 @@
-"""MCP connectors. MVP: interface stubs only — see ``base``."""
+"""MCP connectors for developer rhythm evidence."""
 
 from app.mcp.base import MCPConnector
 

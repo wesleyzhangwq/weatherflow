@@ -11,16 +11,10 @@ Configure via env:
     EVENING_REFLECTION_CRON=22:00
     WEEKLY_REVIEW_CRON=sun:21:00
     SCHEDULER_TIMEZONE=local | UTC | Asia/Shanghai | ...
-    SENSOR_SWEEP_ENABLED=false
-    SENSOR_SWEEP_CRON=09:00
-    SENSOR_SWEEP_GIT_ROOTS=   (comma-separated; empty -> ~/Projects)
-    SENSOR_SWEEP_NOTES_ROOTS=
-    SENSOR_SWEEP_WORKSPACE_ROOTS=
 """
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Callable, Optional
 
@@ -28,6 +22,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import Settings
+
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +67,6 @@ def build_scheduler(
     *,
     daily_job: Callable[[], "object"],
     weekly_job: Callable[[], "object"],
-    sensor_sweep_job: Optional[Callable[[], "object"]] = None,
 ) -> Optional[AsyncIOScheduler]:
     """Build & configure a scheduler. Returns None if disabled."""
     if not settings.scheduler_enabled:
@@ -84,16 +79,7 @@ def build_scheduler(
     weekly_trigger = parse_trigger(
         settings.weekly_review_cron, timezone=settings.scheduler_timezone
     )
-    sensor_trigger: Optional[CronTrigger] = None
-    if settings.sensor_sweep_enabled and sensor_sweep_job is not None:
-        try:
-            sensor_trigger = parse_trigger(
-                settings.sensor_sweep_cron, timezone=settings.scheduler_timezone
-            )
-        except ValueError:
-            logger.warning("Invalid SENSOR_SWEEP_CRON=%r; sensor sweep not scheduled.", settings.sensor_sweep_cron)
-
-    if daily_trigger is None and weekly_trigger is None and sensor_trigger is None:
+    if daily_trigger is None and weekly_trigger is None:
         logger.info("Scheduler enabled but no triggers configured.")
         return None
 
@@ -116,16 +102,6 @@ def build_scheduler(
             misfire_grace_time=6 * 3600,
         )
         logger.info("Scheduled weekly review: %s", settings.weekly_review_cron)
-    if sensor_trigger is not None and sensor_sweep_job is not None:
-        scheduler.add_job(
-            sensor_sweep_job,
-            trigger=sensor_trigger,
-            id="sensor_sweep",
-            replace_existing=True,
-            misfire_grace_time=3600,
-        )
-        logger.info("Scheduled sensor sweep: %s", settings.sensor_sweep_cron)
-
     return scheduler
 
 

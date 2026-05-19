@@ -1,194 +1,106 @@
 # WeatherFlow
 
-> **An AI Companion for Long-term Human Growth**
+> **A local-first developer rhythm companion.**
 
-WeatherFlow is **not** a chatbot, AI girlfriend, general-purpose assistant, AutoGPT, or browser agent.
+WeatherFlow helps developers understand their current work rhythm, protect momentum,
+and recover from overload. It is not a general chatbot, browser agent, task runner, or
+productivity boss. It is a small companion system that reads a few trusted signals and
+turns them into state, reflection, memory, and one gentle next step.
 
-It is a **long-term growth companion** — an external executive function that helps you maintain
-your growth rhythm (your *flow*), understand your behavioral patterns, and find your way through
-the seasons of your life.
+## Product Shape
 
-> Modern people don't lack information. They suffer from **collapsed long-term growth order**.
-> WeatherFlow exists to help you rebuild it.
+WeatherFlow has two core loops:
 
-## Core Metaphor: Life as Weather
+```text
+Daily loop:
+check-in -> StateAgent -> ReflectionAgent -> PlanningAgent -> profile.md
 
-Your life has weather. WeatherFlow does not try to *eliminate* bad weather.
-It helps you understand it and walk through it.
-
-```
-Momentum   - shipping, in flow, things are moving
-Recovery   - climbing back, momentum returning
-Confusion  - direction unclear, motivation flat
-Overload   - too much input, too many open loops, project switching high
-Burnout    - drained, stress high, momentum collapsed
+Developer rhythm loop:
+GitHub MCP + Google Calendar MCP -> DevReviewAgent -> dashboard + profile context
 ```
 
-## What WeatherFlow Does
+Inputs are intentionally narrow:
 
-| Capability             | Priority |
-| ---------------------- | -------- |
-| Long-term Memory       | Critical |
-| User Modeling          | Critical |
-| Reflection             | Critical |
-| State Tracking         | Critical |
-| Behavior Analysis      | Critical |
-| Gentle Planning        | High     |
-| Tool Use / MCP         | Medium   |
-| Browser Automation     | None     |
+- **User check-in** — the strongest signal for mood, focus, blockers, and intention.
+- **GitHub MCP** — PRs, issues, reviews, repository activity, and shipping evidence.
+- **Google Calendar MCP** — meeting load, focus windows, and collaboration pressure.
 
-It is **memory-centric** and **reflection-first**, not tool-use centric.
+WeatherFlow does not run local git, notes, or workspace sensors. Dev Review is the
+product's main evidence-backed work-rhythm feature, not a side module.
 
-## Daily Usage
+## What It Does
 
-- **Morning Check-in (1–3 min):** state, what you did, what's stuck, what you're anxious about.
-- **Evening Reflection (auto):** the system summarizes, identifies patterns, updates your model.
-- **Weekly Review (auto):** momentum trend, burnout risk, long-term behavioral patterns.
+- Tracks life/work weather: Momentum, Recovery, Confusion, Overload, Burnout.
+- Produces short daily and weekly reflections in a gentle voice.
+- Maintains one readable long-term profile at `DATA_DIR/memory/profile.md`.
+- Runs Dev Review from GitHub + Calendar evidence to summarize developer rhythm.
+- Exposes a Next.js dashboard and `wf` CLI for low-friction daily use.
+- Degrades locally with deterministic fallbacks when the LLM is unavailable.
 
 ## Architecture
 
-```
-Next.js dashboard  +  wf CLI (check-in, sensors, start/stop)
-         |                    |
-         +----------+---------+
-                    |
-              FastAPI backend
-                    |
-              Orchestrator
-    State · Reflection · Planning · Memory agents
-                    |
-         Hybrid memory (short-term events + buffer,
-         mid-term Markdown vault, long-term Qdrant or SQLite vectors)
-                    |
-         SQLite + FTS5 + episodic / semantic / timeline / sensor tables
-                    |
-         Optional: scheduler (evening + weekly + sensor sweep)
-                    |
-CLI sensors: git, notes, workspace  |  MCP: GitHub, Google Calendar
+```text
+Next.js dashboard + wf CLI
+          |
+      FastAPI backend
+          |
+      Orchestrator
+ State -> Reflection -> Planning -> Memory
+          |
+ SQLite records + profile.md
+          |
+ Dev Review providers: GitHub MCP + Google Calendar MCP
 ```
 
-Details:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md),
-[docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md), and
-[docs/REVIEW_CHECKLIST.md](docs/REVIEW_CHECKLIST.md).
-Frontend upgrade notes live in
-[docs/NEXT_UPGRADE_PLAN.md](docs/NEXT_UPGRADE_PLAN.md).
+More detail lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
 cp .env.example .env
 # fill OPENAI_BASE_URL / OPENAI_API_KEY / models
 make install
 
-# 2. Backend and frontend
 make dev-backend       # http://127.0.0.1:8765
 make dev-frontend      # http://localhost:3000
-
-# 3. CLI
-uv run wf checkin             # interactive 1–3 min morning check-in
-uv run wf weather             # current life weather
-uv run wf reflect             # today's reflection
-uv run wf setup-calendar --credentials ./credentials.json
-uv run wf dev-review --days 7 # development rhythm review from GitHub + Calendar
-uv run wf dev-review --latest # latest saved dev review
-uv run wf patterns            # window-vs-window deterministic pattern report
-uv run wf scan-git       --root ~/Projects     # behavior sensor
-uv run wf scan-notes     --root ~/Notes        # notes / Obsidian sensor
-uv run wf scan-workspace --root ~/Projects     # filesystem / fragmentation sensor
-uv run wf sensors             # git + notes + workspace (one request)
 ```
 
-Docker Compose can start backend, frontend, and Qdrant together:
+CLI:
 
 ```bash
-docker compose up --build
+uv run wf checkin             # 1-3 minute check-in; runs the daily loop
+uv run wf weather             # current weather/state
+uv run wf reflect             # latest reflection, or --run to regenerate
+uv run wf dev-review --days 7 # GitHub + Calendar developer rhythm review
+uv run wf setup-calendar      # authorize Google Calendar for Dev Review
+uv run wf dashboard           # open dashboard
 ```
 
-### Health and checks
+Health checks:
 
 ```bash
 curl http://127.0.0.1:8765/health
 curl http://127.0.0.1:8765/api/meta/status
 make check
-make inspect
 ```
 
-`/api/meta/status` reports local runtime diagnostics without exposing secrets:
-database path, Markdown memory path, scheduler jobs, configured models, and
-whether long-term memory is using Qdrant or SQLite fallback.
-
-By default, local runtime data lives outside the source tree:
+Runtime data defaults to:
 
 ```text
 ${HOME}/.local/share/weatherflow/data
 ```
 
-### Local-first profile (no API key, no network)
+## Local-First Profile
 
-WeatherFlow can run fully offline through Ollama:
-
-```bash
-brew install ollama
-ollama serve &
-ollama pull qwen2.5:7b
-ollama pull bge-m3
-cp .env.example.ollama .env
-uvicorn app.main:app --reload --port 8765
-```
-
-The same OpenAI-compatible client is used; you just point `OPENAI_BASE_URL`
-at `http://127.0.0.1:11434/v1`. See `.env.example.ollama`.
-
-### Dev Review Agent
-
-The Dev Review Agent is a manually triggered agent run. It uses configured
-GitHub and Google Calendar providers to generate a structured development rhythm
-review, stores the user-facing review, and keeps a lightweight execution trace
-for provider coverage and failures.
-
-Calendar storage keeps event titles, start times, durations, calendar names, and
-derived categories. It does not store descriptions, attendee emails, meeting
-links, locations, or attachments.
-
-Google Calendar setup is local-first. Enable the Google Calendar API in Google
-Cloud, create an OAuth Desktop client, download its `credentials.json`, then run:
-
-```bash
-uv run wf setup-calendar --credentials ./credentials.json
-```
-
-The command opens a browser consent flow and saves a refreshable token JSON under
-`DATA_DIR` by default. The backend prefers `GOOGLE_CALENDAR_TOKEN_FILE` when it
-exists and only uses `GOOGLE_CALENDAR_ACCESS_TOKEN` as a temporary fallback.
-
-### Auto reflections
-
-Evening reflection (default 22:00) and weekly review (default Sunday 21:00)
-run on their own — that is the point of a "low-friction companion". Edit
-`EVENING_REFLECTION_CRON` / `WEEKLY_REVIEW_CRON` in `.env` or set
-`SCHEDULER_ENABLED=false` to disable.
+WeatherFlow can run against any OpenAI-compatible endpoint. For local-only chat,
+point `OPENAI_BASE_URL` at Ollama or another compatible local server. The durable
+user model remains an editable Markdown file, not an opaque vector database.
 
 ## Engineering Principles
 
-1. **Small but Deep** — few files, clear structure, restrained features.
-2. **Local-first** — everything runs locally; no SaaS dependency.
-3. **Memory-centric** — memory is the soul, not tool-use.
-4. **Reflection-first** — reflection matters more than execution.
-5. **Human-centric** — understand the human, don't automate everything.
-
-## Working With Coding Agents
-
-WeatherFlow can be built with coding agents, but agent work must stay bounded
-and reviewable. Use [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) before
-asking an agent to implement a feature, and use
-[docs/REVIEW_CHECKLIST.md](docs/REVIEW_CHECKLIST.md) before accepting generated
-code.
-
-## Vision
-
-In an age of information overload and attention collapse, WeatherFlow exists to help humans
-**rebuild long-term growth order** — to understand themselves, maintain their rhythm, walk through
-burnout, sustain flow, and become who they actually want to become.
+1. **Narrow inputs** — check-in, GitHub, and Calendar only.
+2. **Dev rhythm first** — the product is about developer state and action cadence.
+3. **Readable memory** — `profile.md` is the source of truth for long-term user modeling.
+4. **Explicit orchestration** — no hidden agent swarm; the orchestrator is simple and inspectable.
+5. **Gentle output** — one reflection and one next step, never a TODO flood.

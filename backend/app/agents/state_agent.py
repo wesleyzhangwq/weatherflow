@@ -9,8 +9,8 @@ from app.agents.base import BaseAgent
 from app.core.llm import chat_json
 from app.core.model_router import model_for
 from app.core.prompts import STATE_SYSTEM
-from app.memory import checkin_repo, hypothesis_repo, profile_md, state_repo
-from app.memory.schemas import CheckinRecord, GitActivityRecord, SensorHypothesis, UserStateOut
+from app.memory import checkin_repo, dev_review_repo, profile_md, state_repo
+from app.memory.schemas import CheckinRecord, UserStateOut
 
 _VALID_LABELS = {"Momentum", "Confusion", "Burnout", "Overload", "Recovery"}
 
@@ -22,10 +22,7 @@ def _clamp(v: Any, default: int = 50) -> int:
         return default
 
 
-def _heuristic_state(
-    checkin: Optional[CheckinRecord],
-    active_hypotheses: list[SensorHypothesis],
-) -> dict:
+def _heuristic_state(checkin: Optional[CheckinRecord], latest_dev_weather: str = "") -> dict:
     """Cheap deterministic baseline used when no LLM is available
     (offline tests, missing API key, fallback). Not as nuanced as the LLM
     but always available.
@@ -92,12 +89,6 @@ def _heuristic_state(
     )
     stuck_kw = bool(checkin and (checkin.stuck_on or "").strip())
 
-    hypothesis_text = " ".join(
-        f"{h.key} {h.label} {h.summary}" for h in active_hypotheses
-    ).lower()
-    switching_hypothesis = "switch" in hypothesis_text or "切换" in hypothesis_text
-    output_hypothesis = "output_active" in hypothesis_text or "推进" in hypothesis_text
-
     base = {
         "focus": 60,
         "stress": 40,
@@ -110,10 +101,10 @@ def _heuristic_state(
         base["burnout"] += 30
         base["stress"] += 20
         base["momentum"] -= 20
-    if overload_kw or switching_hypothesis:
+    if overload_kw or latest_dev_weather in {"Fragmented", "Collaboration Heavy"}:
         base["focus"] -= 15
         base["momentum"] -= 10
-    if momentum_kw or output_hypothesis:
+    if momentum_kw or latest_dev_weather == "Shipping":
         base["momentum"] += 20
         base["confidence"] += 10
         base["focus"] += 5
@@ -124,7 +115,7 @@ def _heuristic_state(
 
     if state["burnout"] >= 60:
         label = "Burnout"
-    elif overload_kw or switching_hypothesis:
+    elif overload_kw or latest_dev_weather in {"Fragmented", "Collaboration Heavy"}:
         label = "Overload"
     elif state["momentum"] >= 65 and state["focus"] >= 60:
         label = "Momentum"
@@ -145,17 +136,27 @@ class StateAgent(BaseAgent):
         self,
         *,
         checkin: Optional[CheckinRecord] = None,
-        git_recent: Optional[list[GitActivityRecord]] = None,
     ) -> UserStateOut:
         checkin = checkin or checkin_repo.latest()
-        active_hypotheses = hypothesis_repo.active(limit=12)
         recent_checkins = checkin_repo.recent(limit=7)
+        latest_dev_review = dev_review_repo.latest_review()
 
         context = {
             "checkin": checkin.model_dump() if checkin else None,
             "recent_checkins": [c.model_dump() for c in recent_checkins],
             "profile": profile_md.read_profile(max_chars=2500),
-            "active_sensor_hypotheses": [h.model_dump() for h in active_hypotheses],
+            "latest_dev_review": (
+                {
+                    "created_at": latest_dev_review.created_at,
+                    "window_days": latest_dev_review.window_days,
+                    "dev_weather": latest_dev_review.dev_weather,
+                    "summary": latest_dev_review.summary,
+                    "rhythm_risks": latest_dev_review.rhythm_risks,
+                    "next_week_suggestion": latest_dev_review.next_week_suggestion,
+                }
+                if latest_dev_review
+                else None
+            ),
         }
 
         try:
@@ -176,7 +177,10 @@ class StateAgent(BaseAgent):
                 temperature=0.2,
             )
         except Exception:
-            raw = _heuristic_state(checkin, active_hypotheses)
+            raw = _heuristic_state(
+                checkin,
+                latest_dev_review.dev_weather if latest_dev_review else "",
+            )
 
         state = UserStateOut(
             focus=_clamp(raw.get("focus")),

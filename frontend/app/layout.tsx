@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "WeatherFlow",
-  description: "面向长期自我成长的本地 AI 伴侣。"
+  description: "面向开发者节奏与行动状态的本地 AI 伴侣。"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </header>
         <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
         <footer className="mx-auto max-w-5xl px-6 py-10 text-xs muted">
-          长期陪伴 · 本地优先 · 以记忆为中心
+          开发节奏 · 本地优先 · 以记忆为中心
         </footer>
       </body>
     </html>

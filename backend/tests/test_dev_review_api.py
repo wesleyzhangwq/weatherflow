@@ -137,6 +137,82 @@ def test_get_run_returns_404_when_run_has_no_review() -> None:
     assert response.status_code == 404
 
 
+def test_dev_review_runs_returns_recent_reviews_newest_first() -> None:
+    first_run = dev_review_repo.create_run(AgentRunCreate(input={"window_days": 7}))
+    dev_review_repo.finish_run(first_run, status="success")
+    first_id = dev_review_repo.create_review(
+        DevReviewCreate(
+            run_id=first_run,
+            window_days=7,
+            summary="First review.",
+            dev_weather="Deep Work",
+            main_work_threads=["weatherflow"],
+            shipping_progress=[],
+            collaboration_load=[],
+            meeting_load=[],
+            rhythm_risks=[],
+            next_week_suggestion="Keep the focus block.",
+            source_coverage={"github": {"status": "success"}},
+        )
+    )
+    second_run = dev_review_repo.create_run(AgentRunCreate(input={"window_days": 14}))
+    dev_review_repo.finish_run(second_run, status="partial")
+    second_id = dev_review_repo.create_review(
+        DevReviewCreate(
+            run_id=second_run,
+            window_days=14,
+            summary="Second review.",
+            dev_weather="Shipping",
+            main_work_threads=["dev review"],
+            shipping_progress=["Shipped a review path."],
+            collaboration_load=[],
+            meeting_load=[],
+            rhythm_risks=[],
+            next_week_suggestion="Protect follow-up time.",
+            source_coverage={
+                "github": {"status": "success"},
+                "google_calendar": {"status": "skipped"},
+            },
+        )
+    )
+
+    client = _client()
+    response = client.get("/api/dev-review/runs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body] == [second_id, first_id]
+    assert body[0]["run"]["status"] == "partial"
+    assert body[0]["source_coverage"]["google_calendar"]["status"] == "skipped"
+
+
+def test_dev_review_runs_respects_limit() -> None:
+    for index in range(3):
+        run_id = dev_review_repo.create_run(AgentRunCreate(input={"window_days": 7}))
+        dev_review_repo.finish_run(run_id, status="success")
+        dev_review_repo.create_review(
+            DevReviewCreate(
+                run_id=run_id,
+                window_days=7,
+                summary=f"Review {index}.",
+                dev_weather="Deep Work",
+                main_work_threads=[],
+                shipping_progress=[],
+                collaboration_load=[],
+                meeting_load=[],
+                rhythm_risks=[],
+                next_week_suggestion="Keep going.",
+                source_coverage={"github": {"status": "success"}},
+            )
+        )
+
+    client = _client()
+    response = client.get("/api/dev-review/runs?limit=1")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+
+
 def test_dev_review_persists_review_when_provider_succeeds(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "configured-token")
     monkeypatch.setenv("GOOGLE_CALENDAR_ACCESS_TOKEN", "")

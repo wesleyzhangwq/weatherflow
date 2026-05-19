@@ -23,7 +23,7 @@ _Auto-maintained by WeatherFlow. You can edit this file directly._
 
 - 暂无。
 
-## Hypothesis feedback
+## Feedback
 
 - 暂无。
 

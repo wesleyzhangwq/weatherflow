@@ -18,9 +18,9 @@ pytestmark = pytest.mark.asyncio
 async def test_memory_feedback_writes_event() -> None:
     await memory_feedback(
         MemoryFeedbackIn(
-            semantic_key="focus_style",
+            profile_key="focus_style",
             feedback_type="inaccurate",
-            semantic_value_snapshot="总是在上午更专注",
+            profile_value_snapshot="总是在上午更专注",
             session_id="test-session",
         )
     )
@@ -33,18 +33,18 @@ async def test_memory_feedback_writes_event() -> None:
     assert event.session_id == "test-session"
 
     payload = json.loads(event.content)
-    assert payload["semantic_key"] == "focus_style"
+    assert payload["profile_key"] == "focus_style"
     assert payload["feedback_type"] == "inaccurate"
-    assert payload["semantic_value_snapshot"] == "总是在上午更专注"
+    assert payload["profile_value_snapshot"] == "总是在上午更专注"
     assert payload["created_at"] == event.timestamp
 
 
 async def test_memory_agent_profile_refresh_includes_memory_feedback(fake_llm) -> None:
     await memory_feedback(
         MemoryFeedbackIn(
-            semantic_key="focus_style",
+            profile_key="focus_style",
             feedback_type="stale",
-            semantic_value_snapshot="以前晚上效率更高",
+            profile_value_snapshot="以前晚上效率更高",
         )
     )
     fake_llm.queue_chat(
@@ -84,15 +84,15 @@ async def test_memory_agent_profile_refresh_includes_memory_feedback(fake_llm) -
     user_content = chat_calls[0][1][1]["content"]
     assert '"memory_feedback"' in user_content
     assert '"feedback_type": "stale"' in user_content
-    assert '"semantic_key": "focus_style"' in user_content
+    assert '"profile_key": "focus_style"' in user_content
 
 
-async def test_memory_agent_refresh_profiles_includes_memory_feedback(fake_llm) -> None:
+async def test_memory_agent_refresh_profile_includes_memory_feedback(fake_llm) -> None:
     await memory_feedback(
         MemoryFeedbackIn(
-            semantic_key="focus_style",
+            profile_key="focus_style",
             feedback_type="important",
-            semantic_value_snapshot="现在早上更适合深度工作",
+            profile_value_snapshot="现在早上更适合深度工作",
         )
     )
     fake_llm.queue_chat(
@@ -106,7 +106,7 @@ async def test_memory_agent_refresh_profiles_includes_memory_feedback(fake_llm) 
     )
 
     agent = MemoryAgent(fake_llm)
-    await agent.refresh_profiles()
+    await agent.refresh_profile()
 
     chat_calls = [call for call in fake_llm.calls if call[0] == "chat"]
     user_content = chat_calls[0][1][1]["content"]

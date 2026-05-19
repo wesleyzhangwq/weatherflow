@@ -52,14 +52,14 @@ export function SuggestionFeedback({
         <button
           type="button"
           onClick={() => void send(true)}
-          className="rounded-full px-4 py-1.5 text-sm border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10"
+          className="rounded-lg px-4 py-1.5 text-sm border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10"
         >
           说中了
         </button>
         <button
           type="button"
           onClick={() => void send(false)}
-          className="rounded-full px-4 py-1.5 text-sm border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10"
+          className="rounded-lg px-4 py-1.5 text-sm border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10"
         >
           不太对
         </button>

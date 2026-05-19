@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { HypothesisReview } from "@/components/HypothesisReview";
 import { ReflectionGrounding } from "@/components/ReflectionGrounding";
 import { SuggestionFeedback } from "@/components/SuggestionFeedback";
 import { api, type CheckinResponse } from "@/lib/api";
@@ -98,7 +97,6 @@ export default function CheckinPage() {
             </ul>
           </div>
         ) : null}
-        <HypothesisReview items={result.pending_hypotheses ?? []} />
         {result.suggestion ? (
           <div className="card">
             <div className="text-xs uppercase tracking-widest muted">
@@ -135,7 +133,7 @@ export default function CheckinPage() {
               onClick={() =>
                 setWeatherChoice((cur) => (cur === opt ? "" : opt))
               }
-              className={`rounded-full border px-3 py-2 text-sm leading-snug transition-colors ${
+              className={`rounded-lg border px-3 py-2 text-sm leading-snug transition-colors ${
                 weatherChoice === opt
                   ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
                   : "border-black/15 bg-white/60 dark:border-white/20 dark:bg-white/5 hover:border-black/30 dark:hover:border-white/40"
@@ -156,7 +154,7 @@ export default function CheckinPage() {
           rows={2}
           value={intention}
           onChange={(e) => setIntention(e.target.value)}
-          className="w-full rounded-2xl border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
+          className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
           placeholder="（可选）"
         />
       </div>
@@ -170,7 +168,7 @@ export default function CheckinPage() {
           rows={2}
           value={blocker}
           onChange={(e) => setBlocker(e.target.value)}
-          className="w-full rounded-2xl border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
+          className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
           placeholder="（可选）"
         />
       </div>
@@ -184,7 +182,7 @@ export default function CheckinPage() {
           rows={2}
           value={completed}
           onChange={(e) => setCompleted(e.target.value)}
-          className="w-full rounded-2xl border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
+          className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
           placeholder="（可选）"
         />
       </div>
@@ -196,7 +194,7 @@ export default function CheckinPage() {
       <button
         type="submit"
         disabled={submitting}
-        className="rounded-full px-6 py-2 bg-black text-white dark:bg-white dark:text-black disabled:opacity-50"
+        className="rounded-lg px-6 py-2 bg-black text-white dark:bg-white dark:text-black disabled:opacity-50"
       >
         {submitting ? "正在聆听…" : "提交"}
       </button>

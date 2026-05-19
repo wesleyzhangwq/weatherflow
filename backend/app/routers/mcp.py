@@ -1,26 +1,19 @@
-"""MCP connector endpoints (minimal).
-
-GitHub — recent activity for the authenticated token.
-Notes — server-side vault scan → same aggregate row as ``/api/sensors/notes``.
-"""
+"""MCP connector endpoints."""
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 
 from app.config import get_settings
 from app.mcp.github import GithubConnector
-from app.mcp.notes_ingest import scan_markdown_root
-from app.memory import notes_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
-Provider = Literal["github", "notes"]
+Provider = Literal["github", "google_calendar"]
 
 
 @router.get("/providers")
@@ -33,26 +26,15 @@ async def list_providers() -> list[dict[str, str]]:
             "hint": "set GITHUB_TOKEN to enable",
         },
         {
-            "name": "notes",
-            "status": "ready",
-            "hint": "POST /api/mcp/notes/sync with vault root path",
+            "name": "google_calendar",
+            "status": (
+                "ready"
+                if settings.google_calendar_access_token or settings.google_calendar_token_file
+                else "needs_config"
+            ),
+            "hint": "run wf setup-calendar or set GOOGLE_CALENDAR_ACCESS_TOKEN",
         },
     ]
-
-
-@router.post("/notes/sync")
-async def notes_sync(root: str, window_days: int = 14) -> dict[str, Any]:
-    """Scan a markdown / Obsidian directory server-side; store aggregate only."""
-    path = Path(root).expanduser()
-    if not path.is_dir():
-        raise HTTPException(status_code=404, detail=f"Not a directory: {path}")
-    try:
-        payload = scan_markdown_root(path, window_days=window_days)
-    except Exception as exc:
-        logger.exception("notes sync failed")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    rid = notes_repo.add(payload)
-    return {"id": rid, "ingested": payload.model_dump()}
 
 
 @router.post("/github/sync")
@@ -72,10 +54,15 @@ async def github_sync(days: int = 7) -> dict[str, Any]:
 @router.post("/{provider}")
 async def call_provider_default(provider: Provider) -> dict:
     """Generic stub for unimplemented providers."""
-    if provider in {"github", "notes"}:
+    if provider == "github":
         raise HTTPException(
             status_code=400,
-            detail=f"Use /api/mcp/{provider}/sync for {provider}.",
+            detail="Use /api/mcp/github/sync for GitHub.",
+        )
+    if provider == "google_calendar":
+        raise HTTPException(
+            status_code=400,
+            detail="Use /api/dev-review/runs to fetch Google Calendar evidence.",
         )
     raise HTTPException(
         status_code=501,

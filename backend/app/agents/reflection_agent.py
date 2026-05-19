@@ -17,7 +17,6 @@ from app.memory.schemas import (
     ReflectionContext,
     ReflectionKind,
     ReflectionRecord,
-    SensorHypothesis,
     StateTrendPoint,
     UserStateOut,
 )
@@ -50,9 +49,6 @@ class ReflectionAgent(BaseAgent):
         latest_state = context.latest_state
         recent_states = context.recent_states
         profile = context.profile
-        active_hypotheses = context.active_hypotheses
-        pending_hypotheses = context.pending_hypotheses
-        rated_hypotheses = context.rated_hypotheses
         pattern_report = context.pattern_report or {"metrics": [], "patterns": []}
 
         llm_context = {
@@ -61,11 +57,7 @@ class ReflectionAgent(BaseAgent):
             "latest_state": latest_state.model_dump() if latest_state else None,
             "recent_states": [s.model_dump() for s in recent_states],
             "profile": profile[:3000],
-            "active_sensor_hypotheses": [h.model_dump() for h in active_hypotheses],
-            "pending_sensor_hypotheses_to_ask_about": [
-                h.model_dump() for h in pending_hypotheses
-            ],
-            "recent_hypothesis_feedback": [h.model_dump() for h in rated_hypotheses],
+            "latest_dev_review": context.latest_dev_review,
             "patterns": pattern_report.get("patterns", []),
         }
 
@@ -95,8 +87,6 @@ class ReflectionAgent(BaseAgent):
         insights = {
             "weather_label": latest_state.weather_label if latest_state else None,
             "checkins_considered": len(recent_checkins),
-            "active_hypotheses_considered": len(active_hypotheses),
-            "pending_hypotheses_available": len(pending_hypotheses),
             "grounding_sources": [
                 source.model_dump()
                 for source in _build_grounding_sources(
@@ -104,7 +94,7 @@ class ReflectionAgent(BaseAgent):
                     latest_checkin=latest_checkin,
                     latest_state=latest_state,
                     recent_states=recent_states,
-                    active_hypotheses=active_hypotheses,
+                    latest_dev_review=context.latest_dev_review,
                     patterns=list(pattern_report.get("patterns") or []),
                     profile=profile,
                 )
@@ -134,7 +124,7 @@ def _build_grounding_sources(
     latest_checkin: CheckinRecord | None,
     latest_state: UserStateOut | None,
     recent_states: list[StateTrendPoint],
-    active_hypotheses: list[SensorHypothesis],
+    latest_dev_review: dict | None,
     patterns: list[dict],
     profile: str,
 ) -> list[GroundingSource]:
@@ -161,18 +151,15 @@ def _build_grounding_sources(
         summary = f"参考了 {state_count or 1} 次状态快照，{weather}，用于判断动能、压力和恢复感。"
         sources.append(GroundingSource(type="state", label=label, summary=summary))
 
-    for h in active_hypotheses[:4]:
-        source_labels = {
-            "git": "已确认的代码活动线索",
-            "notes": "已确认的笔记活动线索",
-            "workspace": "已确认的工作区线索",
-            "patterns": "已确认的行为模式线索",
-        }
+    if latest_dev_review:
         sources.append(
             GroundingSource(
-                type=h.source_type,
-                label=source_labels.get(h.source_type, "已确认的传感器线索"),
-                summary=f"{h.label}：{h.summary}",
+                type="dev_review",
+                label="最近的开发节奏回顾",
+                summary=(
+                    f"参考了最近 {latest_dev_review.get('window_days', 7)} 天的 Dev Review，"
+                    f"开发天气为「{latest_dev_review.get('dev_weather', 'Unknown')}」。"
+                ),
             )
         )
 

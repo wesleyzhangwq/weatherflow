@@ -14,7 +14,7 @@ class CheckinIn(BaseModel):
     stuck_on: Optional[str] = Field(default=None, description="what is stuck")
     anxiety: Optional[str] = Field(default=None, description="current most anxious thing")
     raw: Optional[str] = Field(default=None, description="any free-form journaling")
-    session_id: str = Field(default="default", description="correlate short-term buffer + events")
+    session_id: str = Field(default="default", description="correlate feedback events")
 
 
 class CheckinRecord(CheckinIn):
@@ -28,10 +28,8 @@ ReflectionKind = Literal["daily", "weekly"]
 GroundingSourceType = Literal[
     "checkin",
     "state",
-    "git",
-    "notes",
-    "workspace",
     "patterns",
+    "dev_review",
     "memory",
 ]
 
@@ -78,107 +76,6 @@ class StateTrendPoint(BaseModel):
     weather_label: WeatherLabel
 
 
-# ----------------------------- Timeline -----------------------------
-TimelineKind = Literal["milestone", "phase", "event"]
-
-
-class TimelineEvent(BaseModel):
-    id: Optional[int] = None
-    ts: str
-    kind: TimelineKind
-    title: str
-    description: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
-
-
-# ----------------------------- Semantic memory -----------------------------
-class SemanticItem(BaseModel):
-    key: str
-    value: str
-    confidence: float = 0.5
-    last_updated: Optional[str] = None
-
-
-# ----------------------------- Episodic -----------------------------
-class EpisodicItem(BaseModel):
-    id: int
-    ts: str
-    content: str
-    source: str
-
-
-# ----------------------------- Git activity -----------------------------
-class GitActivityIn(BaseModel):
-    repo: str
-    commit_count: int = 0
-    project_count: int = 0
-    switch_score: float = 0.0
-    window_days: int = 14
-
-
-class GitActivityRecord(GitActivityIn):
-    id: int
-    ts: str
-
-
-# ----------------------------- Notes activity -----------------------------
-class NotesActivityIn(BaseModel):
-    root: str
-    file_count: int = 0
-    new_file_count: int = 0
-    edited_count: int = 0
-    total_words: int = 0
-    new_words: int = 0
-    avg_words: float = 0.0
-    top_topics: List[str] = Field(default_factory=list)
-    window_days: int = 14
-
-
-class NotesActivityRecord(NotesActivityIn):
-    id: int
-    ts: str
-
-
-class SensorSweepIn(BaseModel):
-    """Optional overrides; empty lists mean \"use server defaults from .env / home\"."""
-
-    git_roots: List[str] = Field(default_factory=list)
-    notes_roots: List[str] = Field(default_factory=list)
-    workspace_roots: List[str] = Field(default_factory=list)
-    window_days: int = 14
-    dry_run: bool = False
-
-
-# ----------------------------- Sensor hypotheses -----------------------------
-HypothesisSourceType = Literal["git", "notes", "workspace", "patterns"]
-HypothesisStatus = Literal["pending", "confirmed", "rejected", "superseded"]
-HypothesisFeedback = Literal["accurate", "unsure", "inaccurate"]
-
-
-class SensorHypothesis(BaseModel):
-    id: int
-    created_at: str
-    last_seen_at: str
-    source_type: HypothesisSourceType
-    source_record_id: Optional[int] = None
-    key: str
-    label: str
-    summary: str
-    evidence: Optional[dict] = None
-    confidence: float = 0.2
-    seen_count: int = 1
-    status: HypothesisStatus = "pending"
-    user_feedback: Optional[str] = None
-    user_rating: Optional[HypothesisFeedback] = None
-    confirmed_at: Optional[str] = None
-    rejected_at: Optional[str] = None
-    rated_at: Optional[str] = None
-
-
-class HypothesisFeedbackIn(BaseModel):
-    feedback: HypothesisFeedback
-
-
 class ReflectionContext(BaseModel):
     """Structured snapshot for `ReflectionAgent` — assembled by the orchestrator."""
 
@@ -187,15 +84,13 @@ class ReflectionContext(BaseModel):
     latest_state: Optional[UserStateOut] = None
     recent_states: List[StateTrendPoint] = Field(default_factory=list)
     profile: str = ""
-    active_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
-    pending_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
-    rated_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
+    latest_dev_review: Optional[Dict[str, Any]] = None
     pattern_report: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ----------------------------- Short-term events -----------------------------
 class EventIn(BaseModel):
-    type: str = Field(..., description="chat / action / reflection / state / sensor / ...")
+    type: str = Field(..., description="suggestion_feedback / memory_feedback / ...")
     content: str
     tags: List[str] = Field(default_factory=list)
     session_id: str = "default"
@@ -204,21 +99,6 @@ class EventIn(BaseModel):
 class EventRecord(EventIn):
     id: str
     timestamp: str
-
-
-# ----------------------------- Workspace activity -----------------------------
-class WorkspaceActivityIn(BaseModel):
-    root: str
-    active_project_count: int = 0
-    touched_paths: int = 0
-    fragmentation_score: float = 0.0
-    top_dirs: List[str] = Field(default_factory=list)
-    window_days: int = 7
-
-
-class WorkspaceActivityRecord(WorkspaceActivityIn):
-    id: int
-    ts: str
 
 
 # ----------------------------- Dev review agent runs -----------------------------
@@ -307,24 +187,8 @@ __all__ = [
     "WeatherLabel",
     "UserStateOut",
     "StateTrendPoint",
-    "TimelineKind",
-    "TimelineEvent",
-    "SemanticItem",
-    "EpisodicItem",
-    "GitActivityIn",
-    "GitActivityRecord",
-    "NotesActivityIn",
-    "NotesActivityRecord",
-    "SensorSweepIn",
-    "HypothesisSourceType",
-    "HypothesisStatus",
-    "HypothesisFeedback",
-    "SensorHypothesis",
-    "HypothesisFeedbackIn",
     "EventIn",
     "EventRecord",
-    "WorkspaceActivityIn",
-    "WorkspaceActivityRecord",
     "DevReviewProviderReadinessStatus",
     "DevReviewProviderReadiness",
     "DevWeather",

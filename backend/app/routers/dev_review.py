@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.agents.dev_review_agent import DevReviewAgent
 from app.config import get_settings
@@ -200,6 +200,11 @@ async def create_dev_review_run(
 @router.get("/runs/latest", response_model=DevReviewRecord | None)
 def latest_dev_review_run() -> DevReviewRecord | None:
     return dev_review_repo.latest_review()
+
+
+@router.get("/runs", response_model=list[DevReviewRecord])
+def dev_review_runs(limit: int = Query(default=5, ge=1, le=20)) -> list[DevReviewRecord]:
+    return dev_review_repo.list_reviews(limit=limit)
 
 
 @router.get("/runs/{run_id}", response_model=DevReviewRecord)

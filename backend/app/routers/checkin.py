@@ -8,12 +8,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.core.orchestrator import Orchestrator
-from app.memory import checkin_repo, hypothesis_repo
+from app.memory import checkin_repo
 from app.memory.schemas import (
     CheckinIn,
     CheckinRecord,
     ReflectionRecord,
-    SensorHypothesis,
     UserStateOut,
 )
 from app.routers._deps import get_orchestrator
@@ -29,7 +28,6 @@ class CheckinResponse(BaseModel):
     patterns: List[dict[str, Any]] = Field(default_factory=list)
     suggestion_pattern_codes: List[str] = Field(default_factory=list)
     pattern_window_days: int = 7
-    pending_hypotheses: List[SensorHypothesis] = Field(default_factory=list)
 
 
 @router.post("", response_model=CheckinResponse)
@@ -53,7 +51,6 @@ async def submit_checkin(
         patterns=result.patterns,
         suggestion_pattern_codes=codes,
         pattern_window_days=result.pattern_window_days,
-        pending_hypotheses=hypothesis_repo.pending(limit=5),
     )
 
 

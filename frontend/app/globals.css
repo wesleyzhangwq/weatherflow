@@ -25,7 +25,7 @@ body {
 }
 
 .card {
-  @apply rounded-2xl border border-black/5 dark:border-white/10 bg-white/70 dark:bg-white/5 backdrop-blur-sm p-6 shadow-sm;
+  @apply rounded-lg border border-black/5 dark:border-white/10 bg-white/70 dark:bg-white/5 backdrop-blur-sm p-6 shadow-sm;
 }
 
 .muted { @apply text-black/60 dark:text-white/60; }

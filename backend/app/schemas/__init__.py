@@ -3,15 +3,9 @@
 from app.memory.schemas import (
     CheckinIn,
     CheckinRecord,
-    EpisodicItem,
-    GitActivityIn,
-    GitActivityRecord,
     ReflectionKind,
     ReflectionRecord,
-    SemanticItem,
     StateTrendPoint,
-    TimelineEvent,
-    TimelineKind,
     UserStateOut,
     WeatherLabel,
 )
@@ -19,15 +13,9 @@ from app.memory.schemas import (
 __all__ = [
     "CheckinIn",
     "CheckinRecord",
-    "EpisodicItem",
-    "GitActivityIn",
-    "GitActivityRecord",
     "ReflectionKind",
     "ReflectionRecord",
-    "SemanticItem",
     "StateTrendPoint",
-    "TimelineEvent",
-    "TimelineKind",
     "UserStateOut",
     "WeatherLabel",
 ]

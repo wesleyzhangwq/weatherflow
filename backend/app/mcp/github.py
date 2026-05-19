@@ -1,9 +1,4 @@
-"""GitHub MCP connector — minimal pull of recent activity.
-
-Used as a *supplementary* signal next to the local git sensor. The local
-sensor is authoritative for "did you actually write code"; GitHub fills in
-"public output" (PRs, issues, comments).
-"""
+"""GitHub MCP connector for developer rhythm evidence."""
 
 from __future__ import annotations
 

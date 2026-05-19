@@ -21,11 +21,20 @@ def run(
         "--check",
         help="Show Dev Review provider readiness without running a review.",
     ),
+    history: bool = typer.Option(
+        False,
+        "--history",
+        help="Show recent saved Dev Review runs without running a review.",
+    ),
 ) -> None:
     try:
         if check:
             data = api.get("/api/dev-review/providers")
             _print_provider_check(data)
+            return
+        if history:
+            data = api.get("/api/dev-review/runs?limit=5")
+            _print_history(data)
             return
         if latest:
             data = api.get("/api/dev-review/runs/latest")
@@ -70,6 +79,43 @@ def _print_provider_check(items: list[dict[str, Any]]) -> None:
             f"- {_text(item.get('label') or item.get('name'))}: "
             f"{_text(item.get('status'))} ({_text(item.get('required_env'))})"
         )
+
+
+def _print_history(items: list[dict[str, Any]]) -> None:
+    for line in _history_lines(items):
+        typer.echo(line)
+
+
+def _history_lines(items: list[dict[str, Any]]) -> list[str]:
+    if not items:
+        return ["No dev reviews have been saved yet."]
+
+    lines = ["Dev Review History"]
+    for item in items:
+        run = item.get("run") if isinstance(item.get("run"), dict) else {}
+        lines.append(
+            " · ".join(
+                [
+                    _text(item.get("created_at")),
+                    _text(item.get("dev_weather")),
+                    _text(run.get("status")),
+                    _coverage_summary(item.get("source_coverage") or {}),
+                ]
+            )
+        )
+    return [lines[0], *[f"- {line}" for line in lines[1:]]]
+
+
+def _coverage_summary(coverage: dict[str, Any]) -> str:
+    if not coverage:
+        return "no provider coverage"
+    parts = []
+    for name, value in coverage.items():
+        if isinstance(value, dict):
+            parts.append(f"{name}: {_text(value.get('status'))}")
+        else:
+            parts.append(f"{name}: {_text(value)}")
+    return " · ".join(parts)
 
 
 def _section(title: str, items: list[Any]) -> None:
