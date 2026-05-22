@@ -14,7 +14,7 @@ from app.core.llm import build_llm_client
 from app.core.orchestrator import Orchestrator
 from app.core.scheduler import build_scheduler
 from app.memory.store import init_db
-from app.routers import checkin, dev_review, feedback, mcp, memory, reflection, state
+from app.routers import actions, checkin, dev_review, feedback, mcp, memory, reflection, state
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(actions.router)
     app.include_router(checkin.router)
     app.include_router(feedback.router)
     app.include_router(reflection.router)

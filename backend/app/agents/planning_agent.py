@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from app.agents.base import BaseAgent
 from app.core.model_router import model_for
 from app.core.prompts import PLANNING_SYSTEM
-from app.memory.schemas import UserStateOut
+from app.memory.schemas import ActionProposal, UserStateOut
 
 _FALLBACK_BY_LABEL = {
     "Burnout": "这周也许可以刻意少做一点，把休息也当成正事。",
@@ -58,6 +59,63 @@ class PlanningAgent(BaseAgent):
             return _FALLBACK_BY_LABEL.get(
                 state.weather_label, _FALLBACK_BY_LABEL["Confusion"]
             )
+
+
+    def propose_actions(
+        self,
+        suggestion: str,
+        *,
+        checkin_raw: Optional[str] = None,
+    ) -> list[ActionProposal]:
+        """Propose focus block or GitHub issue based on suggestion text.
+
+        Proposals are stored without executing — callers must confirm before dispatch.
+        """
+        proposals: list[ActionProposal] = []
+
+        work_pattern = re.compile(
+            r"(?:deep work|focus|专注|深度工作)[：:\s]*([^\n。；]+)",
+            re.IGNORECASE,
+        )
+        match = work_pattern.search(suggestion)
+        if match:
+            work_item = match.group(1).strip()[:80]
+            proposals.append(
+                ActionProposal(
+                    kind="focus_block",
+                    title=f"Deep Work: {work_item}",
+                    rationale="Suggestion references a concrete focus item",
+                    tool_name="calendar.create_focus_block",
+                    tool_arguments={
+                        "title": f"Deep Work: {work_item}",
+                        "duration_minutes": 90,
+                        "preferred_time": "morning",
+                    },
+                )
+            )
+
+        issue_pattern = re.compile(
+            r"(?:issue|task|refactor|implement|fix|修复|重构|实现)[：:\s]*([^\n。；]+)",
+            re.IGNORECASE,
+        )
+        match = issue_pattern.search(checkin_raw or "")
+        if match:
+            task_title = match.group(1).strip()[:100]
+            proposals.append(
+                ActionProposal(
+                    kind="github_issue",
+                    title=task_title,
+                    rationale="Check-in describes a concrete engineering task",
+                    tool_name="github.create_issue",
+                    tool_arguments={
+                        "title": task_title,
+                        "body": "Created from WeatherFlow check-in.",
+                        "labels": ["wf"],
+                    },
+                )
+            )
+
+        return proposals
 
 
 __all__ = ["PlanningAgent"]

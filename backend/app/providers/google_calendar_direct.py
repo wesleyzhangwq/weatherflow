@@ -1,4 +1,8 @@
-"""Google Calendar direct connector for normalized dev review signals."""
+"""Google Calendar direct connector for normalized dev review signals.
+
+Deprecated: direct provider calls will be removed after MCP mode has been stable
+for one full release. Prefer DEV_REVIEW_PROVIDER_MODE=mcp going forward.
+"""
 
 from __future__ import annotations
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -171,6 +172,16 @@ class DevReviewRecord(DevReviewCreate):
     run: AgentRunRecord
 
 
+class ActionProposal(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    kind: Literal["calendar_event", "focus_block", "github_issue", "github_file_update"]
+    title: str
+    rationale: str
+    tool_name: str
+    tool_arguments: Dict[str, Any]
+    requires_confirmation: bool = True
+
+
 class DevReviewRunRequest(BaseModel):
     window_days: int = Field(default=7, ge=1, le=31)
     providers: List[Literal["github", "google_calendar"]] = Field(
@@ -200,6 +211,7 @@ __all__ = [
     "AgentRunStep",
     "AgentRunCreate",
     "AgentRunRecord",
+    "ActionProposal",
     "DevReviewCreate",
     "DevReviewRecord",
     "DevReviewRunRequest",
