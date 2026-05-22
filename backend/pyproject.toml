@@ -21,6 +21,7 @@ dependencies = [
     "apscheduler>=3.10,<4.0",
     "qdrant-client>=1.12,<2.0",
     "google-auth>=2.30,<3.0",
+    "mcp>=1.27.1",
 ]
 
 [project.optional-dependencies]
@@ -36,4 +37,5 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "../mcp_servers/tests"]
+pythonpath = [".", ".."]
