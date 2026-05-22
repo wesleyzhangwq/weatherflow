@@ -52,8 +52,9 @@ Next.js dashboard + wf CLI
  Dev Review providers: GitHub MCP + Google Calendar MCP
 ```
 
-More detail lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
+More detail lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md), and the
+[Google Calendar setup guide](docs/GOOGLE_CALENDAR_SETUP.md).
 
 ## Quick Start
 

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="640" viewBox="0 0 1120 640" role="img" aria-label="Google Auth Platform audience and test users">
+  <rect width="1120" height="640" fill="#f7f9fc"/>
+  <rect x="40" y="40" width="1040" height="560" rx="18" fill="#fff" stroke="#d9e2ef"/>
+  <rect x="40" y="40" width="240" height="560" rx="18" fill="#f1f5f9"/>
+  <text x="70" y="92" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#111827">Google Auth Platform</text>
+  <rect x="68" y="210" width="180" height="44" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="94" y="238" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#1e40af">Audience</text>
+  <text x="318" y="95" font-family="Arial, sans-serif" font-size="30" font-weight="700" fill="#111827">Audience</text>
+  <text x="318" y="135" font-family="Arial, sans-serif" font-size="18" fill="#475569">Publishing status: Testing</text>
+  <rect x="318" y="172" width="690" height="116" rx="12" fill="#fff7ed" stroke="#fed7aa"/>
+  <text x="350" y="214" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#9a3412">Testing mode</text>
+  <text x="350" y="247" font-family="Arial, sans-serif" font-size="17" fill="#7c2d12">Only listed test users can authorize the app before verification.</text>
+  <rect x="318" y="340" width="690" height="180" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="350" y="385" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#111827">Test users</text>
+  <rect x="350" y="412" width="150" height="48" rx="8" fill="#2563eb"/>
+  <text x="382" y="443" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#fff">Add users</text>
+  <rect x="540" y="412" width="360" height="48" rx="8" fill="#fff" stroke="#2563eb" stroke-width="3"/>
+  <text x="560" y="443" font-family="Arial, sans-serif" font-size="17" fill="#111827">your-gmail-address@gmail.com</text>
+  <text x="350" y="560" font-family="Arial, sans-serif" font-size="16" fill="#64748b">Add the same Google account you will use during the OAuth browser consent flow.</text>
+</svg>
