@@ -55,11 +55,10 @@ async def _github_direct(settings: Settings, *, window_days: int) -> ProviderCon
 
 
 async def _github_mcp(settings: Settings, *, window_days: int) -> ProviderContext:
-    from app.providers.github_mcp import fetch_github_context
-    owner, repo = _parse_repo(settings)
-    return await fetch_github_context(
-        owner=owner,
-        repo=repo,
+    from app.providers.github_mcp import fetch_github_context_multi_repo
+    repos = settings.parsed_monitored_repos
+    return await fetch_github_context_multi_repo(
+        repos=repos,
         window_days=window_days,
         mcp_command=settings.wf_github_mcp_command,
         timeout=settings.wf_mcp_tool_timeout_seconds,
@@ -108,11 +107,6 @@ async def _calendar_dual(
     except Exception:
         logger.exception("Calendar MCP provider failed in dual mode; returning direct result.")
     return direct
-
-
-def _parse_repo(settings: Settings) -> tuple[str, str]:
-    """Extract owner/repo from GITHUB_TOKEN env context; defaults to user's first repo."""
-    return "wesleyzhangwq", "weatherflow"
 
 
 def _log_github_comparison(direct: ProviderContext, mcp: ProviderContext) -> None:

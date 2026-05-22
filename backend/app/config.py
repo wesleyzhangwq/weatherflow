@@ -88,6 +88,11 @@ class Settings(BaseSettings):
 
     # ----- GitHub MCP (optional) -----
     github_token: str = Field(default="", alias="GITHUB_TOKEN")
+    monitored_github_repos: str = Field(
+        default="wesleyzhangwq/weatherflow",
+        alias="MONITORED_GITHUB_REPOS",
+        description="Comma-separated list of repos to monitor (owner/repo format)",
+    )
 
     # ----- Google Calendar MCP (optional) -----
     google_calendar_access_token: str = Field(default="", alias="GOOGLE_CALENDAR_ACCESS_TOKEN")
@@ -104,6 +109,16 @@ class Settings(BaseSettings):
         alias="MEMORY_MARKDOWN_DIR",
         description="Profile Markdown root; default DATA_DIR/memory",
     )
+
+    @property
+    def parsed_monitored_repos(self) -> list[tuple[str, str]]:
+        """Parse monitored repos from MONITORED_GITHUB_REPOS into list of (owner, repo) tuples."""
+        repos: list[tuple[str, str]] = []
+        for repo_str in self.monitored_github_repos.split(","):
+            parts = repo_str.strip().split("/")
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                repos.append((parts[0].strip(), parts[1].strip()))
+        return repos or [("wesleyzhangwq", "weatherflow")]  # fallback
 
     @property
     def db_path(self) -> str:
