@@ -1,0 +1,79 @@
+"""WF MCP stdio client — wraps the MCP SDK session for tool calls."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import shlex
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_TIMEOUT = 20.0
+
+
+class MCPToolClient:
+    """Lightweight wrapper around an MCP stdio session.
+
+    Usage::
+
+        client = MCPToolClient("uv run python -m mcp_servers.weatherflow_github.server")
+        async with client.session() as session:
+            tools = await client.list_tools(session)
+            result = await client.call_tool(session, "github.get_repo_status", {...})
+    """
+
+    def __init__(self, command: str, timeout: float = _DEFAULT_TIMEOUT) -> None:
+        self.command = command
+        self.timeout = timeout
+
+    @asynccontextmanager
+    async def session(self) -> AsyncGenerator[ClientSession, None]:
+        parts = shlex.split(self.command)
+        params = StdioServerParameters(command=parts[0], args=parts[1:])
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await asyncio.wait_for(session.initialize(), timeout=self.timeout)
+                yield session
+
+    async def list_tools(self, session: ClientSession) -> list[dict[str, Any]]:
+        try:
+            result = await asyncio.wait_for(session.list_tools(), timeout=self.timeout)
+            return [{"name": t.name, "description": t.description or ""} for t in result.tools]
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"MCP list_tools timed out after {self.timeout}s") from exc
+
+    async def call_tool(
+        self,
+        session: ClientSession,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> Any:
+        try:
+            result = await asyncio.wait_for(
+                session.call_tool(name, arguments),
+                timeout=self.timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"MCP tool '{name}' timed out after {self.timeout}s") from exc
+
+        if result.isError:
+            content = result.content[0].text if result.content else "unknown error"
+            raise RuntimeError(f"MCP tool '{name}' returned an error: {content}")
+
+        if not result.content:
+            return {}
+
+        import json
+        text = result.content[0].text
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, AttributeError):
+            return text
+
+
+__all__ = ["MCPToolClient"]

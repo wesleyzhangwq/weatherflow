@@ -63,6 +63,29 @@ class Settings(BaseSettings):
     chat_model_planning: str = Field(default="", alias="CHAT_MODEL_PLANNING")
     chat_model_memory: str = Field(default="", alias="CHAT_MODEL_MEMORY")
 
+    # ----- Provider mode -----
+    dev_review_provider_mode: str = Field(
+        default="direct",
+        alias="DEV_REVIEW_PROVIDER_MODE",
+        description="Accepted: direct | mcp | dual",
+    )
+    wf_github_mcp_command: str = Field(
+        default="uv run python -m mcp_servers.weatherflow_github.server",
+        alias="WF_GITHUB_MCP_COMMAND",
+    )
+    wf_calendar_mcp_command: str = Field(
+        default="uv run python -m mcp_servers.weatherflow_calendar.server",
+        alias="WF_CALENDAR_MCP_COMMAND",
+    )
+    wf_mcp_tool_timeout_seconds: float = Field(
+        default=20.0,
+        alias="WF_MCP_TOOL_TIMEOUT_SECONDS",
+    )
+    wf_mcp_write_tools_enabled: bool = Field(
+        default=False,
+        alias="WF_MCP_WRITE_TOOLS_ENABLED",
+    )
+
     # ----- GitHub MCP (optional) -----
     github_token: str = Field(default="", alias="GITHUB_TOKEN")
 
