@@ -7,3 +7,7 @@ dependencies = []
 
 [tool.uv.workspace]
 members = ["backend", "cli"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["backend", "."]
