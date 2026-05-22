@@ -115,6 +115,8 @@ class DevReviewProviderReadiness(BaseModel):
     required_env: str
     used_for: str
     blocking: bool = False
+    transport: Optional[str] = None
+    mode: Optional[str] = None
 
 
 class ProviderContext(BaseModel):

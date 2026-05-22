@@ -9,9 +9,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.agents.dev_review_agent import DevReviewAgent
 from app.config import get_settings
 from app.core.agent_runs import AgentRunTracker
-from app.providers.github_direct import GithubConnector, normalize_github_summary
+from app.mcp_client.provider_registry import get_calendar_context, get_github_context
 from app.providers.google_calendar_direct import (
-    GoogleCalendarConnector,
     has_calendar_credentials,
     resolve_calendar_token_file,
 )
@@ -45,6 +44,8 @@ def dev_review_providers() -> list[DevReviewProviderReadiness]:
         token_file=calendar_token_file,
         access_token=settings.google_calendar_access_token,
     )
+    mode = settings.dev_review_provider_mode
+    transport = "mcp" if mode in ("mcp", "dual") else "direct"
     return [
         DevReviewProviderReadiness(
             name="github",
@@ -53,6 +54,8 @@ def dev_review_providers() -> list[DevReviewProviderReadiness]:
             required_env="GITHUB_TOKEN",
             used_for="PRs, issues, reviews, repository activity",
             blocking=False,
+            transport=transport,
+            mode=mode,
         ),
         DevReviewProviderReadiness(
             name="google_calendar",
@@ -61,6 +64,8 @@ def dev_review_providers() -> list[DevReviewProviderReadiness]:
             required_env="GOOGLE_CALENDAR_TOKEN_FILE or GOOGLE_CALENDAR_ACCESS_TOKEN",
             used_for="meeting load, focus windows, calendar event titles",
             blocking=False,
+            transport=transport,
+            mode=mode,
         ),
     ]
 
@@ -96,12 +101,8 @@ async def create_dev_review_run(
             tracker.step("github", "skipped", reason)
         else:
             try:
-                summary = await GithubConnector(settings.github_token).fetch(
-                    days=payload.window_days
-                )
-                context = normalize_github_summary(
-                    summary,
-                    window_days=payload.window_days,
+                context = await get_github_context(
+                    settings, window_days=payload.window_days
                 )
                 contexts.append(context)
                 tracker.step(
@@ -144,12 +145,11 @@ async def create_dev_review_run(
             tracker.step("google_calendar", "skipped", reason)
         else:
             try:
-                context = await GoogleCalendarConnector(
-                    access_token=settings.google_calendar_access_token,
-                    token_file=calendar_token_file,
-                    calendar_id=settings.google_calendar_calendar_id,
-                    base_url=settings.google_calendar_base_url,
-                ).fetch(days=payload.window_days)
+                context = await get_calendar_context(
+                    settings,
+                    window_days=payload.window_days,
+                    calendar_token_file=calendar_token_file,
+                )
                 contexts.append(context)
                 tracker.step(
                     "google_calendar",
