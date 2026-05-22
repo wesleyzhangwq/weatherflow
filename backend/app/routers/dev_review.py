@@ -9,8 +9,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.agents.dev_review_agent import DevReviewAgent
 from app.config import get_settings
 from app.core.agent_runs import AgentRunTracker
-from app.mcp.github import GithubConnector, normalize_github_summary
-from app.mcp.google_calendar import (
+from app.providers.github_direct import GithubConnector, normalize_github_summary
+from app.providers.google_calendar_direct import (
     GoogleCalendarConnector,
     has_calendar_credentials,
     resolve_calendar_token_file,

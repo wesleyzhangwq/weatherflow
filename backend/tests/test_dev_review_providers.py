@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app.mcp.github import GithubConnector, normalize_github_summary
-from app.mcp.google_calendar import (
+from app.providers.github_direct import GithubConnector, normalize_github_summary
+from app.providers.google_calendar_direct import (
     GoogleCalendarConnector,
     load_calendar_access_token,
     resolve_calendar_token_file,
@@ -179,7 +179,7 @@ def test_load_calendar_access_token_prefers_token_file(tmp_path, monkeypatch) ->
         token = "file-token"
 
     monkeypatch.setattr(
-        "app.mcp.google_calendar.Credentials.from_authorized_user_file",
+        "app.providers.google_calendar_direct.Credentials.from_authorized_user_file",
         lambda path, scopes: FakeCreds(),
     )
 
@@ -208,7 +208,7 @@ def test_load_calendar_access_token_refreshes_expired_token(tmp_path, monkeypatc
             return '{"token": "refreshed-token"}'
 
     monkeypatch.setattr(
-        "app.mcp.google_calendar.Credentials.from_authorized_user_file",
+        "app.providers.google_calendar_direct.Credentials.from_authorized_user_file",
         lambda path, scopes: FakeCreds(),
     )
 
