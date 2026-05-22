@@ -368,9 +368,78 @@ async def create_focus_block(
     }
 
 
+async def update_event(
+    event_id: str,
+    calendar_id: str = "primary",
+    title: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    description: Optional[str] = None,
+    dry_run: bool = False,
+    *,
+    _client: Optional[httpx.AsyncClient] = None,
+) -> dict[str, Any]:
+    if not _write_tools_enabled() and not dry_run:
+        raise PermissionError("Calendar write tools are disabled.")
+
+    patch: dict[str, Any] = {}
+    if title is not None:
+        patch["summary"] = title
+    if description is not None:
+        patch["description"] = description
+    if start_time is not None:
+        patch["start"] = {"dateTime": start_time}
+    if end_time is not None:
+        patch["end"] = {"dateTime": end_time}
+
+    if dry_run:
+        return {"updated": False, "dry_run": True, "event_id": event_id, "patch": patch}
+
+    async with (_client or _build_client()) as client:
+        r = await client.patch(
+            f"/calendars/{_calendar_path(calendar_id)}/events/{event_id}",
+            json=patch,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+    return {
+        "updated": True,
+        "event": {
+            "id": data.get("id", event_id),
+            "title": data.get("summary", ""),
+            "html_link": data.get("htmlLink", ""),
+        },
+    }
+
+
+async def delete_event(
+    event_id: str,
+    calendar_id: str = "primary",
+    dry_run: bool = False,
+    *,
+    _client: Optional[httpx.AsyncClient] = None,
+) -> dict[str, Any]:
+    if not _write_tools_enabled() and not dry_run:
+        raise PermissionError("Calendar write tools are disabled.")
+
+    if dry_run:
+        return {"deleted": False, "dry_run": True, "event_id": event_id}
+
+    async with (_client or _build_client()) as client:
+        r = await client.delete(
+            f"/calendars/{_calendar_path(calendar_id)}/events/{event_id}",
+        )
+        r.raise_for_status()
+
+    return {"deleted": True, "event_id": event_id}
+
+
 __all__ = [
     "search_events",
     "find_free_slots",
     "create_event",
     "create_focus_block",
+    "update_event",
+    "delete_event",
 ]

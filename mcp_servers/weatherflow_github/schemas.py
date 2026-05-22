@@ -88,6 +88,44 @@ class GitHubGetFileInput(BaseModel):
         return v
 
 
+class GitHubListReposInput(BaseModel):
+    visibility: Literal["all", "public", "private"] = "all"
+    affiliation: str = "owner,collaborator,organization_member"
+    limit: int = 50
+
+
+class GitHubUpdateIssueInput(BaseModel):
+    owner: str
+    repo: str
+    issue_number: int
+    title: Optional[str] = None
+    body: Optional[str] = None
+    state: Optional[Literal["open", "closed"]] = None
+    labels: Optional[List[str]] = None
+    dry_run: bool = False
+
+    @field_validator("owner", "repo")
+    @classmethod
+    def non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must be non-empty")
+        return v
+
+
+class GitHubListPullRequestsInput(BaseModel):
+    owner: str
+    repo: str
+    state: Literal["open", "closed", "all"] = "open"
+    limit: int = 30
+
+    @field_validator("owner", "repo")
+    @classmethod
+    def non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must be non-empty")
+        return v
+
+
 class GitHubCreateOrUpdateFileInput(BaseModel):
     owner: str
     repo: str
@@ -113,4 +151,7 @@ __all__ = [
     "GitHubCreateIssueInput",
     "GitHubGetFileInput",
     "GitHubCreateOrUpdateFileInput",
+    "GitHubListReposInput",
+    "GitHubUpdateIssueInput",
+    "GitHubListPullRequestsInput",
 ]

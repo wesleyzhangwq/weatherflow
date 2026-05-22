@@ -75,6 +75,36 @@ class CalendarCreateFocusBlockInput(BaseModel):
         return v
 
 
+class CalendarUpdateEventInput(BaseModel):
+    event_id: str
+    calendar_id: str = "primary"
+    title: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    description: Optional[str] = None
+    dry_run: bool = False
+
+    @field_validator("event_id")
+    @classmethod
+    def non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("event_id must be non-empty")
+        return v
+
+
+class CalendarDeleteEventInput(BaseModel):
+    event_id: str
+    calendar_id: str = "primary"
+    dry_run: bool = False
+
+    @field_validator("event_id")
+    @classmethod
+    def non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("event_id must be non-empty")
+        return v
+
+
 class CalendarEventRead(BaseModel):
     id: str = ""
     title: str
@@ -95,6 +125,8 @@ __all__ = [
     "CalendarFindFreeSlotsInput",
     "CalendarCreateEventInput",
     "CalendarCreateFocusBlockInput",
+    "CalendarUpdateEventInput",
+    "CalendarDeleteEventInput",
     "CalendarEventRead",
     "CalendarFreeSlot",
 ]

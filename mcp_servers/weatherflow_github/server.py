@@ -13,6 +13,9 @@ from mcp_servers.weatherflow_github.tools import (
     get_recent_commits,
     get_repo_status,
     list_issues,
+    list_pull_requests,
+    list_repos,
+    update_issue,
 )
 
 mcp = FastMCP("WeatherFlow GitHub")
@@ -105,6 +108,52 @@ async def tool_create_or_update_file(
         expected_sha=expected_sha or None,
         dry_run=dry_run,
     )
+
+
+@mcp.tool(name="github.list_repos")
+async def tool_list_repos(
+    visibility: str = "all",
+    affiliation: str = "owner,collaborator,organization_member",
+    limit: int = 50,
+) -> dict:
+    """List repositories accessible to the authenticated user."""
+    return await list_repos(visibility=visibility, affiliation=affiliation, limit=limit)
+
+
+@mcp.tool(name="github.update_issue")
+async def tool_update_issue(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    title: str = "",
+    body: str = "",
+    state: str = "",
+    labels: str = "",
+    dry_run: bool = False,
+) -> dict:
+    """Update a GitHub issue. Requires WF_MCP_WRITE_TOOLS_ENABLED=true."""
+    label_list = [lb.strip() for lb in labels.split(",") if lb.strip()] if labels else None
+    return await update_issue(
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        title=title or None,
+        body=body or None,
+        state=state or None,
+        labels=label_list,
+        dry_run=dry_run,
+    )
+
+
+@mcp.tool(name="github.list_pull_requests")
+async def tool_list_pull_requests(
+    owner: str,
+    repo: str,
+    state: str = "open",
+    limit: int = 30,
+) -> dict:
+    """List pull requests for a repository."""
+    return await list_pull_requests(owner=owner, repo=repo, state=state, limit=limit)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp_servers.weatherflow_calendar.tools import (
     create_event,
     create_focus_block,
+    delete_event,
     find_free_slots,
     search_events,
+    update_event,
 )
 
 mcp = FastMCP("WeatherFlow Calendar")
@@ -92,6 +94,38 @@ async def tool_create_focus_block(
         calendar_id=calendar_id,
         dry_run=dry_run,
     )
+
+
+@mcp.tool(name="calendar.update_event")
+async def tool_update_event(
+    event_id: str,
+    calendar_id: str = "primary",
+    title: str = "",
+    start_time: str = "",
+    end_time: str = "",
+    description: str = "",
+    dry_run: bool = False,
+) -> dict:
+    """Update an existing calendar event. Requires WF_MCP_WRITE_TOOLS_ENABLED=true."""
+    return await update_event(
+        event_id=event_id,
+        calendar_id=calendar_id,
+        title=title or None,
+        start_time=start_time or None,
+        end_time=end_time or None,
+        description=description or None,
+        dry_run=dry_run,
+    )
+
+
+@mcp.tool(name="calendar.delete_event")
+async def tool_delete_event(
+    event_id: str,
+    calendar_id: str = "primary",
+    dry_run: bool = False,
+) -> dict:
+    """Delete a calendar event. Requires WF_MCP_WRITE_TOOLS_ENABLED=true."""
+    return await delete_event(event_id=event_id, calendar_id=calendar_id, dry_run=dry_run)
 
 
 if __name__ == "__main__":

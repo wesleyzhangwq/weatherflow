@@ -277,6 +277,106 @@ async def create_or_update_file(
     }
 
 
+async def list_repos(
+    visibility: str = "all",
+    affiliation: str = "owner,collaborator,organization_member",
+    limit: int = 50,
+    *,
+    _client: Optional[httpx.AsyncClient] = None,
+) -> dict[str, Any]:
+    async with (_client or build_github_client()) as client:
+        r = await client.get(
+            "/user/repos",
+            params={"visibility": visibility, "affiliation": affiliation, "per_page": min(limit, 100)},
+        )
+        r.raise_for_status()
+        raw = r.json()
+
+    repos = [
+        {
+            "full_name": repo.get("full_name", ""),
+            "default_branch": repo.get("default_branch", "main"),
+            "private": repo.get("private", False),
+            "updated_at": repo.get("updated_at", ""),
+        }
+        for repo in raw[:limit]
+    ]
+    return {"repos": repos}
+
+
+async def update_issue(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    title: Optional[str] = None,
+    body: Optional[str] = None,
+    state: Optional[str] = None,
+    labels: Optional[list[str]] = None,
+    dry_run: bool = False,
+    *,
+    _client: Optional[httpx.AsyncClient] = None,
+) -> dict[str, Any]:
+    if not _write_tools_enabled() and not dry_run:
+        raise PermissionError("GitHub write tools are disabled.")
+
+    patch: dict[str, Any] = {}
+    if title is not None:
+        patch["title"] = title
+    if body is not None:
+        patch["body"] = body
+    if state is not None:
+        patch["state"] = state
+    if labels is not None:
+        patch["labels"] = labels
+
+    if dry_run:
+        return {"updated": False, "dry_run": True, "issue_number": issue_number, "patch": patch}
+
+    async with (_client or build_github_client()) as client:
+        r = await client.patch(f"/repos/{owner}/{repo}/issues/{issue_number}", json=patch)
+        r.raise_for_status()
+        data = r.json()
+
+    return {
+        "updated": True,
+        "issue": {
+            "number": data.get("number", issue_number),
+            "title": data.get("title", ""),
+            "state": data.get("state", ""),
+            "url": data.get("html_url", ""),
+        },
+    }
+
+
+async def list_pull_requests(
+    owner: str,
+    repo: str,
+    state: str = "open",
+    limit: int = 30,
+    *,
+    _client: Optional[httpx.AsyncClient] = None,
+) -> dict[str, Any]:
+    async with (_client or build_github_client()) as client:
+        r = await client.get(
+            f"/repos/{owner}/{repo}/pulls",
+            params={"state": state, "per_page": min(limit, 100)},
+        )
+        r.raise_for_status()
+        raw = r.json()
+
+    prs = [
+        {
+            "number": pr.get("number"),
+            "title": pr.get("title", ""),
+            "state": pr.get("state", ""),
+            "updated_at": pr.get("updated_at", ""),
+            "url": pr.get("html_url", ""),
+        }
+        for pr in raw[:limit]
+    ]
+    return {"pull_requests": prs}
+
+
 __all__ = [
     "get_repo_status",
     "get_recent_commits",
@@ -284,4 +384,7 @@ __all__ = [
     "create_issue",
     "get_file",
     "create_or_update_file",
+    "list_repos",
+    "update_issue",
+    "list_pull_requests",
 ]
