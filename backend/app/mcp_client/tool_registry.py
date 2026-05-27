@@ -1,115 +1,246 @@
-"""Central registry of MCP tools with permissions and rate limiting."""
+"""ToolRegistry — three-mode catalog of Calendar + GitHub tools (ADR D18).
+
+Destructive tools are intentionally NOT registered: there is no path that
+exposes them to the LLM, so the agent cannot "discover" them. This is the
+v1's enforcement of architecture-v1.md §7.1's destructive-filtering rule.
+"""
 
 from __future__ import annotations
 
-import logging
-import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Dict, List, Literal
 
-logger = logging.getLogger(__name__)
+from app.memory.schemas import ToolMode
 
 
 @dataclass
-class ToolInfo:
-    """Metadata for a single MCP tool."""
+class Tool:
     name: str
+    mode: ToolMode
     description: str
-    provider: str  # e.g., "github", "google_calendar"
+    parameters: dict  # JSON schema
+    server: Literal["calendar", "github"]
+
+
+def _param(props: dict, required: list[str]) -> dict:
+    return {"type": "object", "properties": props, "required": required}
+
+
+# ---------------------------------------------------------------------------
+# Calendar tools (§7.2)
+# ---------------------------------------------------------------------------
+_CALENDAR_TOOLS: list[Tool] = [
+    Tool(
+        name="calendar.find_free_slots",
+        mode="read",
+        description="查找指定时间范围内的空档（自动避开已有事件）",
+        server="calendar",
+        parameters=_param(
+            {
+                "start_time": {"type": "string", "description": "ISO 8601 起始时刻"},
+                "end_time": {"type": "string", "description": "ISO 8601 截止时刻"},
+                "min_duration_minutes": {"type": "integer", "default": 45},
+            },
+            ["start_time", "end_time"],
+        ),
+    ),
+    Tool(
+        name="calendar.search_events",
+        mode="read",
+        description="列出指定时间范围的事件（list_events 的实现）",
+        server="calendar",
+        parameters=_param(
+            {
+                "start_time": {"type": "string"},
+                "end_time": {"type": "string"},
+                "keyword": {"type": "string"},
+                "calendar_id": {"type": "string", "default": "primary"},
+                "max_results": {"type": "integer", "default": 50},
+            },
+            ["start_time", "end_time"],
+        ),
+    ),
+    Tool(
+        name="calendar.create_focus_block",
+        mode="write",
+        description="在指定日期创建一个 deep work block，自动找到合适空档",
+        server="calendar",
+        parameters=_param(
+            {
+                "title": {"type": "string"},
+                "duration_minutes": {"type": "integer"},
+                "date": {"type": "string", "description": "YYYY-MM-DD"},
+                "preferred_time": {
+                    "type": "string",
+                    "enum": ["morning", "afternoon", "evening"],
+                    "default": "morning",
+                },
+                "priority": {"type": "string", "default": "high"},
+            },
+            ["title", "duration_minutes", "date"],
+        ),
+    ),
+    Tool(
+        name="calendar.create_event",
+        mode="write",
+        description="创建一般的日历事件",
+        server="calendar",
+        parameters=_param(
+            {
+                "title": {"type": "string"},
+                "start_time": {"type": "string"},
+                "end_time": {"type": "string"},
+                "description": {"type": "string"},
+            },
+            ["title", "start_time", "end_time"],
+        ),
+    ),
+    # update_event 与 delete_event 在 v1 不暴露给 agent（前者 write/后者 destructive）
+]
+
+
+# ---------------------------------------------------------------------------
+# GitHub tools (§7.3)
+# ---------------------------------------------------------------------------
+_GITHUB_TOOLS: list[Tool] = [
+    Tool(
+        name="github.get_repo_status",
+        mode="read",
+        description="获取指定 repo 的状态概况（最近 commit、open issues/PR）",
+        server="github",
+        parameters=_param(
+            {
+                "owner": {"type": "string"},
+                "repo": {"type": "string"},
+                "window_days": {"type": "integer", "default": 7},
+            },
+            ["owner", "repo"],
+        ),
+    ),
+    Tool(
+        name="github.get_recent_commits",
+        mode="read",
+        description="拉取最近的 commit 列表",
+        server="github",
+        parameters=_param(
+            {
+                "owner": {"type": "string"},
+                "repo": {"type": "string"},
+                "limit": {"type": "integer", "default": 30},
+            },
+            ["owner", "repo"],
+        ),
+    ),
+    Tool(
+        name="github.list_issues",
+        mode="read",
+        description="列出 issue",
+        server="github",
+        parameters=_param(
+            {
+                "owner": {"type": "string"},
+                "repo": {"type": "string"},
+                "state": {"type": "string", "enum": ["open", "closed", "all"], "default": "open"},
+                "limit": {"type": "integer", "default": 30},
+            },
+            ["owner", "repo"],
+        ),
+    ),
+    Tool(
+        name="github.list_pull_requests",
+        mode="read",
+        description="列出 PR",
+        server="github",
+        parameters=_param(
+            {
+                "owner": {"type": "string"},
+                "repo": {"type": "string"},
+                "state": {"type": "string", "enum": ["open", "closed", "all"], "default": "open"},
+                "limit": {"type": "integer", "default": 30},
+            },
+            ["owner", "repo"],
+        ),
+    ),
+    Tool(
+        name="github.list_repos",
+        mode="read",
+        description="列出你可访问的 repo",
+        server="github",
+        parameters=_param(
+            {"limit": {"type": "integer", "default": 30}},
+            [],
+        ),
+    ),
+    Tool(
+        name="github.create_issue",
+        mode="write",
+        description="创建一个 issue",
+        server="github",
+        parameters=_param(
+            {
+                "owner": {"type": "string"},
+                "repo": {"type": "string"},
+                "title": {"type": "string"},
+                "body": {"type": "string"},
+                "labels": {"type": "string", "description": "逗号分隔"},
+            },
+            ["owner", "repo", "title"],
+        ),
+    ),
+    # update_issue (write) 不暴露 — v1 保守
+    # close/delete_* (destructive) 完全不注册
+]
 
 
 @dataclass
-class ToolPermission:
-    """Access control policy for a tool."""
-    tool_name: str
-    allowed_agents: set[str] = field(default_factory=set)
-    max_calls_per_hour: int | None = None
+class ToolRegistry:
+    tools: Dict[str, Tool] = field(default_factory=dict)
+
+    def register(self, tool: Tool) -> None:
+        if tool.mode == "destructive":
+            # never register, see module docstring
+            return
+        self.tools[tool.name] = tool
+
+    def list_tools(self, *, mode: ToolMode | None = None) -> List[Tool]:
+        if mode is None:
+            return list(self.tools.values())
+        return [t for t in self.tools.values() if t.mode == mode]
+
+    def get(self, name: str) -> Tool | None:
+        return self.tools.get(name)
+
+    def openai_tool_schemas(self) -> List[dict]:
+        """Render as OpenAI/function-calling tool schemas."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                },
+            }
+            for t in self.tools.values()
+        ]
 
 
-class MCPToolRegistry:
-    """Central catalog of available tools with permissions and rate limits.
-
-    Tracks what tools exist, who can call them, and rate limits.
-    Tool metadata is populated from MCP providers at startup.
-    """
-
-    def __init__(self) -> None:
-        self.tools: dict[str, ToolInfo] = {}
-        self.permissions: dict[str, ToolPermission] = {}
-        self.call_history: dict[str, list[float]] = {}  # tool_name -> timestamps
-
-    def register_tool(self, info: ToolInfo) -> None:
-        """Register a tool discovered from an MCP provider."""
-        self.tools[info.name] = info
-        if info.name not in self.permissions:
-            self.permissions[info.name] = ToolPermission(tool_name=info.name)
-        if info.name not in self.call_history:
-            self.call_history[info.name] = []
-
-    def register_permission(self, permission: ToolPermission) -> None:
-        """Register access control for a tool."""
-        self.permissions[permission.tool_name] = permission
-
-    def grant_permission(
-        self,
-        agent_id: str,
-        tool_name: str,
-        max_calls_per_hour: int | None = None,
-    ) -> None:
-        """Grant an agent permission to call a tool."""
-        if tool_name not in self.permissions:
-            self.permissions[tool_name] = ToolPermission(tool_name=tool_name)
-        perm = self.permissions[tool_name]
-        perm.allowed_agents.add(agent_id)
-        if max_calls_per_hour is not None:
-            perm.max_calls_per_hour = max_calls_per_hour
-
-    def get_available_tools(self, agent_id: str) -> list[ToolInfo]:
-        """List tools available to this agent.
-
-        Only tools where the agent has explicit permission are available.
-        """
-        available = []
-        for tool_name, tool_info in self.tools.items():
-            can_call, _ = self.can_call_tool(agent_id, tool_name)
-            if can_call:
-                available.append(tool_info)
-        return available
-
-    def can_call_tool(self, agent_id: str, tool_name: str) -> tuple[bool, str]:
-        """Check if agent can call this tool now.
-
-        Returns: (can_call, reason) where reason is empty if can_call is True.
-
-        Permission model: agents must be explicitly granted permission. If a tool
-        has no agents in its allowed_agents set, no one can call it.
-        """
-        if tool_name not in self.tools:
-            return False, f"Tool '{tool_name}' not registered"
-
-        perm = self.permissions.get(tool_name)
-        # If no permission record or allowed_agents is empty, deny access
-        if not perm or not perm.allowed_agents:
-            return False, f"Agent '{agent_id}' not permitted to call '{tool_name}'"
-
-        # Agent must be in the allowed_agents set
-        if agent_id not in perm.allowed_agents:
-            return False, f"Agent '{agent_id}' not permitted to call '{tool_name}'"
-
-        # Check rate limit
-        if perm.max_calls_per_hour:
-            now = time.time()
-            hour_ago = now - 3600
-            recent_calls = [t for t in self.call_history[tool_name] if t > hour_ago]
-            if len(recent_calls) >= perm.max_calls_per_hour:
-                return False, f"Rate limit exceeded for '{tool_name}' ({perm.max_calls_per_hour} calls/hour)"
-
-        return True, ""
-
-    def record_tool_call(self, tool_name: str) -> None:
-        """Record that a tool was called (for rate limiting)."""
-        if tool_name in self.call_history:
-            self.call_history[tool_name].append(time.time())
+def build_default_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    for t in (*_CALENDAR_TOOLS, *_GITHUB_TOOLS):
+        reg.register(t)
+    return reg
 
 
-__all__ = ["ToolInfo", "ToolPermission", "MCPToolRegistry"]
+# Singleton — v1 only ever has one user, one registry.
+_REGISTRY: ToolRegistry | None = None
+
+
+def registry() -> ToolRegistry:
+    global _REGISTRY
+    if _REGISTRY is None:
+        _REGISTRY = build_default_registry()
+    return _REGISTRY
+
+
+__all__ = ["Tool", "ToolRegistry", "build_default_registry", "registry"]

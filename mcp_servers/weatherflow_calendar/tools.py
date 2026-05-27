@@ -25,7 +25,7 @@ def _load_access_token() -> str:
         from pathlib import Path
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
-        _SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+        _SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
         path = Path(token_file).expanduser()
         if path.is_file():
             try:

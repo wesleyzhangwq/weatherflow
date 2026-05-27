@@ -9,7 +9,11 @@ from typing import Optional
 import typer
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+# calendar.events: read + create + modify events on calendars the user owns.
+# Cannot delete calendars, change settings, or access other users' data.
+# This is the minimum scope needed for the Proposal write-tool loop
+# (create_focus_block / create_event) to actually take effect on Google.
+SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
 
 def default_token_path() -> Path:

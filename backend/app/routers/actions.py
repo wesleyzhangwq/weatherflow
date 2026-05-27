@@ -1,97 +1,187 @@
-"""Action execution endpoint — dispatches confirmed ActionProposals to MCP tools."""
+"""Proposal execution endpoint — §12.5 + §7.4."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.memory.schemas import ActionProposal
+from app.mcp_client import MCPToolClient
+from app.mcp_client.tool_registry import registry
+from app.memory import event_log
+from app.memory.schemas import ExecutedActionPayload
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/actions", tags=["actions"])
 
-_PROPOSALS: dict[str, ActionProposal] = {}
 
-_DESTRUCTIVE_TOOLS = {
-    "calendar.delete_event",
-    "calendar.update_event",
-    "github.update_issue",
-    "github.create_or_update_file",
-}
+class ConfirmIn(BaseModel):
+    confirmed: bool = True
 
 
-class ActionConfirmation(BaseModel):
-    confirmed: bool
-
-
-class ActionExecuteResult(BaseModel):
+class ExecutedOut(BaseModel):
     proposal_id: str
     tool_name: str
-    result: dict[str, Any]
+    executed_action_id: str
+    result: Any
 
 
-@router.post("/proposals", response_model=ActionProposal, status_code=201)
-def create_proposal(proposal: ActionProposal) -> ActionProposal:
-    _PROPOSALS[proposal.id] = proposal
-    return proposal
-
-
-@router.get("/proposals/{proposal_id}", response_model=ActionProposal)
-def get_proposal(proposal_id: str) -> ActionProposal:
-    proposal = _PROPOSALS.get(proposal_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Proposal not found.")
-    return proposal
-
-
-@router.post("/{proposal_id}/execute", response_model=ActionExecuteResult)
-async def execute_action(
-    proposal_id: str,
-    confirmation: ActionConfirmation,
-) -> ActionExecuteResult:
-    proposal = _PROPOSALS.get(proposal_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Proposal not found.")
-
-    if proposal.requires_confirmation and not confirmation.confirmed:
-        raise HTTPException(
-            status_code=400,
-            detail="Action requires explicit confirmation. Send confirmed=true.",
-        )
-
-    if proposal.tool_name in _DESTRUCTIVE_TOOLS and not confirmation.confirmed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tool '{proposal.tool_name}' is destructive and requires confirmed=true.",
-        )
-
-    settings = get_settings()
-    if proposal.kind in ("calendar_event", "focus_block"):
-        mcp_command = settings.wf_calendar_mcp_command
-    else:
-        mcp_command = settings.wf_github_mcp_command
-
-    try:
-        from app.mcp_client.client import MCPToolClient
-        client = MCPToolClient(mcp_command, timeout=settings.wf_mcp_tool_timeout_seconds)
-        async with client.session() as session:
-            result = await client.call_tool(session, proposal.tool_name, proposal.tool_arguments)
-    except Exception as exc:
-        logger.exception("Action execution failed for proposal %s", proposal_id)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Action execution failed: {exc}",
-        ) from exc
-
-    del _PROPOSALS[proposal_id]
-
-    return ActionExecuteResult(
-        proposal_id=proposal_id,
-        tool_name=proposal.tool_name,
-        result=result if isinstance(result, dict) else {"raw": result},
+def _derived_status(proposal_id: str) -> str:
+    """Compute proposal status by walking related events (ADR D9 — lazy)."""
+    rows = event_log.find_refs(
+        ref_key="proposal", ref_value=proposal_id, limit=20
     )
+    for r in rows:
+        if r.type == "executed_action":
+            return "confirmed"
+        if r.type == "proposal_rejected":
+            return "rejected"
+        if r.type == "proposal_expired":
+            return "expired"
+    return "pending"
+
+
+def _maybe_expire(proposal_id: str, created_at: str) -> bool:
+    """Write proposal_expired event if past expiry; return True if newly expired."""
+    s = get_settings()
+    try:
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if datetime.now(timezone.utc) - created < timedelta(hours=s.proposal_expiry_hours):
+        return False
+    event_log.append(
+        type="proposal_expired",
+        payload={"proposal_id": proposal_id},
+        refs={"proposal": proposal_id},
+    )
+    return True
+
+
+@router.get("/proposals", response_model=List[dict])
+def list_proposals(
+    *, limit: int = 50, status: Optional[str] = None
+) -> List[dict]:
+    rows = event_log.list_recent(types=["proposal"], limit=limit)
+    out: list[dict] = []
+    for r in rows:
+        current = _derived_status(r.id)
+        if current == "pending":
+            if _maybe_expire(r.id, r.timestamp):
+                current = "expired"
+        if status and current != status:
+            continue
+        out.append(
+            {
+                "id": r.id,
+                "timestamp": r.timestamp,
+                "tool_name": r.payload.get("tool_name"),
+                "arguments": r.payload.get("arguments"),
+                "rationale": r.payload.get("rationale"),
+                "conversation_id": r.payload.get("conversation_id"),
+                "status": current,
+            }
+        )
+    return out
+
+
+@router.get("/proposals/{proposal_id}", response_model=dict)
+def get_proposal(proposal_id: str) -> dict:
+    rec = event_log.get(proposal_id)
+    if rec is None or rec.type != "proposal":
+        raise HTTPException(status_code=404, detail="Proposal not found.")
+    status = _derived_status(proposal_id)
+    if status == "pending" and _maybe_expire(proposal_id, rec.timestamp):
+        status = "expired"
+    return {
+        "id": rec.id,
+        "timestamp": rec.timestamp,
+        "tool_name": rec.payload.get("tool_name"),
+        "arguments": rec.payload.get("arguments"),
+        "rationale": rec.payload.get("rationale"),
+        "conversation_id": rec.payload.get("conversation_id"),
+        "status": status,
+    }
+
+
+@router.post("/{proposal_id}/execute", response_model=ExecutedOut)
+async def execute_proposal(proposal_id: str, body: ConfirmIn) -> ExecutedOut:
+    if not body.confirmed:
+        raise HTTPException(status_code=400, detail="confirmed=true required to execute.")
+
+    rec = event_log.get(proposal_id)
+    if rec is None or rec.type != "proposal":
+        raise HTTPException(status_code=404, detail="Proposal not found.")
+    status = _derived_status(proposal_id)
+    if status == "pending" and _maybe_expire(proposal_id, rec.timestamp):
+        status = "expired"
+    if status != "pending":
+        raise HTTPException(status_code=409, detail=f"Proposal is already {status}.")
+
+    tool_name = rec.payload.get("tool_name")
+    tool = registry().get(tool_name) if tool_name else None
+    if tool is None:
+        raise HTTPException(status_code=400, detail=f"Tool {tool_name} not registered.")
+
+    s = get_settings()
+    command = (
+        s.wf_calendar_mcp_command if tool.server == "calendar" else s.wf_github_mcp_command
+    )
+    client = MCPToolClient(command, timeout=s.wf_mcp_tool_timeout_seconds)
+    try:
+        async with client.session() as session:
+            result = await client.call_tool(session, tool_name, rec.payload.get("arguments") or {})
+    except Exception as exc:
+        logger.exception("Proposal execution failed: %s", proposal_id)
+        raise HTTPException(status_code=502, detail=f"Tool execution failed: {exc}") from exc
+
+    payload = ExecutedActionPayload(
+        proposal_id=proposal_id,
+        tool_name=tool_name,
+        result=result if isinstance(result, (dict, list, str, int, float, bool)) else str(result),
+    )
+    eid = event_log.append(
+        type="executed_action",
+        payload=payload.model_dump(),
+        refs={"proposal": proposal_id},
+    )
+
+    asyncio.create_task(_run_dmw_safely())
+
+    return ExecutedOut(
+        proposal_id=proposal_id,
+        tool_name=tool_name,
+        executed_action_id=eid,
+        result=result,
+    )
+
+
+@router.post("/{proposal_id}/reject", response_model=dict)
+def reject_proposal(proposal_id: str) -> dict:
+    rec = event_log.get(proposal_id)
+    if rec is None or rec.type != "proposal":
+        raise HTTPException(status_code=404, detail="Proposal not found.")
+    if _derived_status(proposal_id) != "pending":
+        raise HTTPException(status_code=409, detail="Proposal is not pending.")
+    eid = event_log.append(
+        type="proposal_rejected",
+        payload={"proposal_id": proposal_id},
+        refs={"proposal": proposal_id},
+    )
+    return {"proposal_id": proposal_id, "rejection_event_id": eid}
+
+
+async def _run_dmw_safely() -> None:
+    try:
+        from app.memory.delayed_writer import maybe_update
+        await maybe_update()
+    except ImportError:
+        pass
+    except Exception:
+        logger.exception("DelayedMemoryWriter run failed")

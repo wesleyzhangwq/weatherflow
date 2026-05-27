@@ -1,5 +1,42 @@
 # WeatherFlow Philosophy
 
+## Product Constitution
+
+These nine rules govern every WeatherFlow product and architecture decision. When a
+feature idea, review comment, or user request conflicts with them, WeatherFlow does
+not build that feature.
+
+1. **Identity** — WeatherFlow is a rhythm coach and daily cockpit for developers
+   trapped in the "inefficient -> no review -> more inefficient" loop.
+2. **Two modes** — WeatherFlow has exactly two use modes:
+   - **Rhythm mirror:** daily state card plus hypothesis calibration. Low frequency,
+     high weight, passively triggered.
+   - **Daily cockpit:** chat for querying and planning Calendar and GitHub. High
+     frequency, lightweight, user initiated.
+   These modes feed each other. Neither is optional.
+3. **First screen** — The user's sense of their own state is the whole product.
+   The first screen is always the rhythm card. Schedule lookup requires scrolling
+   or typing. That friction is intentional.
+4. **Integration line** — Core integrations are only Calendar and GitHub. No other
+   integrations are planned; this is a product stance, not a temporary gap.
+5. **Promise** — WeatherFlow does not make you more efficient. It helps you see
+   your rhythm clearly and pulls you back before burnout. Additive tools such as
+   Reclaim or Motion fit more tasks in; WeatherFlow is subtractive and may suggest
+   doing less.
+6. **Philosophy** — WeatherFlow does not pretend to know you better than you know
+   yourself. We assemble understanding together. Therefore hypotheses must have
+   evidence, evidence must be traceable, and `profile.md` must remain readable and
+   editable by the user.
+7. **Passive stance** — WeatherFlow always waits for the user to come to it. It
+   does not proactively push, notify, or interrupt. Scheduled checks may update
+   evidence, but they do not generate hypotheses or disturb the user.
+8. **Only chat creates write proposals** — Proposals are generated only in the
+   Chat flow. Check-in and the home rhythm card never produce write-action
+   suggestions.
+9. **The card is the face** — The Hypothesis card is the core UI of the
+   WeatherFlow home screen. It must both display the current rhythm hypothesis and
+   let the user calibrate it.
+
 WeatherFlow is a developer rhythm companion.
 
 It exists for the developer who can think deeply, collect information quickly,

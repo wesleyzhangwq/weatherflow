@@ -1,60 +1,63 @@
-"""Test fixtures.
-
-We give every test a fresh on-disk SQLite file so FTS5 / triggers behave
-exactly like production.
-"""
+"""Shared fixtures: isolated DB + profile dir per test."""
 
 from __future__ import annotations
 
-import os
+import shutil
 import tempfile
-from typing import List, Sequence
+from pathlib import Path
+from typing import Iterator
 
 import pytest
 
-from app.config import get_settings
-from app.memory.store import init_db, set_db_path
+from app import config
+from app.memory import event_log
 
 
 @pytest.fixture(autouse=True)
-def _isolated_db(monkeypatch: pytest.MonkeyPatch) -> None:
-    tmpdir = tempfile.mkdtemp(prefix="wf-test-")
-    db_path = os.path.join(tmpdir, "weatherflow.db")
-    set_db_path(db_path)
-    monkeypatch.setenv("DATA_DIR", tmpdir)
-    get_settings.cache_clear()  # type: ignore[attr-defined]
-    init_db(db_path)
-    yield
-    set_db_path(None)  # type: ignore[arg-type]
-    get_settings.cache_clear()  # type: ignore[attr-defined]
+def isolated_storage(monkeypatch) -> Iterator[Path]:
+    """Each test gets a fresh sqlite DB + profile dir."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wf-test-"))
+    db_path = tmp_dir / "wf.db"
+    profile_dir = tmp_dir / "profile"
+    profile_dir.mkdir(exist_ok=True)
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_dir))
+    monkeypatch.setenv("MEMORY_MARKDOWN_DIR", str(profile_dir))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config.get_settings.cache_clear()
+
+    event_log.set_db_path(str(db_path))
+    event_log.init_db(str(db_path))
+
+    yield tmp_dir
+
+    event_log.set_db_path(None)  # type: ignore[arg-type]
+    config.get_settings.cache_clear()
+    shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-# ---------------------------------------------------------------------------
-class FakeLLM:
-    """Deterministic LLM stub. Returns whatever the test programs."""
+class StubLLM:
+    """LLM stub that returns canned responses based on a list."""
 
-    def __init__(self) -> None:
-        self.chat_responses: list[str] = []
-        self.embed_dim = 8
-        self.calls: list[tuple[str, Sequence]] = []
+    def __init__(self, responses: list[str]):
+        self._responses = list(responses)
+        self.calls: list[dict] = []
 
-    def queue_chat(self, *responses: str) -> None:
-        self.chat_responses.extend(responses)
+    async def chat(self, messages, *, model=None, temperature=0.4, max_tokens=None, response_format=None):
+        self.calls.append({"messages": list(messages), "response_format": response_format})
+        if not self._responses:
+            raise AssertionError("StubLLM out of responses")
+        return self._responses.pop(0)
 
-    async def chat(self, messages, **_kwargs) -> str:
-        self.calls.append(("chat", list(messages)))
-        if not self.chat_responses:
-            raise RuntimeError("no chat response queued")
-        return self.chat_responses.pop(0)
+    async def embed(self, texts, *, model=None):
+        return [[0.0] * 4 for _ in texts]
 
-    async def embed(self, texts, **_kwargs) -> List[List[float]]:
-        self.calls.append(("embed", list(texts)))
-        return [[float((i + 1) / (self.embed_dim + 1))] * self.embed_dim for i, _ in enumerate(texts)]
-
-    async def aclose(self) -> None:
+    async def aclose(self):
         return None
 
 
 @pytest.fixture
-def fake_llm() -> FakeLLM:
-    return FakeLLM()
+def stub_llm_factory():
+    def make(responses: list[str]) -> StubLLM:
+        return StubLLM(responses)
+    return make

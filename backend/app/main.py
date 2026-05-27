@@ -11,10 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.core.llm import build_llm_client
-from app.core.orchestrator import Orchestrator
-from app.core.scheduler import build_scheduler
-from app.memory.store import init_db
-from app.routers import actions, checkin, dev_review, feedback, mcp, memory, reflection, state
 
 logger = logging.getLogger(__name__)
 
@@ -25,29 +21,19 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(level=settings.log_level)
     logger.info("WeatherFlow starting up. db=%s", settings.db_path)
 
+    from app.memory.event_log import init_db
+
     init_db(settings.db_path)
     app.state.settings = settings
     app.state.llm = build_llm_client(settings)
 
-    async def _evening_job() -> None:
-        try:
-            logger.info("Evening reflection job firing.")
-            await Orchestrator(app.state.llm).daily_loop()
-        except Exception:
-            logger.exception("Evening reflection job failed.")
+    scheduler = None
+    try:
+        from app.core.scheduler import build_scheduler
 
-    async def _weekly_job() -> None:
-        try:
-            logger.info("Weekly review job firing.")
-            await Orchestrator(app.state.llm).weekly_loop()
-        except Exception:
-            logger.exception("Weekly review job failed.")
-
-    scheduler = build_scheduler(
-        settings,
-        daily_job=_evening_job,
-        weekly_job=_weekly_job,
-    )
+        scheduler = build_scheduler(settings)
+    except ImportError:
+        logger.info("Scheduler not yet implemented; skipping.")
     app.state.scheduler = scheduler
     if scheduler is not None:
         scheduler.start()
@@ -62,29 +48,26 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
     app = FastAPI(
         title="WeatherFlow",
-        description="A long-term growth companion agent.",
-        version="0.1.0",
+        description="A rhythm coach + daily cockpit for developers.",
+        version="1.0.0",
         lifespan=lifespan,
     )
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=get_settings().cors_origins,
+        allow_origins=settings.cors_origins,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    app.include_router(actions.router)
-    app.include_router(checkin.router)
-    app.include_router(feedback.router)
-    app.include_router(reflection.router)
-    app.include_router(state.router)
-    app.include_router(memory.router)
-    app.include_router(mcp.router)
-    app.include_router(dev_review.router)
+    # Routers wired up per phase
+    from app.routers import register_routers
+
+    register_routers(app)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
@@ -92,42 +75,30 @@ def create_app() -> FastAPI:
 
     @app.get("/api/meta/status", tags=["meta"])
     def meta_status() -> dict:
-        settings = get_settings()
-        scheduler = getattr(app.state, "scheduler", None)
-        data_dir = Path(settings.data_dir).expanduser()
-        memory_dir = Path(settings.resolved_memory_markdown_dir).expanduser()
+        s = get_settings()
+        sched = getattr(app.state, "scheduler", None)
         return {
             "status": "ok",
-            "data_dir": str(data_dir),
-            "db_path": settings.db_path,
-            "db_exists": Path(settings.db_path).exists(),
-            "memory_markdown_dir": str(memory_dir),
-            "memory_markdown_exists": memory_dir.exists(),
+            "data_dir": str(Path(s.data_dir).expanduser()),
+            "db_path": s.db_path,
+            "db_exists": Path(s.db_path).exists(),
+            "profile_dir": s.resolved_memory_markdown_dir,
             "scheduler": {
-                "enabled": settings.scheduler_enabled,
-                "running": bool(getattr(scheduler, "running", False)),
-                "jobs": [job.id for job in scheduler.get_jobs()] if scheduler else [],
+                "enabled": s.scheduler_enabled,
+                "running": bool(getattr(sched, "running", False)),
+                "jobs": [j.id for j in sched.get_jobs()] if sched else [],
             },
             "llm": {
-                "chat_configured": bool(settings.openai_api_key.strip()),
-                "embedding_configured": bool(
-                    (settings.embedding_api_key or settings.openai_api_key).strip()
-                ),
-                "chat_model": settings.chat_model,
-                "embedding_model": settings.embedding_model,
-                "embedding_dim": settings.embedding_dim,
+                "chat_model": s.chat_model,
+                "configured": bool(s.openai_api_key.strip()),
             },
-            "memory": {
-                "backend": "markdown_profile",
-            },
-            "cors_allowed_origins": settings.cors_origins,
         }
 
     @app.get("/", tags=["meta"])
     def root() -> dict[str, str]:
         return {
             "name": "WeatherFlow",
-            "tagline": "An AI companion for long-term human growth.",
+            "tagline": "Rhythm coach. Daily cockpit. Calendar + GitHub only.",
             "docs": "/docs",
         }
 

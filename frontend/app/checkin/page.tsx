@@ -1,203 +1,279 @@
 "use client";
 
 import { useState } from "react";
-import { ReflectionGrounding } from "@/components/ReflectionGrounding";
-import { SuggestionFeedback } from "@/components/SuggestionFeedback";
-import { api, type CheckinResponse } from "@/lib/api";
-import { patternExplainZh, patternLabelZh } from "@/lib/patternZh";
-import { displayRationaleZh } from "@/lib/rationaleZh";
-import { WEATHER_BLURB, WEATHER_GLYPH, WEATHER_LABEL_ZH } from "@/lib/weather";
+import Link from "next/link";
+import {
+  api,
+  type CheckinIn,
+  type Weather,
+  type CheckinFriction,
+  type HypothesisCard as HypCard
+} from "@/lib/api";
+import { WEATHER_SEMANTIC, WEATHER_TEXT } from "@/lib/labels";
+import { HypothesisCard } from "@/components/HypothesisCard";
 
-const WEATHER_OPTIONS = [
-  "☀ 清晰 / 有动力",
-  "⛅ 普通 / 稳定",
-  "☁ 有点乱 / 分散",
-  "🌧 压力大 / 疲惫",
-  "⛈ 失控 / 焦虑"
-] as const;
+const WEATHERS: Weather[] = [
+  "sunny",
+  "partly_cloudy",
+  "cloudy",
+  "rainy",
+  "thunderstorm",
+  "foggy"
+];
+const FRICTIONS: { value: CheckinFriction; label: string }[] = [
+  { value: "none", label: "（无）" },
+  { value: "task_complexity", label: "任务复杂度超预期" },
+  { value: "missing_info", label: "缺少信息或决策依赖" },
+  { value: "context_switch", label: "频繁切换上下文" },
+  { value: "external_block", label: "被外部阻塞" },
+  { value: "energy", label: "精力不足" }
+];
+
+type Phase = "form" | "submitting" | "done" | "error";
+
+const PROGRESS_STEPS = [
+  "已记录签到",
+  "装配 evidence bundle",
+  "调用 LLM 生成 hypothesis"
+];
 
 export default function CheckinPage() {
-  const [weatherChoice, setWeatherChoice] = useState("");
-  const [intention, setIntention] = useState("");
-  const [blocker, setBlocker] = useState("");
-  const [completed, setCompleted] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<CheckinResponse | null>(null);
+  const [phase, setPhase] = useState<Phase>("form");
+  const [weather, setWeather] = useState<Weather>("partly_cloudy");
+  const [project, setProject] = useState("");
+  const [friction, setFriction] = useState<CheckinFriction>("none");
+  const [text, setText] = useState("");
+  const [stepIdx, setStepIdx] = useState(0);
+  const [card, setCard] = useState<HypCard | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const onSubmit = async (e: React.FormEvent) => {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSubmitting(true);
+    setPhase("submitting");
     setError(null);
-    try {
-      const data = await api.submitCheckin({
-        status: weatherChoice || null,
-        raw: intention.trim()
-          ? `today_intention: ${intention.trim()}`
-          : null,
-        stuck_on: blocker.trim() || null,
-        did_today: completed.trim() || null,
-        anxiety: null
-      });
-      setResult(data);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    setStepIdx(0);
 
-  if (result) {
-    const glyph = WEATHER_GLYPH[result.state.weather_label];
-    const zhLabel = WEATHER_LABEL_ZH[result.state.weather_label];
-    const blurb = WEATHER_BLURB[result.state.weather_label];
-    const rationaleZh = displayRationaleZh(result.state.rationale);
-    return (
-      <div className="space-y-6">
-        <h1 className="font-serif text-4xl">谢谢你愿意坐下来写这几句。</h1>
-        <div className="card">
-          <div className="text-xs uppercase tracking-widest muted">今日天气</div>
-          <div className="mt-3 flex items-baseline gap-4">
-            <span className="text-5xl">{glyph}</span>
-            <div>
-              <span className="font-serif text-3xl">{zhLabel}</span>
-              <span className="text-sm muted ml-2">({result.state.weather_label})</span>
-              <p className="muted mt-1 text-sm">{blurb}</p>
-            </div>
-          </div>
-          {rationaleZh && (
-            <p className="mt-3 leading-relaxed">{rationaleZh}</p>
-          )}
-        </div>
-        <div className="card">
-          <div className="text-xs uppercase tracking-widest muted">反思</div>
-          <p className="mt-3 leading-relaxed whitespace-pre-wrap">
-            {result.reflection.content}
-          </p>
-          <ReflectionGrounding
-            sources={result.reflection.insights?.grounding_sources}
-          />
-        </div>
-        {result.patterns && result.patterns.length > 0 ? (
-          <div className="card">
-            <div className="text-xs uppercase tracking-widest muted">
-              本周模式（建议会参考这些信号）
-            </div>
-            <ul className="mt-3 space-y-2 text-sm">
-              {result.patterns.map((p) => (
-                <li key={p.code}>
-                  <span className="font-medium">
-                    {patternLabelZh(p.code, p.label)}
-                  </span>
-                  <p className="muted mt-0.5">
-                    {patternExplainZh(p.code, p.explanation)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {result.suggestion ? (
-          <div className="card">
-            <div className="text-xs uppercase tracking-widest muted">
-              轻轻的一句（结合状态与上方模式信号）
-            </div>
-            <p className="mt-3 leading-relaxed">{result.suggestion}</p>
-            <SuggestionFeedback
-              suggestionText={result.suggestion}
-              patternCodes={result.suggestion_pattern_codes ?? []}
-              reflectionId={result.reflection.id}
-            />
-          </div>
-        ) : null}
-        <div>
-          <a href="/" className="underline underline-offset-4">回到今日</a>
-        </div>
-      </div>
-    );
+    // Light-weight progress simulation: advance through the 3 stages while
+    // the sync API runs. Real backend timing is ~2-5s for LLM, so this gives
+    // the user something to watch.
+    const stepTimers = [
+      setTimeout(() => setStepIdx(1), 300),
+      setTimeout(() => setStepIdx(2), 1000)
+    ];
+
+    const body: CheckinIn = {
+      weather,
+      project: project.trim() || null,
+      friction_point: friction === "none" ? null : friction,
+      free_text: text.trim() || null
+    };
+
+    try {
+      const res = await api.submitCheckin(body);
+      stepTimers.forEach(clearTimeout);
+      // Backend returns a HypothesisPayload (no status field). Card view
+      // needs status='active' so the calibrate buttons render.
+      const fullCard: HypCard = {
+        id: res.hypothesis_id,
+        timestamp: new Date().toISOString(),
+        label: res.hypothesis.label,
+        confidence: res.hypothesis.confidence,
+        summary: res.hypothesis.summary,
+        evidence: res.hypothesis.evidence,
+        counter_evidence: res.hypothesis.counter_evidence ?? [],
+        missing_evidence: res.hypothesis.missing_evidence ?? [],
+        source_tag: res.hypothesis.source_tag,
+        conversation_id: res.hypothesis.conversation_id ?? null,
+        status: "active"
+      };
+      setCard(fullCard);
+      setStepIdx(PROGRESS_STEPS.length);
+      setPhase("done");
+    } catch (err) {
+      stepTimers.forEach(clearTimeout);
+      setError((err as Error).message);
+      setPhase("error");
+    }
+  }
+
+  function resetForm() {
+    setPhase("form");
+    setCard(null);
+    setStepIdx(0);
+    setText("");
+    setFriction("none");
+    setProject("");
+    setError(null);
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-6">
-      <h1 className="font-serif text-4xl">签到</h1>
-      <p className="muted">四个短问题，大约 1～3 分钟。不想答的可以空着。</p>
-
+    <div className="space-y-6 max-w-xl mx-auto">
       <div>
-        <div className="block text-sm muted mb-2">今天天气怎么样？</div>
-        <div className="muted mb-3 text-sm">你现在整体更像：</div>
-        <div className="flex flex-wrap gap-2">
-          {WEATHER_OPTIONS.map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              onClick={() =>
-                setWeatherChoice((cur) => (cur === opt ? "" : opt))
-              }
-              className={`rounded-lg border px-3 py-2 text-sm leading-snug transition-colors ${
-                weatherChoice === opt
-                  ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
-                  : "border-black/15 bg-white/60 dark:border-white/20 dark:bg-white/5 hover:border-black/30 dark:hover:border-white/40"
-              }`}
+        <div className="text-xs uppercase tracking-widest muted">签到 · T1</div>
+        <h1 className="mt-2 font-serif text-3xl tracking-tight">现在感觉怎样？</h1>
+        <p className="mt-1 text-sm muted">
+          三问：天气必填；项目、摩擦点和自由文本可选。一天可以做多次。
+        </p>
+      </div>
+
+      {phase !== "done" && (
+        <form
+          className={`card space-y-5 transition-opacity ${
+            phase === "submitting" ? "opacity-60 pointer-events-none" : ""
+          }`}
+          onSubmit={onSubmit}
+        >
+          <div>
+            <div className="text-xs uppercase tracking-widest muted">天气</div>
+            <div className="mt-2 grid grid-cols-3 md:grid-cols-6 gap-2">
+              {WEATHERS.map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => setWeather(w)}
+                  title={WEATHER_SEMANTIC[w]}
+                  className={`rounded-md border px-2 py-3 text-sm ${
+                    weather === w
+                      ? "border-black dark:border-white"
+                      : "border-black/10 dark:border-white/20"
+                  }`}
+                >
+                  {WEATHER_TEXT[w]}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs muted">
+              {WEATHER_TEXT[weather]} · {WEATHER_SEMANTIC[weather]}
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-widest muted" htmlFor="project">
+              项目（可选）
+            </label>
+            <input
+              id="project"
+              value={project}
+              onChange={(e) => setProject(e.target.value)}
+              placeholder="weatherflow"
+              className="mt-2 w-full rounded-md border border-black/10 dark:border-white/20 bg-transparent px-3 py-2"
+            />
+          </div>
+
+          <div>
+            <div className="text-xs uppercase tracking-widest muted">摩擦点（可选）</div>
+            <select
+              value={friction}
+              onChange={(e) => setFriction(e.target.value as CheckinFriction)}
+              className="mt-2 w-full rounded-md border border-black/10 dark:border-white/20 bg-transparent px-3 py-2"
             >
-              {opt}
-            </button>
-          ))}
-        </div>
-      </div>
+              {FRICTIONS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
-      <div>
-        <label className="block text-sm muted mb-2" htmlFor="intention">
-          今天最想完成的任务是什么？
-        </label>
-        <textarea
-          id="intention"
-          rows={2}
-          value={intention}
-          onChange={(e) => setIntention(e.target.value)}
-          className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
-          placeholder="（可选）"
-        />
-      </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest muted" htmlFor="free">
+              自由文本（可选）
+            </label>
+            <textarea
+              id="free"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={3}
+              placeholder="今天卡在 RAG / 准备晚上跑一组实验 / …"
+              className="mt-2 w-full rounded-md border border-black/10 dark:border-white/20 bg-transparent px-3 py-2"
+            />
+          </div>
 
-      <div>
-        <label className="block text-sm muted mb-2" htmlFor="blocker">
-          今天最可能拖住你的任务是什么？
-        </label>
-        <textarea
-          id="blocker"
-          rows={2}
-          value={blocker}
-          onChange={(e) => setBlocker(e.target.value)}
-          className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
-          placeholder="（可选）"
-        />
-      </div>
+          {phase === "error" && (
+            <p className="text-sm text-red-600">提交失败：{error}</p>
+          )}
 
-      <div>
-        <label className="block text-sm muted mb-2" htmlFor="completed">
-          今天已经完成了什么？
-        </label>
-        <textarea
-          id="completed"
-          rows={2}
-          value={completed}
-          onChange={(e) => setCompleted(e.target.value)}
-          className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-white/5 px-4 py-3 leading-relaxed focus:outline-none focus:ring-2 focus:ring-black/20 dark:focus:ring-white/30"
-          placeholder="（可选）"
-        />
-      </div>
-
-      {error && (
-        <div className="text-sm text-red-600 dark:text-red-400">{error}</div>
+          <button
+            type="submit"
+            disabled={phase === "submitting"}
+            className="w-full rounded-md bg-black px-4 py-2 text-white dark:bg-white dark:text-black disabled:opacity-60"
+          >
+            {phase === "submitting"
+              ? "提交中…"
+              : "提交签到 · 触发 hypothesis 生成"}
+          </button>
+        </form>
       )}
 
-      <button
-        type="submit"
-        disabled={submitting}
-        className="rounded-lg px-6 py-2 bg-black text-white dark:bg-white dark:text-black disabled:opacity-50"
-      >
-        {submitting ? "正在聆听…" : "提交"}
-      </button>
-    </form>
+      {phase === "submitting" && <ProgressLane currentStep={stepIdx} />}
+
+      {phase === "done" && card && (
+        <div className="space-y-4">
+          <div className="rounded-md bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-500/30 px-4 py-2.5 text-sm">
+            ✓ 已生成判断：<b>{card.label}</b> · conf{" "}
+            {(card.confidence * 100).toFixed(0)}% · 回主页校准
+          </div>
+
+          {/* Read-only preview of the freshly generated hypothesis.
+             Calibration happens on the home page (see CurrentStateWidget) —
+             this keeps check-in submission feedback simple and one-directional. */}
+          <HypothesisCard card={card} isTop={false} onCalibrated={() => {}} />
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={resetForm}
+              className="flex-1 rounded-md border border-black/10 dark:border-white/20 px-4 py-2"
+            >
+              再签一次
+            </button>
+            <Link
+              href="/"
+              className="flex-1 text-center rounded-md bg-black px-4 py-2 text-white dark:bg-white dark:text-black"
+            >
+              回主页
+            </Link>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressLane({ currentStep }: { currentStep: number }) {
+  return (
+    <div className="card space-y-2 text-sm">
+      {PROGRESS_STEPS.map((label, i) => {
+        const done = i < currentStep;
+        const active = i === currentStep;
+        return (
+          <div key={i} className="flex items-center gap-2">
+            <span
+              className={
+                done
+                  ? "text-emerald-600"
+                  : active
+                  ? "text-black dark:text-white"
+                  : "muted"
+              }
+            >
+              {done ? "✓" : active ? "⏳" : "·"}
+            </span>
+            <span
+              className={
+                done
+                  ? "text-emerald-600"
+                  : active
+                  ? ""
+                  : "muted"
+              }
+            >
+              {label}
+              {active && "…"}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }

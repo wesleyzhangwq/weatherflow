@@ -25,20 +25,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ----- LLM (OpenAI-compatible default) -----
+    # ----- LLM (OpenAI-compatible) -----
     openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     chat_model: str = Field(default="gpt-4o-mini", alias="CHAT_MODEL")
-    embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
-    embedding_dim: int = Field(default=1536, alias="EMBEDDING_DIM")
-    # Optional split: chat (e.g. DeepSeek) vs embeddings (e.g. Alibaba DashScope compatible).
-    # When empty, ``embed`` uses the same base URL + key as ``chat``.
-    embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
-    embedding_api_key: str = Field(default="", alias="EMBEDDING_API_KEY")
-
-    # ----- Anthropic adapter (reserved) -----
-    anthropic_base_url: str = Field(default="https://api.anthropic.com", alias="ANTHROPIC_BASE_URL")
-    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    chat_temperature: float = Field(default=0.4, alias="CHAT_TEMPERATURE")
 
     # ----- App -----
     data_dir: str = Field(default=str(_BACKEND_DIR / "data"), alias="DATA_DIR")
@@ -51,24 +42,22 @@ class Settings(BaseSettings):
         alias="CORS_ALLOWED_ORIGINS",
     )
 
-    # ----- Scheduler -----
+    # ----- Single user (v1 hard-codes 'default') -----
+    default_user_id: str = Field(default="default", alias="DEFAULT_USER_ID")
+    timezone: str = Field(default="local", alias="TIMEZONE")
+
+    # ----- Scheduler (T2 every 6 hours, fixed slots) -----
     scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
-    evening_reflection_cron: str = Field(default="22:00", alias="EVENING_REFLECTION_CRON")
-    weekly_review_cron: str = Field(default="sun:21:00", alias="WEEKLY_REVIEW_CRON")
-    scheduler_timezone: str = Field(default="local", alias="SCHEDULER_TIMEZONE")
-
-    # ----- Model routing (per-task) -----
-    chat_model_state: str = Field(default="", alias="CHAT_MODEL_STATE")
-    chat_model_reflection: str = Field(default="", alias="CHAT_MODEL_REFLECTION")
-    chat_model_planning: str = Field(default="", alias="CHAT_MODEL_PLANNING")
-    chat_model_memory: str = Field(default="", alias="CHAT_MODEL_MEMORY")
-
-    # ----- Provider mode -----
-    dev_review_provider_mode: str = Field(
-        default="direct",
-        alias="DEV_REVIEW_PROVIDER_MODE",
-        description="Accepted: direct | mcp | dual",
+    # 00:00, 06:00, 12:00, 18:00 local; overridable via env.
+    scheduled_check_hours: str = Field(
+        default="0,6,12,18", alias="SCHEDULED_CHECK_HOURS"
     )
+    # 12-hour fallback heartbeat for DelayedMemoryWriter
+    memory_writer_interval_hours: int = Field(
+        default=12, alias="MEMORY_WRITER_INTERVAL_HOURS"
+    )
+
+    # ----- MCP servers -----
     wf_github_mcp_command: str = Field(
         default="uv run python -m mcp_servers.weatherflow_github.server",
         alias="WF_GITHUB_MCP_COMMAND",
@@ -78,23 +67,24 @@ class Settings(BaseSettings):
         alias="WF_CALENDAR_MCP_COMMAND",
     )
     wf_mcp_tool_timeout_seconds: float = Field(
-        default=20.0,
-        alias="WF_MCP_TOOL_TIMEOUT_SECONDS",
+        default=20.0, alias="WF_MCP_TOOL_TIMEOUT_SECONDS"
     )
+    # MCP server-side safety switch. Default true because Backend already
+    # gates write tools via the Proposal flow (ADR D19) — the MCP-side switch
+    # is defence-in-depth, not the primary control. Set false to dry-run
+    # everything (useful for offline debugging without touching real services).
     wf_mcp_write_tools_enabled: bool = Field(
-        default=False,
-        alias="WF_MCP_WRITE_TOOLS_ENABLED",
+        default=True, alias="WF_MCP_WRITE_TOOLS_ENABLED"
     )
 
-    # ----- GitHub MCP (optional) -----
+    # ----- GitHub -----
     github_token: str = Field(default="", alias="GITHUB_TOKEN")
     monitored_github_repos: str = Field(
         default="wesleyzhangwq/weatherflow",
         alias="MONITORED_GITHUB_REPOS",
-        description="Comma-separated list of repos to monitor (owner/repo format)",
     )
 
-    # ----- Google Calendar MCP (optional) -----
+    # ----- Google Calendar -----
     google_calendar_access_token: str = Field(default="", alias="GOOGLE_CALENDAR_ACCESS_TOKEN")
     google_calendar_token_file: str = Field(default="", alias="GOOGLE_CALENDAR_TOKEN_FILE")
     google_calendar_calendar_id: str = Field(default="primary", alias="GOOGLE_CALENDAR_CALENDAR_ID")
@@ -103,22 +93,43 @@ class Settings(BaseSettings):
         alias="GOOGLE_CALENDAR_BASE_URL",
     )
 
-    # ----- Readable memory -----
-    memory_markdown_dir: str = Field(
-        default="",
-        alias="MEMORY_MARKDOWN_DIR",
-        description="Profile Markdown root; default DATA_DIR/memory",
-    )
+    # ----- Profile.md (L3) -----
+    memory_markdown_dir: str = Field(default="", alias="MEMORY_MARKDOWN_DIR")
+
+    # ----- ContextLoader -----
+    bundle_token_budget: int = Field(default=8000, alias="BUNDLE_TOKEN_BUDGET")
+
+    # ----- ReAct loop -----
+    rhythm_agent_max_turns: int = Field(default=8, alias="RHYTHM_AGENT_MAX_TURNS")
+
+    # ----- DelayedMemoryWriter thresholds -----
+    dmw_section_cooldown_hours: int = Field(default=24, alias="DMW_SECTION_COOLDOWN_HOURS")
+    dmw_pattern_window_days: int = Field(default=14, alias="DMW_PATTERN_WINDOW_DAYS")
+    dmw_pattern_min_count: int = Field(default=3, alias="DMW_PATTERN_MIN_COUNT")
+    dmw_min_confidence: float = Field(default=0.6, alias="DMW_MIN_CONFIDENCE")
+
+    # ----- Proposal expiry -----
+    proposal_expiry_hours: int = Field(default=24, alias="PROPOSAL_EXPIRY_HOURS")
 
     @property
     def parsed_monitored_repos(self) -> list[tuple[str, str]]:
-        """Parse monitored repos from MONITORED_GITHUB_REPOS into list of (owner, repo) tuples."""
         repos: list[tuple[str, str]] = []
         for repo_str in self.monitored_github_repos.split(","):
             parts = repo_str.strip().split("/")
             if len(parts) == 2 and parts[0].strip() and parts[1].strip():
                 repos.append((parts[0].strip(), parts[1].strip()))
-        return repos or [("wesleyzhangwq", "weatherflow")]  # fallback
+        return repos
+
+    @property
+    def parsed_scheduled_check_hours(self) -> list[int]:
+        out: list[int] = []
+        for h in self.scheduled_check_hours.split(","):
+            h = h.strip()
+            if h.isdigit():
+                hour = int(h)
+                if 0 <= hour < 24:
+                    out.append(hour)
+        return sorted(set(out)) or [0, 6, 12, 18]
 
     @property
     def db_path(self) -> str:
@@ -134,11 +145,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        origins = [
-            origin.strip()
-            for origin in self.cors_allowed_origins.split(",")
-            if origin.strip()
-        ]
+        origins = [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
         return origins or ["http://127.0.0.1:3000", "http://localhost:3000"]
 
 
