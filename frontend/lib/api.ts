@@ -19,234 +19,199 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ---- Types (mirror of backend pydantic models) ----
-export type WeatherLabel =
-  | "Momentum"
-  | "Confusion"
-  | "Burnout"
-  | "Overload"
-  | "Recovery";
+// ----- Types mirror backend pydantic schemas -----
+export type Weather =
+  | "sunny"
+  | "partly_cloudy"
+  | "cloudy"
+  | "rainy"
+  | "thunderstorm"
+  | "foggy";
 
-export interface UserState {
-  focus: number;
-  stress: number;
-  burnout: number;
-  momentum: number;
-  confidence: number;
-  motivation: number;
-  weather_label: WeatherLabel;
-  rationale?: string | null;
-  ts?: string | null;
-}
-
-export interface StateTrendPoint {
-  ts: string;
-  focus: number;
-  stress: number;
-  burnout: number;
-  momentum: number;
-  confidence: number;
-  motivation: number;
-  weather_label: WeatherLabel;
-}
-
-export interface Reflection {
-  id: number;
-  date: string;
-  kind: "daily" | "weekly";
-  content: string;
-  insights?: ReflectionInsights | null;
-  created_at: string;
-}
-
-export type GroundingSourceType =
-  | "checkin"
-  | "state"
-  | "patterns"
-  | "dev_review"
-  | "memory";
-
-export interface GroundingSource {
-  type: GroundingSourceType;
-  label: string;
-  summary: string;
-}
-
-export interface ReflectionInsights {
-  weather_label?: WeatherLabel | null;
-  checkins_considered?: number;
-  suggestion?: string;
-  grounding_sources?: GroundingSource[];
-}
+export type CheckinFriction =
+  | "task_complexity"
+  | "missing_info"
+  | "context_switch"
+  | "external_block"
+  | "energy"
+  | "none";
 
 export interface CheckinIn {
-  status?: string | null;
-  did_today?: string | null;
-  stuck_on?: string | null;
-  anxiety?: string | null;
-  raw?: string | null;
+  weather: Weather;
+  project?: string | null;
+  friction_point?: CheckinFriction | null;
+  free_text?: string | null;
 }
 
-export interface PatternMetric {
-  name: string;
-  current: number;
-  previous: number;
-  delta: number;
-  pct_delta: number | null;
+export type HypothesisLabel =
+  | "Flow"
+  | "Recovery"
+  | "Steady"
+  | "Overload"
+  | "Blocked"
+  | "Fragmented";
+
+export type SourceTag = "checkin" | "scheduled" | "chat" | "recalibrate";
+
+export interface Evidence {
+  text: string;
+  source_event_id: string;
 }
 
-export interface PatternHit {
-  code: string;
-  severity: "info" | "watch" | "alert";
-  label: string;
-  explanation: string;
-  evidence: Record<string, unknown>;
-}
-
-export interface PatternReport {
-  window_days: number;
-  metrics: PatternMetric[];
-  patterns: PatternHit[];
+export interface HypothesisCard {
+  id: string;
+  timestamp: string;
+  label: HypothesisLabel;
+  confidence: number;
+  summary: string;
+  evidence: Evidence[];
+  counter_evidence: Evidence[];
+  missing_evidence: string[];
+  source_tag: SourceTag;
+  conversation_id?: string | null;
+  status: "active" | "confirmed" | "rejected" | "partial" | "expired";
 }
 
 export interface CheckinResponse {
-  checkin: CheckinIn & { id: number; date: string; created_at: string };
-  state: UserState;
-  reflection: Reflection;
-  suggestion: string;
-  patterns: PatternHit[];
-  suggestion_pattern_codes: string[];
-  pattern_window_days: number;
+  checkin_id: string;
+  hypothesis_id: string;
+  hypothesis: HypothesisCard;
 }
 
-export interface SuggestionFeedbackIn {
-  helpful: boolean;
-  suggestion_text?: string;
-  pattern_codes?: string[];
-  reflection_id?: number;
-  session_id?: string;
-  note?: string | null;
-}
-
-export type MemoryFeedbackType =
-  | "accurate"
-  | "inaccurate"
-  | "stale"
-  | "important";
-
-export interface MemoryFeedbackIn {
-  profile_key: string;
-  feedback_type: MemoryFeedbackType;
-  profile_value_snapshot?: string;
-  session_id?: string;
+export interface ProposalCard {
+  id: string;
+  timestamp: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  rationale: string;
+  conversation_id?: string | null;
+  status: "pending" | "confirmed" | "rejected" | "expired";
 }
 
 export interface ProfileOut {
-  markdown: string;
   path: string;
+  markdown: string;
+  sections: Record<string, string>;
 }
 
-export type DevWeather =
-  | "Deep Work"
-  | "Shipping"
-  | "Collaboration Heavy"
-  | "Fragmented"
-  | "Blocked";
-
-export interface AgentRunStep {
-  name: string;
-  status: "success" | "partial" | "failed" | "skipped";
-  summary: string;
-  metadata: Record<string, unknown>;
+export interface EventRecord {
+  id: string;
+  type: string;
+  user_id: string;
+  timestamp: string;
+  payload: Record<string, unknown>;
+  refs: Record<string, unknown>;
 }
 
-export interface AgentRunRecord {
-  id: number;
-  run_type: "dev_review";
-  status: "running" | "success" | "partial" | "failed";
-  started_at: string;
-  finished_at?: string | null;
-  input: Record<string, unknown>;
-  steps: AgentRunStep[];
-  error?: string | null;
+export interface DashboardSnapshot {
+  today_calendar: {
+    event_count: number;
+    total_minutes: number;
+    next_event_summary: string | null;
+    next_event_start: string | null;
+    has_data: boolean;
+  };
+  this_week_github: {
+    commits: number;
+    open_prs: number;
+    active_repos: string[];
+    window_days: number;
+    has_data: boolean;
+  };
+  scheduler: {
+    last_check_at: string | null;
+    last_check_minutes_ago: number | null;
+    next_check_at: string | null;
+    next_check_minutes: number | null;
+  };
+  pending_proposals_count: number;
+  recent_rhythm: Array<{
+    timestamp: string;
+    label: HypothesisLabel;
+    verdict: "confirmed" | "rejected" | "partial" | "pending";
+  }>;
+  profile: {
+    active_projects_preview: string[];
+    last_patch_at: string | null;
+    last_patch_minutes_ago: number | null;
+  };
+  latest_hypothesis: {
+    id: string;
+    label: HypothesisLabel;
+    confidence: number;
+    summary: string;
+    source_tag: SourceTag;
+    timestamp: string;
+    minutes_ago: number;
+    status: "active" | "confirmed" | "rejected" | "partial" | "expired";
+  } | null;
+  latest_checkin: {
+    id: string;
+    weather: Weather;
+    project: string | null;
+    friction_point: CheckinFriction | null;
+    free_text: string | null;
+    timestamp: string;
+    minutes_ago: number;
+  } | null;
 }
 
-export interface DevReview {
-  id: number;
-  run_id: number;
-  window_days: number;
-  summary: string;
-  dev_weather: DevWeather;
-  main_work_threads: string[];
-  shipping_progress: string[];
-  collaboration_load: string[];
-  meeting_load: string[];
-  rhythm_risks: string[];
-  next_week_suggestion: string;
-  source_coverage: Record<string, unknown>;
-  created_at: string;
-  run: AgentRunRecord;
-}
-
-export type DevReviewProviderReadinessStatus = "ready" | "needs_config";
-
-export interface DevReviewProviderReadiness {
-  name: "github" | "google_calendar";
-  label: string;
-  status: DevReviewProviderReadinessStatus;
-  required_env: string;
-  used_for: string;
-  blocking: boolean;
-}
-
-// ---- Endpoints ----
+// ----- Endpoints -----
 export const api = {
-  currentState: () => request<UserState>("/api/state/current"),
-  stateTrend: (days = 14) =>
-    request<StateTrendPoint[]>(`/api/state/trend?days=${days}`),
-  patterns: (window = 7) =>
-    request<PatternReport>(`/api/state/patterns?window_days=${window}`),
-  reflections: (limit = 5) =>
-    request<Reflection[]>(`/api/reflection?limit=${limit}`),
-  runReflection: (kind: "daily" | "weekly" = "daily") =>
-    request<Reflection>(`/api/reflection/run?kind=${kind}`, { method: "POST" }),
+  hypotheses: (limit = 3) =>
+    request<HypothesisCard[]>(`/api/hypotheses?limit=${limit}`),
+  hypothesisHistory: (limit = 50) =>
+    request<HypothesisCard[]>(`/api/hypotheses/history?limit=${limit}`),
   submitCheckin: (body: CheckinIn) =>
     request<CheckinResponse>("/api/checkin", {
       method: "POST",
       body: JSON.stringify(body)
     }),
-  submitSuggestionFeedback: (body: SuggestionFeedbackIn) =>
-    request<{ status: string }>("/api/feedback/suggestion", {
+  submitFeedback: (
+    hypothesisId: string,
+    verdict: "confirmed" | "rejected" | "partial"
+  ) =>
+    request<{ feedback_id: string; hypothesis_id: string; verdict: string }>(
+      `/api/hypotheses/${hypothesisId}/feedback`,
+      { method: "POST", body: JSON.stringify({ verdict }) }
+    ),
+  profile: () => request<ProfileOut>("/api/profile"),
+  event: (eventId: string) =>
+    request<EventRecord>(`/api/events/${encodeURIComponent(eventId)}`),
+  proposals: (status?: string) =>
+    request<ProposalCard[]>(
+      "/api/actions/proposals" + (status ? `?status=${status}` : "")
+    ),
+  executeProposal: (proposalId: string) =>
+    request<{ proposal_id: string; tool_name: string; result: unknown }>(
+      `/api/actions/${encodeURIComponent(proposalId)}/execute`,
+      { method: "POST", body: JSON.stringify({ confirmed: true }) }
+    ),
+  rejectProposal: (proposalId: string) =>
+    request(`/api/actions/${encodeURIComponent(proposalId)}/reject`, {
       method: "POST",
-      body: JSON.stringify({
-        helpful: body.helpful,
-        suggestion_text: body.suggestion_text ?? "",
-        pattern_codes: body.pattern_codes ?? [],
-        reflection_id: body.reflection_id ?? null,
-        session_id: body.session_id ?? "default",
-        note: body.note ?? null
-      })
+      body: "{}"
     }),
-  submitMemoryFeedback: (body: MemoryFeedbackIn) =>
-    request<{ status: string }>("/api/feedback/memory", {
-      method: "POST",
-      body: JSON.stringify({
-        profile_key: body.profile_key,
-        feedback_type: body.feedback_type,
-        profile_value_snapshot: body.profile_value_snapshot ?? "",
-        session_id: body.session_id ?? "default"
-      })
-    }),
-  profile: () => request<ProfileOut>("/api/memory/profile"),
-  latestDevReview: () =>
-    request<DevReview | null>("/api/dev-review/runs/latest"),
-  devReviewHistory: (limit = 5) =>
-    request<DevReview[]>(`/api/dev-review/runs?limit=${limit}`),
-  runDevReview: (windowDays = 7) =>
-    request<DevReview>("/api/dev-review/runs", {
-      method: "POST",
-      body: JSON.stringify({ window_days: windowDays })
-    }),
-  devReviewProviders: () =>
-    request<DevReviewProviderReadiness[]>("/api/dev-review/providers")
+  dashboardSnapshot: () => request<DashboardSnapshot>("/api/dashboard/snapshot"),
+  chatHistory: (conversationId: string) =>
+    request<Array<{ kind: string; timestamp: string; data: Record<string, unknown> }>>(
+      `/api/chat/${encodeURIComponent(conversationId)}/history`
+    ),
+  conversations: () =>
+    request<
+      Array<{
+        conversation_id: string;
+        last_activity: string;
+        first_user_message: string | null;
+        turn_count: number;
+      }>
+    >("/api/chat/conversations")
 };
+
+// ----- Conversation id helper -----
+export function newConversationId(): string {
+  // ULID-ish (not RFC-strict; backend treats as opaque per ADR D5)
+  const t = Date.now().toString(36);
+  const r = Math.random().toString(36).slice(2, 10);
+  return `conv_${t}_${r}`;
+}

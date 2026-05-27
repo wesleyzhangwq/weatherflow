@@ -25,6 +25,7 @@ frontend/.next/
 frontend/out/
 frontend/.turbo/
 frontend/dist/
+*.tsbuildinfo
 
 # ===== CLI dev state =====
 .weatherflow/

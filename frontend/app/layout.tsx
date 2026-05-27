@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "WeatherFlow",
-  description: "面向开发者节奏与行动状态的本地 AI 伴侣。"
+  description: "节奏镜像 + 日常驾驶舱。Calendar + GitHub。"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -17,15 +17,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               WeatherFlow
             </Link>
             <nav className="flex gap-5 text-sm muted">
-              <Link href="/" className="hover:opacity-80">今日</Link>
+              <Link href="/" className="hover:opacity-80">节奏</Link>
               <Link href="/checkin" className="hover:opacity-80">签到</Link>
-              <Link href="/reflection" className="hover:opacity-80">反思</Link>
+              <Link href="/chat" className="hover:opacity-80">对话</Link>
+              <Link href="/profile" className="hover:opacity-80">画像</Link>
             </nav>
           </div>
         </header>
         <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
         <footer className="mx-auto max-w-5xl px-6 py-10 text-xs muted">
-          开发节奏 · 本地优先 · 以记忆为中心
+          节奏镜像 · 日常驾驶舱 · 本地优先 · v1
         </footer>
       </body>
     </html>

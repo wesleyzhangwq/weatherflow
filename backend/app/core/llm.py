@@ -1,16 +1,14 @@
-"""Unified LLM client.
+"""Unified LLM client (OpenAI-compatible chat).
 
-Provider strategy:
-- Default: OpenAI-compatible HTTP API (any gateway via OPENAI_BASE_URL).
-- Anthropic adapter is a stub for future swap. Agents must depend ONLY on the
-  ``LLMClient`` protocol so swapping a provider does not require touching them.
+v1 only needs `.chat()`; embeddings were dropped along with qdrant.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, List, Optional, Protocol, Sequence
+import re
+from typing import Any, Optional, Protocol, Sequence
 
 import httpx
 
@@ -19,9 +17,6 @@ from app.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Public protocol the rest of the app depends on
-# ---------------------------------------------------------------------------
 class LLMClient(Protocol):
     async def chat(
         self,
@@ -33,23 +28,11 @@ class LLMClient(Protocol):
         response_format: Optional[dict[str, Any]] = None,
     ) -> str: ...
 
-    async def embed(
-        self, texts: Sequence[str], *, model: Optional[str] = None
-    ) -> List[List[float]]: ...
-
     async def aclose(self) -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# OpenAI-compatible client (the only one wired up in MVP)
-# ---------------------------------------------------------------------------
 class OpenAICompatibleClient:
-    """Talks to any OpenAI-compatible HTTP gateway.
-
-    Endpoints used:
-      POST  {base}/chat/completions
-      POST  {base}/embeddings
-    """
+    """Talks to any OpenAI-compatible /chat/completions gateway."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -61,20 +44,9 @@ class OpenAICompatibleClient:
             },
             timeout=httpx.Timeout(60.0, connect=10.0),
         )
-        embed_base = (settings.embedding_base_url or settings.openai_base_url).rstrip("/")
-        embed_key = settings.embedding_api_key or settings.openai_api_key
-        self._embed_client = httpx.AsyncClient(
-            base_url=embed_base,
-            headers={
-                "Authorization": f"Bearer {embed_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=httpx.Timeout(60.0, connect=10.0),
-        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
-        await self._embed_client.aclose()
 
     async def chat(
         self,
@@ -103,59 +75,35 @@ class OpenAICompatibleClient:
         except (KeyError, IndexError) as exc:
             raise RuntimeError(f"Unexpected chat response shape: {data!r}") from exc
 
-    async def embed(
-        self, texts: Sequence[str], *, model: Optional[str] = None
-    ) -> List[List[float]]:
-        if not texts:
-            return []
-        payload = {
-            "model": model or self._settings.embedding_model,
-            "input": list(texts),
-        }
-        resp = await self._embed_client.post("/embeddings", json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        try:
-            return [row["embedding"] for row in data["data"]]
-        except (KeyError, TypeError) as exc:
-            raise RuntimeError(f"Unexpected embed response shape: {data!r}") from exc
 
-
-# ---------------------------------------------------------------------------
-# Anthropic adapter (RESERVED — not wired up; kept here so agents stay stable)
-# ---------------------------------------------------------------------------
-class AnthropicAdapter:
-    """Future home for Anthropic Messages API.
-
-    Intentionally a stub. Filling this in must not require any change to agents.
-    """
-
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-
-    async def chat(self, *args: Any, **kwargs: Any) -> str:  # pragma: no cover
-        raise NotImplementedError("AnthropicAdapter.chat is reserved for a future iteration")
-
-    async def embed(self, *args: Any, **kwargs: Any) -> List[List[float]]:  # pragma: no cover
-        raise NotImplementedError(
-            "Anthropic does not expose embeddings; route to OPENAI for embeddings."
-        )
-
-    async def aclose(self) -> None:  # pragma: no cover
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
 def build_llm_client(settings: Optional[Settings] = None) -> LLMClient:
-    settings = settings or get_settings()
-    return OpenAICompatibleClient(settings)
+    return OpenAICompatibleClient(settings or get_settings())
 
 
-# ---------------------------------------------------------------------------
-# JSON helper — agents often want strict JSON back
-# ---------------------------------------------------------------------------
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _strip_to_json(raw: str) -> str:
+    """Tolerantly extract JSON from a model response.
+
+    Reasoning models (MiniMax-M2, DeepSeek-R1, etc.) wrap content with
+    <think>...</think> blocks even when response_format=json_object is set.
+    Some models wrap the JSON in a markdown code fence. We strip both.
+    """
+    text = _THINK_RE.sub("", raw).strip()
+    # Strip code fences (```json ... ``` or ``` ... ```)
+    text = text.strip("`").strip()
+    if text.lower().startswith("json"):
+        text = text[4:].strip()
+    # If there's surrounding chat-y prose, try to extract the largest {...} blob.
+    if not text.startswith("{"):
+        m = _JSON_OBJECT_RE.search(text)
+        if m:
+            text = m.group(0)
+    return text
+
+
 async def chat_json(
     llm: LLMClient,
     messages: Sequence[dict[str, str]],
@@ -164,9 +112,6 @@ async def chat_json(
     temperature: float = 0.2,
     max_tokens: Optional[int] = None,
 ) -> Any:
-    """Ask the LLM for strict JSON. Falls back to best-effort parse if the
-    provider doesn't honour ``response_format``.
-    """
     raw = await llm.chat(
         messages,
         model=model,
@@ -174,20 +119,8 @@ async def chat_json(
         max_tokens=max_tokens,
         response_format={"type": "json_object"},
     )
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        # be forgiving — strip code fences if any
-        cleaned = raw.strip().strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:].strip()
-        return json.loads(cleaned)
+    cleaned = _strip_to_json(raw)
+    return json.loads(cleaned)
 
 
-__all__ = [
-    "LLMClient",
-    "OpenAICompatibleClient",
-    "AnthropicAdapter",
-    "build_llm_client",
-    "chat_json",
-]
+__all__ = ["LLMClient", "OpenAICompatibleClient", "build_llm_client", "chat_json"]
