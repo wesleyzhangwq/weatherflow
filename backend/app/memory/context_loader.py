@@ -88,6 +88,33 @@ async def load(
     if summary:
         _add(summary)
 
+    # v2: §13 — add L2.5 semantic recall memories
+    try:
+        from app.memory.semantic.recall import recall_relevant
+
+        trigger = event_log.get(trigger_event_id)
+        query_text = _render_event(trigger).rendered if trigger else ""
+        if query_text:
+            semantic_memories = await recall_relevant(
+                query=query_text,
+                user_id=uid,
+                limit=getattr(settings, "semantic_recall_limit", 5),
+            )
+            for mem in semantic_memories:
+                sid = mem.get("source_event_id", "")
+                if sid and sid not in seen:
+                    entry = BundleEntry(
+                        event_id=sid,
+                        event_type="semantic_recall",
+                        rendered=f"[L2.5 recall] {mem.get('text', '')}",
+                    )
+                    bundle.entries.append(entry)
+                    seen.add(sid)
+    except ImportError:
+        pass  # mem0 not installed, skip semantic recall
+    except Exception:
+        pass  # graceful degradation
+
     # §6.2 profile sections per mode
     bundle.profile_sections = profile_md.read_sections(
         sections=_MODE_TO_SECTIONS[mode], user_id=uid
