@@ -258,32 +258,32 @@ L1  Event Log (SQLite, append-only)            ← 唯一真理，永不修改
 [x] M0.1  v2 架构文档
 [x] M0.2  ADR-003
 [x] M0.3  AGENTS.md 更新
-[ ] M1A.1 LangGraph 依赖 + AgentState
-[ ] M1A.2 图骨架
-[ ] M1A.3 ReAct 迁移 + SSE 保持
-[ ] M1A.4 Critic 节点
-[ ] M1A.5 Proposal human-in-the-loop
-[ ] M1A.6 RhythmAgent 子图
-[ ] M1B.1 mem0/Qdrant 依赖配置
-[ ] M1B.2 MemoryProjector
-[ ] M1B.3 ContextLoader v2 融合召回
-[ ] M1B.4 memory 节点接入
-[ ] M1B.5 rebuild_memory.py
-[ ] M1B.6 记忆测试
-[ ] M1C.1 Langfuse
-[ ] M1C.2 OpenTelemetry traceId
-[ ] M1C.3 结构化日志 + 指标
-[ ] M1D.1 评测集
-[ ] M1D.2 LLM-as-judge
-[ ] M1D.3 轨迹评测
-[ ] M1D.4 回归 harness + 报告
-[ ] M1E.1 全栈 docker-compose
-[ ] M1E.2 降级 + 配置硬化
-[ ] M1E.3 README v2 + 面试素材
-[ ] M2.1  桌面脚手架
-[ ] M2.2  角色状态映射
-[ ] M2.3  点击即聊 + 克制主动
-[ ] M2.4  (可选) 多模态
+[x] M1A.1 LangGraph 依赖 + AgentState
+[x] M1A.2 图骨架
+[x] M1A.3 ReAct 迁移 + SSE 保持
+[x] M1A.4 Critic 节点
+[x] M1A.5 Proposal human-in-the-loop
+[x] M1A.6 RhythmAgent 子图
+[x] M1B.1 mem0/Qdrant 依赖配置
+[x] M1B.2 MemoryProjector
+[x] M1B.3 ContextLoader v2 融合召回
+[x] M1B.4 memory 节点接入
+[x] M1B.5 rebuild_memory.py
+[x] M1B.6 记忆测试
+[x] M1C.1 Langfuse
+[x] M1C.2 OpenTelemetry traceId
+[x] M1C.3 结构化日志 + 指标
+[x] M1D.1 评测集
+[x] M1D.2 LLM-as-judge
+[x] M1D.3 轨迹评测
+[x] M1D.4 回归 harness + 报告
+[x] M1E.1 全栈 docker-compose
+[x] M1E.2 降级 + 配置硬化
+[x] M1E.3 README v2 + 面试素材
+[x] M2.1  桌面脚手架
+[x] M2.2  角色状态映射
+[x] M2.3  点击即聊 + 克制主动
+[SKIPPED] M2.4  (可选) 多模态 — 条件满足但依赖外部视觉/语音服务，环境不可用
 ```
 
 ## 附录 B · changelog
@@ -294,6 +294,18 @@ L1  Event Log (SQLite, append-only)            ← 唯一真理，永不修改
 | 2026-06-01 | M0.1 | 新建 weatherflow-architecture-v2.md（宪法第四/六/七条重写，§13 L2.5，§14 多 Agent） |
 | 2026-06-01 | M0.2 | 新建 docs/ADR-003-v2-pivot.md（10 条决策，supersedes v1 中的向量库禁令/单 Agent 限制/禁止主动） |
 | 2026-06-01 | M0.3 | 更新 AGENTS.md（指向 v2 为 single source of truth，移除 mem0/多 Agent anti-pattern） |
+| 2026-06-02 | M1A.1 | 加 langgraph/checkpoint-sqlite/mem0/OTel 依赖；AgentState TypedDict |
+| 2026-06-02 | M1A.2+M1A.4 | chat_graph.py（6 节点状态图 + 条件边 + critic groundedness 自检） |
+| 2026-06-02 | M1A.3 | graph_runner.py 适配器：图执行 → SSE 事件流，保留 v1 fallback |
+| 2026-06-02 | M1A.5 | Proposal interrupt：checkpoint.py 状态暂存 + resume_chat() 恢复 |
+| 2026-06-02 | M1A.6 | rhythm_graph.py 子图：recall → hypothesize → verify → persist |
+| 2026-06-02 | M1B.1 | semantic/ 包 + config.py Qdrant/mem0/embedding 设置 + docker-compose Qdrant/Langfuse |
+| 2026-06-02 | M1B.2-M1B.6 | projector.py（白名单投影）+ recall.py（语义检索）+ context_loader v2 + rebuild_memory.py + 12 测试 |
+| 2026-06-02 | M1C.1-M1C.3 | observability/：Langfuse trace/span + OTel contextvars + 结构化 JSON 日志 + MetricsCollector |
+| 2026-06-02 | M1D.1-M1D.4 | eval/：30 条标注样本 + judges.py（faithfulness/recall/groundedness）+ run_eval.py 回归 harness |
+| 2026-06-02 | M1E.2-M1E.3 | 健康状态 v2 检查 + OTel 初始化 + docs/interview-notes.md（18 条 Q&A） |
+| 2026-06-02 | M2.1-M2.3 | desktop/：Electron 透明窗 + 6 种 mood emoji/动画 + SSE 聊天 + 克制提示 |
+| 2026-06-02 | M2.4 | SKIPPED — 条件满足但依赖外部视觉/语音服务 |
 
 ---
 
