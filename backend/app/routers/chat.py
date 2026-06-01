@@ -14,11 +14,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.chat_agent import (
-    ChatAgent,
-    ErrorEvent,
-    FinalAnswerEvent,
-)
+from app.agents.graph.graph_runner import run_chat
 from app.core.llm import LLMClient
 from app.core.orchestrator import generate_hypothesis
 from app.memory import context_loader, event_log
@@ -99,22 +95,21 @@ async def _stream(body: ChatStreamIn, llm: LLMClient) -> AsyncIterator[dict]:
         yield _sse("error", {"message": f"hypothesis failed: {exc}"})
         return
 
-    # 3. ReAct loop
-    agent = ChatAgent(llm)
-    bundle_text = bundle.render()
+    # 3. Run chat agent (graph with v1 fallback)
+    bundle_event_ids = [e.event_id for e in bundle.entries]
 
     try:
-        async for ev in agent.run(
+        async for ev in run_chat(
+            llm=llm,
             user_message=body.message,
             hypothesis=hyp,
-            bundle_text=bundle_text,
+            bundle_text=bundle.render(),
+            bundle_event_ids=bundle_event_ids,
             conversation_id=body.conversation_id,
-            parent_event_id=turn_id,
+            trigger_event_id=turn_id,
         ):
-            yield _sse(ev.event, _event_payload(ev))
-            if isinstance(ev, (FinalAnswerEvent, ErrorEvent)):
-                # Terminate after final/error
-                break
+            # run_chat yields {"event": ..., "data": json_string} — pass through
+            yield ev
     except Exception as exc:
         logger.exception("ChatAgent crashed")
         yield _sse("error", {"message": str(exc)})
