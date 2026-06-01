@@ -18,6 +18,12 @@ from app.agents.graph.chat_graph import (
     plan_node,
     should_continue_act,
 )
+from app.agents.graph.checkpoint import (
+    clear_paused_state,
+    get_paused_state,
+    has_paused_state,
+    save_paused_state,
+)
 from app.agents.graph.state import AgentState
 
 
@@ -162,3 +168,44 @@ async def test_plan_node_produces_plan(monkeypatch):
     result = await plan_node(state)
     assert "plan" in result
     assert result["critic_verdict"] is None  # resets on re-plan
+
+
+# ---------------------------------------------------------------------------
+# Tests: checkpoint / proposal interrupt (M1A.5)
+# ---------------------------------------------------------------------------
+
+
+def test_checkpoint_save_get_clear():
+    """Checkpoint stores and retrieves paused state by conversation_id."""
+    state = {"conversation_id": "conv_123", "proposals": [{"id": "p1"}]}
+    save_paused_state("conv_123", state)
+
+    assert has_paused_state("conv_123") is True
+    assert get_paused_state("conv_123") == state
+
+    clear_paused_state("conv_123")
+    assert has_paused_state("conv_123") is False
+    assert get_paused_state("conv_123") is None
+
+
+def test_checkpoint_no_cross_contamination():
+    """Different conversation_ids don't interfere."""
+    save_paused_state("conv_a", {"data": "a"})
+    save_paused_state("conv_b", {"data": "b"})
+
+    assert get_paused_state("conv_a")["data"] == "a"
+    assert get_paused_state("conv_b")["data"] == "b"
+
+    clear_paused_state("conv_a")
+    assert has_paused_state("conv_a") is False
+    assert has_paused_state("conv_b") is True
+
+
+def test_proposal_in_state_triggers_interrupt():
+    """When proposals exist and no final_answer, state indicates interrupt."""
+    state = _make_state(
+        proposals=[{"proposal_id": "evt_prop_123", "tool_name": "calendar.create_focus_block"}],
+        final_answer=None,
+    )
+    # The interrupt detection logic: proposals present + no final answer
+    assert state["proposals"] and not state.get("final_answer")

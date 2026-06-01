@@ -2,6 +2,10 @@
 
 Bridges the chat_graph's execution with sse-starlette's event format.
 Falls back to v1 ChatAgent when langgraph is not installed.
+
+Supports proposal interrupt/resume: when a write tool creates a proposal,
+the graph pauses and saves state. After user confirms, resume_chat() continues
+from the saved state.
 """
 
 from __future__ import annotations
@@ -18,9 +22,14 @@ from app.agents.chat_agent import (
     FinalAnswerEvent,
 )
 from app.agents.graph.chat_graph import build_chat_graph
+from app.agents.graph.checkpoint import (
+    clear_paused_state,
+    get_paused_state,
+    save_paused_state,
+)
 from app.agents.graph.state import AgentState
-from app.core.llm import LLMClient
 from app.config import get_settings
+from app.core.llm import LLMClient
 from app.memory.schemas import HypothesisPayload
 
 logger = logging.getLogger(__name__)
@@ -119,9 +128,67 @@ async def _run_graph(
         yield _sse("error", {"message": str(exc)})
         return
 
-    # Emit collected SSE events in order
+    # Check if a proposal was created (interrupt pattern)
+    proposals = result.get("proposals", [])
+    if proposals and not result.get("final_answer"):
+        # Graph paused at a proposal — save state for later resume
+        save_paused_state(conversation_id, result)
+        # Emit SSE events up to and including the proposal
+        for ev in result.get("sse_events", []):
+            yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
+        return
+
+    # Normal completion — emit all SSE events
     for ev in result.get("sse_events", []):
         yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
+
+
+async def resume_chat(
+    *,
+    llm: LLMClient,
+    conversation_id: str,
+    proposal_id: str,
+    execution_result: Any,
+) -> AsyncIterator[dict[str, Any]]:
+    """Resume a paused graph after proposal execution.
+
+    Called by the actions router after the user confirms a proposal.
+    Continues the graph from the saved state with the tool result injected.
+    """
+    saved = get_paused_state(conversation_id)
+    if saved is None:
+        logger.warning("No paused state for conversation %s", conversation_id)
+        return
+
+    clear_paused_state(conversation_id)
+
+    # Inject the execution result into the messages as a tool response
+    messages = list(saved.get("messages", []))
+    messages.append({
+        "role": "tool",
+        "tool_call_id": proposal_id,
+        "content": json.dumps({"executed": True, "result": execution_result}, ensure_ascii=False)[:2000],
+    })
+
+    # Continue the graph from where it left off
+    graph = build_chat_graph()
+    if graph is not None:
+        # Resume by running from the act node onward
+        saved["messages"] = messages
+        saved["final_answer"] = None  # clear so act continues
+
+        try:
+            result = await graph.ainvoke(saved)
+        except Exception as exc:
+            logger.exception("Graph resume failed")
+            yield _sse("error", {"message": str(exc)})
+            return
+
+        for ev in result.get("sse_events", []):
+            yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
+    else:
+        # v1 fallback: just emit a final answer based on the execution result
+        yield _sse("final_answer", {"content": f"已执行操作 {proposal_id}。结果: {json.dumps(execution_result, ensure_ascii=False)[:500]}"})
 
 
 async def _run_v1(
@@ -187,4 +254,4 @@ def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
 
 
-__all__ = ["run_chat"]
+__all__ = ["run_chat", "resume_chat"]
