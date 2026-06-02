@@ -76,21 +76,26 @@ async def run_chat(
         "chat_run",
         {"conversation_id": conversation_id, "user_id": initial_state["user_id"]},
     )
+    # Stream per super-step (ADR-004 D4): the graph accumulates sse_events in
+    # state; we emit the newly-appended ones after each node so the client sees
+    # reasoning/tool/proposal events as they happen. On a write proposal the
+    # graph interrupts and the stream ends right after proposal_created.
+    emitted = 0
     try:
         with run_context(trace=root, llm=llm):
-            result = await graph.ainvoke(initial_state, config=_config(conversation_id))
+            async for snapshot in graph.astream(
+                initial_state, config=_config(conversation_id), stream_mode="values"
+            ):
+                events = snapshot.get("sse_events", [])
+                for ev in events[emitted:]:
+                    yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
+                emitted = len(events)
     except Exception as exc:
         logger.exception("Chat graph execution failed")
         yield _sse("error", {"message": str(exc)})
         return
     finally:
         lf.flush()
-
-    if result.get("__interrupt__"):
-        logger.info("Chat graph paused on a proposal for conversation %s", conversation_id)
-
-    for ev in result.get("sse_events", []):
-        yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
 
 
 async def resume_chat(
