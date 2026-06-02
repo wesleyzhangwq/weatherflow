@@ -30,6 +30,19 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.llm = build_llm_client(settings)
 
+    # v2 (ADR-004 D2): compile the chat graph once with a SQLite checkpointer so
+    # write Proposals can pause (interrupt) and resume across requests. The
+    # saver holds an aiosqlite connection for the app lifetime.
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    from app.agents.graph.chat_graph import build_chat_graph
+
+    saver_cm = AsyncSqliteSaver.from_conn_string(settings.graph_checkpoints_path)
+    app.state.graph_saver_cm = saver_cm
+    saver = await saver_cm.__aenter__()
+    app.state.chat_graph = build_chat_graph(checkpointer=saver)
+    logger.info("Chat graph compiled with checkpointer at %s", settings.graph_checkpoints_path)
+
     # v2 (M1C.2): Initialize OpenTelemetry + instrument FastAPI when available.
     try:
         from app.observability.tracing import init_otel
@@ -61,6 +74,12 @@ async def lifespan(app: FastAPI):
     finally:
         if scheduler is not None:
             scheduler.shutdown(wait=False)
+        cm = getattr(app.state, "graph_saver_cm", None)
+        if cm is not None:
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception:
+                logger.debug("graph saver close failed", exc_info=True)
         await app.state.llm.aclose()
         logger.info("WeatherFlow shutting down.")
 

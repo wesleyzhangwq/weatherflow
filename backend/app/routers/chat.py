@@ -11,7 +11,7 @@ from typing import AsyncIterator
 
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -35,12 +35,14 @@ class ChatStreamIn(BaseModel):
 @router.post("/stream")
 async def stream_chat(
     body: ChatStreamIn,
+    request: Request,
     llm: LLMClient = Depends(get_llm),
 ) -> EventSourceResponse:
-    return EventSourceResponse(_stream(body, llm))
+    graph = request.app.state.chat_graph
+    return EventSourceResponse(_stream(body, llm, graph))
 
 
-async def _stream(body: ChatStreamIn, llm: LLMClient) -> AsyncIterator[dict]:
+async def _stream(body: ChatStreamIn, llm: LLMClient, graph: object) -> AsyncIterator[dict]:
     start = time.perf_counter()
     # 1. Persist the user's chat_turn first (so the trigger event exists for bundle)
     turn_id = event_log.append(
@@ -103,6 +105,7 @@ async def _stream(body: ChatStreamIn, llm: LLMClient) -> AsyncIterator[dict]:
 
     try:
         async for ev in run_chat(
+            graph=graph,
             llm=llm,
             user_message=body.message,
             hypothesis=hyp,

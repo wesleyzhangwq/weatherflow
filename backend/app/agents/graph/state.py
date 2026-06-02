@@ -36,6 +36,10 @@ class AgentState(TypedDict, total=False):
     # --- proposals created from write tool calls ---
     proposals: list[dict[str, Any]]
 
+    # --- HITL: the proposal the graph is paused on (set by act, consumed by
+    #     human_review which calls interrupt()). Serializable on purpose. ---
+    pending_proposal: Optional[dict[str, Any]]
+
     # --- critic verdict ---
     critic_verdict: Optional[Literal["pass", "retry"]]
 

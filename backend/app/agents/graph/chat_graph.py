@@ -184,7 +184,20 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     conversation_id = state.get("conversation_id", "")
     parent_event_id = state.get("trigger_event_id", "")
 
+    pending_proposal: dict[str, Any] | None = None
     for tc in tool_calls:
+        tc_id = tc.get("id", "")
+        # Once a write proposal is pending, the graph pauses — answer any
+        # remaining tool_calls with a placeholder so the message history stays
+        # valid, but execute nothing further this turn.
+        if pending_proposal is not None:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc_id,
+                "content": json.dumps({"status": "deferred — awaiting confirmation"}, ensure_ascii=False),
+            })
+            continue
+
         fn = tc.get("function") or {}
         tool_name = fn.get("name", "")
         args_raw = fn.get("arguments", "{}")
@@ -210,10 +223,13 @@ async def act_node(state: AgentState) -> dict[str, Any]:
             observations.append({"tool_name": tool_name, "result": result.result})
             messages.append({
                 "role": "tool",
-                "tool_call_id": tc.get("id", ""),
+                "tool_call_id": tc_id,
                 "content": json.dumps(result.result, ensure_ascii=False)[:2000],
             })
         elif isinstance(result, ProposalResult):
+            # Write tool → Proposal. Emit proposal_created, record the pending
+            # proposal, and DO NOT answer this tool_call yet — the human_review
+            # node will pause here and the tool response is added on resume.
             sse_events.append({"event": "tool_call_finished", "data": {"tool_name": tool_name, "status": "proposal"}})
             sse_events.append({
                 "event": "proposal_created",
@@ -225,18 +241,20 @@ async def act_node(state: AgentState) -> dict[str, Any]:
                 },
             })
             proposals.append({"proposal_id": result.proposal_id, "tool_name": tool_name})
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": json.dumps({"proposal_created": result.proposal_id}, ensure_ascii=False),
-            })
+            pending_proposal = {
+                "proposal_id": result.proposal_id,
+                "tool_call_id": tc_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "rationale": result.rationale,
+            }
         else:
             sse_events.append({"event": "tool_call_finished", "data": {"tool_name": tool_name, "status": "error"}})
             err_msg = result.message if isinstance(result, ErrorResult) else "unknown error"
             sse_events.append({"event": "error", "data": {"message": err_msg}})
             messages.append({
                 "role": "tool",
-                "tool_call_id": tc.get("id", ""),
+                "tool_call_id": tc_id,
                 "content": json.dumps({"error": err_msg}, ensure_ascii=False),
             })
 
@@ -246,9 +264,40 @@ async def act_node(state: AgentState) -> dict[str, Any]:
         "messages": messages,
         "observations": observations,
         "proposals": proposals,
+        "pending_proposal": pending_proposal,
         "sse_events": sse_events,
         "turn_count": turn_count + 1,
     }
+
+
+async def human_review_node(state: AgentState) -> dict[str, Any]:
+    """Human-in-the-loop pause for a write Proposal (ADR-004 D2).
+
+    This node is deliberately side-effect-free BEFORE interrupt(), because
+    langgraph re-runs the node from the top on resume. interrupt(pending)
+    suspends the graph (checkpointer persists state); on resume it returns the
+    value passed via Command(resume=...) — the tool execution result — which we
+    append as the write tool_call's response so act can continue reasoning.
+    """
+    import json
+
+    from langgraph.types import interrupt
+
+    pending = state.get("pending_proposal")
+    if not pending:
+        return {}
+
+    execution_result = interrupt(pending)  # ← pauses on first run; returns result on resume
+
+    messages = list(state.get("messages", []))
+    messages.append({
+        "role": "tool",
+        "tool_call_id": pending.get("tool_call_id", ""),
+        "content": json.dumps(
+            {"executed": True, "result": execution_result}, ensure_ascii=False
+        )[:2000],
+    })
+    return {"messages": messages, "pending_proposal": None}
 
 
 async def criticize_node(state: AgentState) -> dict[str, Any]:
@@ -312,8 +361,10 @@ async def synthesize_node(state: AgentState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def should_continue_act(state: AgentState) -> str:
-    """Decide whether to continue tool calls, run critic, or synthesize."""
+def route_after_act(state: AgentState) -> str:
+    """Decide where to go after act: pause for HITL, finish, or self-check."""
+    if state.get("pending_proposal"):
+        return "human_review"
     if state.get("final_answer"):
         return "synthesize"
     if state.get("turn_count", 0) >= state.get("max_turns", 8):
@@ -339,14 +390,11 @@ def after_critic(state: AgentState) -> str:
 def build_chat_graph(checkpointer: Any = None) -> Any:
     """Build and compile the LangGraph chat graph.
 
-    Returns a compiled graph ready to invoke. If langgraph is not installed,
-    returns None (caller should fall back to v1 behavior).
+    A checkpointer is required for the HITL interrupt/resume flow (ADR-004 D2);
+    pass an ``AsyncSqliteSaver``. Without one the graph still compiles and runs
+    straight-through, but write Proposals cannot pause/resume.
     """
-    try:
-        from langgraph.graph import END, StateGraph
-    except ImportError:
-        logger.warning("langgraph not installed; chat graph unavailable")
-        return None
+    from langgraph.graph import END, StateGraph
 
     builder = StateGraph(AgentState)
 
@@ -355,6 +403,7 @@ def build_chat_graph(checkpointer: Any = None) -> Any:
     builder.add_node("recall_memory", recall_memory_node)
     builder.add_node("plan", plan_node)
     builder.add_node("act", act_node)
+    builder.add_node("human_review", human_review_node)
     builder.add_node("criticize", criticize_node)
     builder.add_node("synthesize", synthesize_node)
 
@@ -364,12 +413,19 @@ def build_chat_graph(checkpointer: Any = None) -> Any:
     builder.add_edge("recall_memory", "plan")
     builder.add_edge("plan", "act")
 
-    # Conditional: act → criticize or synthesize
+    # Conditional: act → human_review (HITL pause) / criticize / synthesize
     builder.add_conditional_edges(
         "act",
-        should_continue_act,
-        {"synthesize": "synthesize", "criticize": "criticize"},
+        route_after_act,
+        {
+            "human_review": "human_review",
+            "synthesize": "synthesize",
+            "criticize": "criticize",
+        },
     )
+
+    # After the user confirms (resume), continue acting with the tool result.
+    builder.add_edge("human_review", "act")
 
     # Conditional: criticize → plan (retry) or synthesize
     builder.add_conditional_edges(
@@ -411,6 +467,9 @@ __all__ = [
     "recall_memory_node",
     "plan_node",
     "act_node",
+    "human_review_node",
     "criticize_node",
     "synthesize_node",
+    "route_after_act",
+    "after_critic",
 ]

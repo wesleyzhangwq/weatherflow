@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -112,7 +112,9 @@ def get_proposal(proposal_id: str) -> dict:
 
 
 @router.post("/{proposal_id}/execute", response_model=ExecutedOut)
-async def execute_proposal(proposal_id: str, body: ConfirmIn) -> ExecutedOut:
+async def execute_proposal(
+    proposal_id: str, body: ConfirmIn, request: Request
+) -> ExecutedOut:
     if not body.confirmed:
         raise HTTPException(status_code=400, detail="confirmed=true required to execute.")
 
@@ -153,9 +155,10 @@ async def execute_proposal(proposal_id: str, body: ConfirmIn) -> ExecutedOut:
         refs={"proposal": proposal_id},
     )
 
-    # M1A.5: if a chat graph paused at this proposal (human-in-the-loop
+    # M1A.5 / ADR-004 D2: if the chat graph paused at this proposal (HITL
     # interrupt), resume it now that the write tool has executed.
-    await _maybe_resume_graph(rec.payload.get("conversation_id", ""), proposal_id, result)
+    graph = getattr(request.app.state, "chat_graph", None)
+    await _maybe_resume_graph(graph, rec.payload.get("conversation_id", ""), proposal_id, result)
 
     asyncio.create_task(_run_dmw_safely())
 
@@ -183,31 +186,30 @@ def reject_proposal(proposal_id: str) -> dict:
 
 
 async def _maybe_resume_graph(
-    conversation_id: str, proposal_id: str, result: Any
+    graph: Any, conversation_id: str, proposal_id: str, result: Any
 ) -> None:
-    """Resume a paused chat graph after its proposal executed (M1A.5).
+    """Resume the chat graph paused at this proposal (ADR-004 D2, route A).
 
-    When the v2 chat graph hits a write tool it pauses (interrupt) and saves
-    state keyed by conversation_id. After the user confirms and the tool runs,
-    we feed the result back and let the graph finish reasoning; the continued
-    final answer is persisted as an assistant chat_turn so it shows in history.
+    The graph paused at human_review via interrupt(); state is in the SQLite
+    checkpointer keyed by thread_id == conversation_id. We feed the execution
+    result back via Command(resume=...), let the graph finish reasoning, and
+    persist the continuation's final answer as an assistant chat_turn so the
+    UI picks it up via /history (the original SSE stream is already closed).
 
-    No-op when langgraph is unavailable or nothing is paused for this
-    conversation — the common v1-fallback case.
+    No-op when there is no graph or nothing is paused for this conversation.
     """
-    from app.agents.graph.checkpoint import has_paused_state
-
-    if not conversation_id or not has_paused_state(conversation_id):
+    if graph is None or not conversation_id:
         return
 
-    from app.agents.graph.graph_runner import resume_chat
-    from app.core.llm import build_llm_client
+    from app.agents.graph.graph_runner import has_pending_interrupt, resume_chat
 
-    llm = build_llm_client()
+    if not await has_pending_interrupt(graph, conversation_id):
+        return
+
     final_answer: Optional[str] = None
     try:
         async for ev in resume_chat(
-            llm=llm,
+            graph=graph,
             conversation_id=conversation_id,
             proposal_id=proposal_id,
             execution_result=result,
@@ -219,8 +221,6 @@ async def _maybe_resume_graph(
                     pass
     except Exception:
         logger.exception("Graph resume after proposal %s failed", proposal_id)
-    finally:
-        await llm.aclose()
 
     if final_answer:
         event_log.append(

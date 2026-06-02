@@ -1,32 +1,17 @@
-"""GraphRunner — adapter between LangGraph graph and SSE event stream.
+"""GraphRunner — drive the compiled chat graph and adapt it to the SSE stream.
 
-Bridges the chat_graph's execution with sse-starlette's event format.
-Falls back to v1 ChatAgent when langgraph is not installed.
-
-Supports proposal interrupt/resume: when a write tool creates a proposal,
-the graph pauses and saves state. After user confirms, resume_chat() continues
-from the saved state.
+The chat graph is compiled once with an ``AsyncSqliteSaver`` checkpointer in the
+app lifespan and passed in here. Write tools pause the graph via ``interrupt()``
+(ADR-004 D2); ``resume_chat`` continues it after the user confirms a proposal,
+keyed by ``thread_id == conversation_id``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
 from typing import Any, AsyncIterator, Optional
 
-from app.agents.chat_agent import (
-    AgentEvent,
-    ChatAgent,
-    ErrorEvent,
-    FinalAnswerEvent,
-)
-from app.agents.graph.chat_graph import build_chat_graph
-from app.agents.graph.checkpoint import (
-    clear_paused_state,
-    get_paused_state,
-    save_paused_state,
-)
 from app.agents.graph.state import AgentState
 from app.config import get_settings
 from app.core.llm import LLMClient
@@ -35,9 +20,14 @@ from app.memory.schemas import HypothesisPayload
 logger = logging.getLogger(__name__)
 
 
+def _config(conversation_id: str) -> dict[str, Any]:
+    return {"configurable": {"thread_id": conversation_id}}
+
+
 async def run_chat(
     *,
-    llm: LLMClient,
+    graph: Any,
+    llm: Optional[LLMClient] = None,  # reserved for P3 (shared client via run_context)
     user_message: str,
     hypothesis: HypothesisPayload,
     bundle_text: str,
@@ -46,65 +36,20 @@ async def run_chat(
     trigger_event_id: str,
     user_id: Optional[str] = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run the chat agent, yielding SSE-compatible event dicts.
+    """Run the chat graph, yielding SSE-compatible event dicts.
 
-    Tries LangGraph graph first; falls back to v1 ChatAgent if unavailable.
-    SSE event order follows v1 §10.2:
-      context_loaded → hypothesis_generated → reasoning_step* →
-      tool_call_started/finished/observation_summary* → proposal_created? → final_answer
+    SSE order follows v1 §10.2. If a write tool fires, the graph pauses at the
+    human_review interrupt; we emit events through proposal_created and the
+    stream ends (the continuation arrives later via /execute → resume → L1).
     """
     settings = get_settings()
-
-    # Try graph path
-    graph = build_chat_graph()
-    if graph is not None:
-        async for ev in _run_graph(
-            graph=graph,
-            llm=llm,
-            user_message=user_message,
-            hypothesis=hypothesis,
-            bundle_text=bundle_text,
-            bundle_event_ids=bundle_event_ids,
-            conversation_id=conversation_id,
-            trigger_event_id=trigger_event_id,
-            user_id=user_id or settings.default_user_id,
-            max_turns=settings.rhythm_agent_max_turns,
-        ):
-            yield ev
-    else:
-        # v1 fallback
-        async for ev in _run_v1(
-            llm=llm,
-            user_message=user_message,
-            hypothesis=hypothesis,
-            bundle_text=bundle_text,
-            conversation_id=conversation_id,
-            trigger_event_id=trigger_event_id,
-        ):
-            yield ev
-
-
-async def _run_graph(
-    *,
-    graph: Any,
-    llm: LLMClient,
-    user_message: str,
-    hypothesis: HypothesisPayload,
-    bundle_text: str,
-    bundle_event_ids: list[str],
-    conversation_id: str,
-    trigger_event_id: str,
-    user_id: str,
-    max_turns: int,
-) -> AsyncIterator[dict[str, Any]]:
-    """Execute via LangGraph graph, extracting SSE events from state."""
     initial_state: AgentState = {
         "messages": [
             {"role": "system", "content": _build_system_prompt(hypothesis, bundle_text)},
             {"role": "user", "content": user_message},
         ],
         "conversation_id": conversation_id,
-        "user_id": user_id,
+        "user_id": user_id or settings.default_user_id,
         "bundle_text": bundle_text,
         "bundle_event_ids": bundle_event_ids,
         "trigger_event_id": trigger_event_id,
@@ -113,106 +58,67 @@ async def _run_graph(
         "plan": None,
         "observations": [],
         "proposals": [],
+        "pending_proposal": None,
         "critic_verdict": None,
         "final_answer": None,
         "semantic_memories": [],
         "sse_events": [],
         "turn_count": 0,
-        "max_turns": max_turns,
+        "max_turns": settings.rhythm_agent_max_turns,
     }
 
     try:
-        result = await graph.ainvoke(initial_state)
+        result = await graph.ainvoke(initial_state, config=_config(conversation_id))
     except Exception as exc:
-        logger.exception("Graph execution failed")
+        logger.exception("Chat graph execution failed")
         yield _sse("error", {"message": str(exc)})
         return
 
-    # Check if a proposal was created (interrupt pattern)
-    proposals = result.get("proposals", [])
-    if proposals and not result.get("final_answer"):
-        # Graph paused at a proposal — save state for later resume
-        save_paused_state(conversation_id, result)
-        # Emit SSE events up to and including the proposal
-        for ev in result.get("sse_events", []):
-            yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
-        return
+    if result.get("__interrupt__"):
+        logger.info("Chat graph paused on a proposal for conversation %s", conversation_id)
 
-    # Normal completion — emit all SSE events
     for ev in result.get("sse_events", []):
         yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
 
 
 async def resume_chat(
     *,
-    llm: LLMClient,
+    graph: Any,
     conversation_id: str,
     proposal_id: str,
     execution_result: Any,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Resume a paused conversation after a proposal executed.
+    """Resume a chat graph paused at a write proposal (ADR-004 D2, route A).
 
-    Called by the actions router once the user confirms a proposal. We inject
-    the tool result back into the saved message history and ask the LLM for a
-    short closing answer.
-
-    We deliberately do NOT re-invoke the full chat graph from its entry node:
-    without a checkpointer that would re-run load_context → recall → plan → act
-    and could re-propose the same write tool. A focused synthesis step produces
-    the human-in-the-loop continuation safely. (A real langgraph checkpointer +
-    interrupt is the future upgrade — see docs/DECISIONS-v2.md.)
+    Feeds the tool execution result back via Command(resume=...); the graph
+    re-enters human_review, appends the tool response, and continues acting →
+    synthesize. Yields the continuation's final_answer (the caller persists it
+    to L1 since the original SSE stream is already closed).
     """
-    saved = get_paused_state(conversation_id)
-    if saved is None:
-        logger.warning("No paused state for conversation %s", conversation_id)
-        return
-
-    clear_paused_state(conversation_id)
-
-    # Inject the execution result as a tool response, then ask for a wrap-up.
-    messages = list(saved.get("messages", []))
-    messages.append({
-        "role": "tool",
-        "tool_call_id": proposal_id,
-        "content": json.dumps({"executed": True, "result": execution_result}, ensure_ascii=False)[:2000],
-    })
-    messages.append({
-        "role": "user",
-        "content": "上面的操作已执行完成。请基于执行结果，用一段简洁的中文给用户收尾，不要再调用工具。",
-    })
+    from langgraph.types import Command
 
     try:
-        from app.agents.graph.chat_graph import _strip_think
+        result = await graph.ainvoke(
+            Command(resume={"proposal_id": proposal_id, "result": execution_result}),
+            config=_config(conversation_id),
+        )
+    except Exception as exc:
+        logger.exception("Chat graph resume failed for conversation %s", conversation_id)
+        yield _sse("error", {"message": str(exc)})
+        return
 
-        answer = _strip_think(await llm.chat(messages, temperature=0.4, max_tokens=800))
+    final = result.get("final_answer")
+    if final:
+        yield _sse("final_answer", {"content": final})
+
+
+async def has_pending_interrupt(graph: Any, conversation_id: str) -> bool:
+    """True if the conversation's chat graph is paused mid-run (awaiting resume)."""
+    try:
+        snapshot = await graph.aget_state(_config(conversation_id))
+        return bool(snapshot.next)
     except Exception:
-        logger.exception("Resume synthesis failed for conversation %s", conversation_id)
-        answer = f"已执行操作 {proposal_id}。结果: {json.dumps(execution_result, ensure_ascii=False)[:500]}"
-
-    yield _sse("final_answer", {"content": answer})
-
-
-async def _run_v1(
-    *,
-    llm: LLMClient,
-    user_message: str,
-    hypothesis: HypothesisPayload,
-    bundle_text: str,
-    conversation_id: str,
-    trigger_event_id: str,
-) -> AsyncIterator[dict[str, Any]]:
-    """Execute via v1 ChatAgent (fallback when langgraph not installed)."""
-    agent = ChatAgent(llm)
-    async for ev in agent.run(
-        user_message=user_message,
-        hypothesis=hypothesis,
-        bundle_text=bundle_text,
-        conversation_id=conversation_id,
-        parent_event_id=trigger_event_id,
-    ):
-        yield _sse(ev.event, _event_payload(ev))
-        if isinstance(ev, (FinalAnswerEvent, ErrorEvent)):
-            break
+        return False
 
 
 def _build_system_prompt(hypothesis: HypothesisPayload, bundle_text: str) -> str:
@@ -245,14 +151,8 @@ def _build_system_prompt(hypothesis: HypothesisPayload, bundle_text: str) -> str
 """
 
 
-def _event_payload(ev: AgentEvent) -> dict:
-    data = asdict(ev)
-    data.pop("event", None)
-    return data
-
-
 def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
 
 
-__all__ = ["run_chat", "resume_chat"]
+__all__ = ["run_chat", "resume_chat", "has_pending_interrupt"]
