@@ -134,8 +134,8 @@ class OpenAICompatibleClient:
     ) -> dict[str, Any]:
         """Return the full assistant message dict (supports ``tool_calls``).
 
-        Used by function-calling paths (graph act node, v2 ChatAgent) that need
-        the raw message back rather than just content.
+        Used by the graph act node (function-calling) which needs the raw
+        message back rather than just content.
         """
         payload: dict[str, Any] = {
             "model": model or self._settings.chat_model,

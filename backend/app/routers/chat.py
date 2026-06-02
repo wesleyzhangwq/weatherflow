@@ -118,7 +118,7 @@ async def _stream(body: ChatStreamIn, llm: LLMClient, graph: object) -> AsyncIte
             # run_chat yields {"event": ..., "data": json_string} — pass through
             yield ev
     except Exception as exc:
-        logger.exception("ChatAgent crashed")
+        logger.exception("Chat graph crashed")
         yield _sse("error", {"message": str(exc)})
         return
 

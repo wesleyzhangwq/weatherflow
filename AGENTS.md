@@ -32,6 +32,11 @@ Three companion docs:
 - [`docs/ADR-003-v2-pivot.md`](./docs/ADR-003-v2-pivot.md) — 10 v2 decisions:
   mem0 as derived layer, LangGraph multi-agent, calibrated proactivity,
   Provider SPI, observability, eval framework, and more.
+- [`docs/ADR-004-v2-full-adoption.md`](./docs/ADR-004-v2-full-adoption.md) — full
+  commitment to the v2 paradigm: graph is the **sole** execution path (no v1
+  fallback), real HITL (`interrupt()` + `AsyncSqliteSaver`), one trace tree per
+  run, `astream` streaming, and the FIV (Facts/Index/View) memory framing. The
+  "serializable state vs live objects" discipline lives here.
 
 ---
 
@@ -66,6 +71,13 @@ Qdrant and `rebuild_memory.py` can rebuild it from L1. The card stack, "current
 state", recent rhythm — all computed from L1 events. Don't add a `current_state`
 column.
 
+> **FIV framing (ADR-004 D5)**: the four "layers" are really 3 roles over 2
+> stores — **Facts** (L1, the only truth), **Index** (`retrieval.py`: a recency
+> strategy over L1 + a semantic strategy over mem0), and **View** (`profile.md`).
+> mem0 stores *episodic instances* (forgettable); profile.md stores *validated
+> generalizations* (4-gate). They never write to each other. The derived layers
+> are refreshed from **one** place: `derivations.run_derivations()`.
+
 ### Hard contracts (these are not negotiable without doc edits)
 
 | Rule | Enforced where |
@@ -74,7 +86,7 @@ column.
 | `label` ∈ 6 fixed values | `Literal` in `app/memory/schemas.py` |
 | `weather` ∈ 6 fixed values | same |
 | `destructive` tools never reach the LLM (not even the schema) | `ToolRegistry.register` skips them |
-| All `write` tool calls become Proposal events; user must explicitly confirm | v2: LangGraph interrupt + checkpointer; v1: `mcp_client/dispatcher.py::_dispatch_write` |
+| All `write` tool calls become Proposal events; user must explicitly confirm | LangGraph `interrupt()` in the act node + `AsyncSqliteSaver` checkpointer; resumed by `POST /api/actions/{id}/execute` (ADR-004 D2) |
 | L1 events are never updated/deleted; status of a hypothesis is *derived* from later feedback events | `app/memory/event_log.py` exposes no update/delete |
 | Calibration does **not** generate a new hypothesis | `app/routers/hypotheses.py::submit_feedback` |
 | Proposal generation is **only** in the Chat flow | check-in & T2 paths simply don't have a Dispatcher |
@@ -92,18 +104,22 @@ backend/app/
   memory/
     event_log.py         ← L1: append, get, latest_by_type, find_refs
     schemas.py           ← pydantic models + Literal enums
-    context_loader.py    ← L2 + L2.5: assembles EvidenceBundle (v2: fused with semantic recall)
+    context_loader.py    ← assembles EvidenceBundle (orchestrates the two retrieval strategies + budget)
+    retrieval.py         ← v2: recall_recent (recency) + recall_semantic (mem0) strategies
+    derivations.py       ← v2: run_derivations() fan-out → mem0 (L2.5) + profile.md (L3)
     profile_md.py        ← L3: 6 sections, fcntl-locked writes
     hypotheses_view.py   ← derives card-stack state from L1 (ADR D15)
     delayed_writer.py    ← 4-gate maybe_update() (§9.2)
     semantic/            ← v2: L2.5 mem0 layer
-      projector.py       ← L1 → mem0 projection
+      projector.py       ← L1 → mem0 projection (driven by derivations.py fan-out)
+      recall.py          ← mem0 semantic search (source_event_id back-links)
   agents/
-    graph/               ← v2: LangGraph multi-agent
-      state.py           ← AgentState (TypedDict)
-      chat_graph.py      ← load_context → recall → plan → act → criticize → synthesize
+    graph/               ← v2: LangGraph multi-agent (SOLE chat path, no v1 fallback)
+      state.py           ← AgentState (TypedDict — serializable data only)
+      chat_graph.py      ← load_context → recall → plan → act → human_review(interrupt) → criticize → synthesize
+      rhythm_graph.py    ← T1/T2 subgraph: recall → hypothesize → verify → persist
+      graph_runner.py    ← adapter: graph.astream → SSE; resume_chat() after proposal
     rhythm_agent.py      ← generates Hypothesis from EvidenceBundle (T1/T2/T4)
-    chat_agent.py        ← v1 ReAct loop (being migrated into graph act node)
   core/
     orchestrator.py      ← THE generate_hypothesis() entry shared by all triggers
     scheduled_check.py   ← T2 6-hour pipeline

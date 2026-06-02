@@ -1,8 +1,8 @@
 """T4 chat SSE stream — event ordering contract (§10.2) end-to-end (G13).
 
-langgraph is absent, so /api/chat/stream runs the v1 ChatAgent via run_chat's
-fallback. We stub the hypothesis LLM call and the ReAct HTTP call so no network
-is touched, and assert the SSE event order.
+/api/chat/stream runs the LangGraph chat graph via run_chat. We stub the
+hypothesis LLM call and the function-calling HTTP call so no network is touched,
+and assert the SSE event order.
 """
 
 from __future__ import annotations

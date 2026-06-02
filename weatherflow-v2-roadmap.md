@@ -313,6 +313,11 @@ L1  Event Log (SQLite, append-only)            ← 唯一真理，永不修改
 | 2026-06-02 | G8/G9 | 续接：README 重写为 v2（拓扑图/多 Agent 图/评测数字/docker-compose）+ 桌面托盘图标 |
 | 2026-06-02 | G16 | 续接：mem0 config 抽成 build_mem0_config（urllib.parse），projector/recall 复用 |
 | 2026-06-02 | G10-G13 | 续接：graph_runner fallback / resume / SSE 事件顺序 / 可观测 wiring 测试（73→86） |
+| 2026-06-02 | ADR-004 | 决定完全采用 v2 范式（图唯一路径 / 真 HITL / trace 树 / astream / FIV 记忆） |
+| 2026-06-02 | ADR-004 P1-P3 | per-request 共享 LLM client + trace/span contextvar；真 SqliteSaver checkpointer + interrupt()；一次 run 一棵 Langfuse trace 树 |
+| 2026-06-02 | ADR-004 P4 | graph.astream 真流式：边跑边推 SSE（取代跑完一次性吐） |
+| 2026-06-02 | ADR-004 P5 | FIV 记忆：derivations 单一 fan-out 接通 mem0 写入（修 G17）+ 收编 DMW；retrieval.py 两策略 |
+| 2026-06-02 | ADR-004 P6 | 删 v1 chat_agent 旁路；更新 AGENTS.md / 架构 §13/§14（FIV + 真 HITL）；93 测试绿 |
 
 ---
 

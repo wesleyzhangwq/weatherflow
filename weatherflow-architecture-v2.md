@@ -578,6 +578,13 @@ POST /api/actions/{proposal_id}/execute { confirmed: true }
 
 ## 13. 语义记忆层（L2.5 / mem0）[v2 新增]
 
+> **v2.1 更新（ADR-004 D5）**：本层重述为 **FIV** 模型——Facts(L1) / Index / View。
+> "L2 / L2.5 两层"合并为 `memory/retrieval.py` 下的两种检索策略（`recall_recent`
+> + `recall_semantic`）；ContextLoader 只做编排+预算。写入侧由单一
+> `derivations.run_derivations()` fan-out 驱动（**接通了原先未接线的投影，G17**），
+> 同时刷新 mem0(L2.5) 与 profile.md(L3)。mem0 存 episodic 实例、profile.md 存
+> 经 4 门槛验证的概括，二者互不写对方。
+
 ### 13.1 设计目标
 
 v1 的 ContextLoader 只按「最近 N 条」装配 evidence，无法召回「三周前那次相似的 Overload」。L2.5 用语义检索补这个洞。
@@ -629,6 +636,14 @@ MemoryProjector 在以下时机被调用：
 ---
 
 ## 14. 多 Agent 编排（LangGraph 状态图）[v2 新增]
+
+> **v2.1 更新（ADR-004 D1–D4）**：图是 Chat 流的**唯一执行路径**（删除 v1 ChatAgent
+> 旁路；langgraph 为硬依赖，仅外部服务降级）。Proposal 为真 `interrupt()` +
+> `AsyncSqliteSaver` 持久化（`data/graph_checkpoints.db`），`/api/actions/{id}/execute`
+> 用 `Command(resume=...)` 续跑、续推理落 L1（回流路线 A）。一次 run = 一棵 Langfuse
+> trace（节点=span，LLM=generation，靠 contextvar 串、每请求共享一个 client）。SSE 经
+> `graph.astream` 边跑边推。**纪律**：可序列化数据进 AgentState，活对象（client/span）
+> 走 contextvar，绝不进 state。
 
 ### 14.1 设计目标
 
