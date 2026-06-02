@@ -43,3 +43,29 @@
 **Milestone**: All Phase 1
 **Decision**: Use `/Users/wesz_station/Projects/WeatherFlow/.venv/bin/ruff` and `pytest` directly instead of `uv run --package weatherflow-backend --extra dev`.
 **Rationale**: uv cache has corrupted .git file causing permission errors; no network to recreate. Existing .venv has all needed tools.
+
+## Decision 7: v2 dependencies installed; uv.lock regenerated (network restored)
+**Date**: 2026-06-02 (continuation, round 2)
+**Milestone**: M1A–M1C
+**Decision**: Ran `uv sync --package weatherflow-backend --extra dev`, which re-resolved
+the stale lock and installed langgraph / langgraph-checkpoint-sqlite / mem0ai /
+qdrant-client / langfuse / opentelemetry-* into `.venv`. Committed the updated `uv.lock`.
+**Consequence**: The chat/rhythm graph paths are now LIVE by default (no longer falling
+back). Both graphs compile; the rhythm subgraph happy path is exercised with a stub LLM
+in tests. Langfuse stays a no-op without keys; mem0/Qdrant degrade to empty recall when
+Qdrant isn't running (connection refused, caught). All 86 tests stay green.
+**Note**: Earlier `uv sync --all-extras` (root target, no deps) had removed backend
+packages from `.venv`; the per-package sync restored them.
+
+## Decision 8: Proposal resume = focused synthesis, not full-graph replay
+**Date**: 2026-06-02 (continuation, round 2)
+**Milestone**: M1A.5
+**Decision**: `graph_runner.resume_chat` injects the tool result into the saved message
+history and asks the LLM for a short closing answer, instead of re-invoking the compiled
+chat graph from its entry node.
+**Rationale**: Without a langgraph checkpointer, `graph.ainvoke(saved_state)` restarts at
+`load_context` and re-runs recall/plan/act — which would re-load context and could
+re-propose the same write tool (loop). Focused synthesis is the safe human-in-the-loop
+continuation. A real langgraph checkpointer + `interrupt()` (Appendix D.1) remains the
+future upgrade for true mid-graph resume.
+**Appendix D reference**: D.1 — "选最不破坏 v1 不变量 + 最易自验证方案".

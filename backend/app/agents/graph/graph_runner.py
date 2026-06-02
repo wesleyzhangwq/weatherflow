@@ -150,10 +150,17 @@ async def resume_chat(
     proposal_id: str,
     execution_result: Any,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Resume a paused graph after proposal execution.
+    """Resume a paused conversation after a proposal executed.
 
-    Called by the actions router after the user confirms a proposal.
-    Continues the graph from the saved state with the tool result injected.
+    Called by the actions router once the user confirms a proposal. We inject
+    the tool result back into the saved message history and ask the LLM for a
+    short closing answer.
+
+    We deliberately do NOT re-invoke the full chat graph from its entry node:
+    without a checkpointer that would re-run load_context → recall → plan → act
+    and could re-propose the same write tool. A focused synthesis step produces
+    the human-in-the-loop continuation safely. (A real langgraph checkpointer +
+    interrupt is the future upgrade — see docs/DECISIONS-v2.md.)
     """
     saved = get_paused_state(conversation_id)
     if saved is None:
@@ -162,33 +169,27 @@ async def resume_chat(
 
     clear_paused_state(conversation_id)
 
-    # Inject the execution result into the messages as a tool response
+    # Inject the execution result as a tool response, then ask for a wrap-up.
     messages = list(saved.get("messages", []))
     messages.append({
         "role": "tool",
         "tool_call_id": proposal_id,
         "content": json.dumps({"executed": True, "result": execution_result}, ensure_ascii=False)[:2000],
     })
+    messages.append({
+        "role": "user",
+        "content": "上面的操作已执行完成。请基于执行结果，用一段简洁的中文给用户收尾，不要再调用工具。",
+    })
 
-    # Continue the graph from where it left off
-    graph = build_chat_graph()
-    if graph is not None:
-        # Resume by running from the act node onward
-        saved["messages"] = messages
-        saved["final_answer"] = None  # clear so act continues
+    try:
+        from app.agents.graph.chat_graph import _strip_think
 
-        try:
-            result = await graph.ainvoke(saved)
-        except Exception as exc:
-            logger.exception("Graph resume failed")
-            yield _sse("error", {"message": str(exc)})
-            return
+        answer = _strip_think(await llm.chat(messages, temperature=0.4, max_tokens=800))
+    except Exception:
+        logger.exception("Resume synthesis failed for conversation %s", conversation_id)
+        answer = f"已执行操作 {proposal_id}。结果: {json.dumps(execution_result, ensure_ascii=False)[:500]}"
 
-        for ev in result.get("sse_events", []):
-            yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
-    else:
-        # v1 fallback: just emit a final answer based on the execution result
-        yield _sse("final_answer", {"content": f"已执行操作 {proposal_id}。结果: {json.dumps(execution_result, ensure_ascii=False)[:500]}"})
+    yield _sse("final_answer", {"content": answer})
 
 
 async def _run_v1(

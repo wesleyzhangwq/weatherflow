@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.agents import chat_agent
+from app.agents.graph import graph_runner
 from app.core import llm as llm_module
 from app.main import create_app
 
@@ -47,6 +48,9 @@ async def test_chat_stream_event_order(monkeypatch):
     stub = _ScriptedLLM()
     monkeypatch.setattr(llm_module, "build_llm_client", lambda *a, **k: stub)
     monkeypatch.setattr(main_module, "build_llm_client", lambda *a, **k: stub)
+    # Exercise the SSE event-ordering contract via the deterministic v1 path
+    # (the graph path needs a live LLM + Qdrant and is tested separately).
+    monkeypatch.setattr(graph_runner, "build_chat_graph", lambda *a, **k: None)
 
     async def fake_chat_call(self, messages, *, tools):
         return {"content": "你今天节奏平稳，继续保持。", "tool_calls": []}

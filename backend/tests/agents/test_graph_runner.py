@@ -31,8 +31,12 @@ def _hyp() -> HypothesisPayload:
 
 @pytest.mark.asyncio
 async def test_run_chat_falls_back_to_v1_chatagent(monkeypatch):
-    """Without langgraph, run_chat routes through the v1 ChatAgent and still
-    emits a final_answer SSE event."""
+    """When the chat graph is unavailable, run_chat routes through the v1
+    ChatAgent and still emits a final_answer SSE event.
+
+    We force the graph off (build_chat_graph -> None) so this is deterministic
+    regardless of whether langgraph is installed in the environment."""
+    monkeypatch.setattr(graph_runner, "build_chat_graph", lambda *a, **k: None)
 
     async def fake_chat_call(self, messages, *, tools):
         return {"content": "这是最终回答。", "tool_calls": []}
@@ -57,16 +61,16 @@ async def test_run_chat_falls_back_to_v1_chatagent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resume_chat_fallback_emits_final_answer_and_clears_state():
+async def test_resume_chat_synthesizes_final_answer_and_clears_state():
     from tests.conftest import StubLLM
 
     cid = "conv-resume"
-    save_paused_state(cid, {"messages": [{"role": "user", "content": "hi"}]})
+    save_paused_state(cid, {"messages": [{"role": "user", "content": "帮我建专注块"}]})
     try:
         events = [
             ev
             async for ev in graph_runner.resume_chat(
-                llm=StubLLM([]),
+                llm=StubLLM(["已为你创建专注块，注意休息。"]),
                 conversation_id=cid,
                 proposal_id="evt_proposal_1",
                 execution_result={"ok": True},
@@ -75,7 +79,9 @@ async def test_resume_chat_fallback_emits_final_answer_and_clears_state():
     finally:
         clear_paused_state(cid)
 
-    assert any(e["event"] == "final_answer" for e in events)
+    finals = [e for e in events if e["event"] == "final_answer"]
+    assert finals, "resume should emit a final_answer"
+    assert "专注块" in finals[0]["data"]
     # resume_chat must clear the paused state once consumed
     assert not has_paused_state(cid)
 
