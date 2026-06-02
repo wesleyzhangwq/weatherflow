@@ -8,12 +8,10 @@
   --fg: #1a1816;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #14110f;
-    --fg: #ece9e3;
-  }
+html.dark {
+  color-scheme: dark;
+  --bg: #14110f;
+  --fg: #ece9e3;
 }
 
 html, body { background: var(--bg); color: var(--fg); }
