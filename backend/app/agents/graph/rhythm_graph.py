@@ -24,24 +24,18 @@ async def recall_node(state: AgentState) -> dict[str, Any]:
 
 
 async def hypothesize_node(state: AgentState) -> dict[str, Any]:
-    """Generate a hypothesis using the RhythmAgent."""
+    """Generate a hypothesis using the RhythmAgent.
+
+    Delegates to ContextLoader + RhythmAgent — the same v1 path the orchestrator
+    uses, so the subgraph and the legacy flow produce identical hypotheses.
+    """
     from app.agents.rhythm_agent import RhythmAgent
     from app.core.llm import build_llm_client
-    from app.memory.context_loader import EvidenceBundle
+    from app.memory.context_loader import load as load_bundle
 
     llm = build_llm_client()
     agent = RhythmAgent(llm)
-
-    # Reconstruct a minimal EvidenceBundle from state
-    bundle = EvidenceBundle(
-        trigger_event_id=state["trigger_event_id"],
-        mode=state.get("mode", "checkin"),
-    )
-
     try:
-        # RhythmAgent.generate expects a bundle, but we can pass the text
-        # For the subgraph, we delegate to the orchestrator path
-        from app.memory.context_loader import load as load_bundle
         bundle = await load_bundle(
             trigger_event_id=state["trigger_event_id"],
             mode=state.get("mode", "checkin"),

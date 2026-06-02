@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.core.llm import LLMClient
-from app.core.orchestrator import generate_hypothesis
+from app.agents.graph.rhythm_graph import run_rhythm
 from app.memory import event_log
 from app.memory.schemas import CheckinPayload, HypothesisPayload
-from app.routers._deps import get_llm
+from app.observability.structured_logging import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -26,19 +26,26 @@ class CheckinResponse(BaseModel):
 
 
 @router.post("", response_model=CheckinResponse)
-async def submit_checkin(
-    payload: CheckinPayload,
-    llm: LLMClient = Depends(get_llm),
-) -> CheckinResponse:
+async def submit_checkin(payload: CheckinPayload) -> CheckinResponse:
+    start = time.perf_counter()
     checkin_id = event_log.append(type="checkin", payload=payload.model_dump())
-    hyp_id, hyp = await generate_hypothesis(
+    # v2 (M1A.6): route through the rhythm subgraph, which falls back to the v1
+    # orchestrator (generate_hypothesis) when langgraph is unavailable.
+    hyp_id, hyp_dict = await run_rhythm(
         trigger_event_id=checkin_id,
         mode="checkin",
-        llm=llm,
     )
+    if hyp_id is None or hyp_dict is None:
+        raise HTTPException(status_code=502, detail="Hypothesis generation failed.")
+    metrics.observe("checkin.latency_ms", (time.perf_counter() - start) * 1000)
+    metrics.increment("checkin.count")
     # §9.2 — fire DelayedMemoryWriter asynchronously (do not block response)
     asyncio.create_task(_run_dmw_safely())
-    return CheckinResponse(checkin_id=checkin_id, hypothesis_id=hyp_id, hypothesis=hyp)
+    return CheckinResponse(
+        checkin_id=checkin_id,
+        hypothesis_id=hyp_id,
+        hypothesis=HypothesisPayload.model_validate(hyp_dict),
+    )
 
 
 async def _run_dmw_safely() -> None:
