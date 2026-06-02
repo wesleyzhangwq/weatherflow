@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logging.basicConfig(level=settings.log_level)
+    # v2 (M1C.3): JSON logs enriched with trace_id / conversation_id / user_id.
+    from app.observability.structured_logging import setup_structured_logging
+
+    setup_structured_logging(settings.log_level)
     logger.info("WeatherFlow starting up. db=%s", settings.db_path)
 
     from app.memory.event_log import init_db
@@ -27,12 +30,20 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.llm = build_llm_client(settings)
 
-    # v2: Initialize OpenTelemetry
+    # v2 (M1C.2): Initialize OpenTelemetry + instrument FastAPI when available.
     try:
         from app.observability.tracing import init_otel
         init_otel()
     except ImportError:
         pass
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        FastAPIInstrumentor.instrument_app(app)
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("FastAPI OTel instrumentation skipped", exc_info=True)
 
     scheduler = None
     try:
@@ -54,15 +65,51 @@ async def lifespan(app: FastAPI):
         logger.info("WeatherFlow shutting down.")
 
 
+class TraceContextMiddleware:
+    """Pure-ASGI middleware: assign a trace_id per request (M1C.2).
+
+    Reads an incoming ``X-Trace-Id`` / ``X-Request-Id`` header if present,
+    otherwise generates one. The id is stored in a contextvar so it threads
+    through router → orchestrator → graph nodes → tools → llm and into the
+    structured logs, and is echoed back on the response.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        from app.observability.tracing import get_trace_id, set_trace_id
+
+        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        incoming = headers.get(b"x-trace-id") or headers.get(b"x-request-id")
+        if incoming:
+            set_trace_id(incoming.decode("latin-1"))
+        trace_id = get_trace_id()  # generates + stores one if not set
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                msg_headers = list(message.get("headers") or [])
+                msg_headers.append((b"x-trace-id", trace_id.encode("latin-1")))
+                message["headers"] = msg_headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="WeatherFlow",
         description="A rhythm coach + daily cockpit for developers.",
-        version="1.0.0",
+        version="2.0.0",
         lifespan=lifespan,
     )
 
+    app.add_middleware(TraceContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -119,6 +166,14 @@ def create_app() -> FastAPI:
                 "proactivity": {"enabled": s.proactivity_enabled},
             },
         }
+
+    @app.get("/api/meta/metrics", tags=["meta"])
+    def meta_metrics() -> dict:
+        """Expose in-process business metrics (M1C.3): token usage, stage
+        latency P50/P95, counters. Backed by the global MetricsCollector."""
+        from app.observability.structured_logging import metrics
+
+        return metrics.get_metrics()
 
     @app.get("/", tags=["meta"])
     def root() -> dict[str, str]:

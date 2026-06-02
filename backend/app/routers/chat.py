@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import asdict
 from typing import AsyncIterator
 
@@ -18,6 +19,7 @@ from app.agents.graph.graph_runner import run_chat
 from app.core.llm import LLMClient
 from app.core.orchestrator import generate_hypothesis
 from app.memory import context_loader, event_log
+from app.observability.structured_logging import metrics
 from app.routers._deps import get_llm
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ async def stream_chat(
 
 
 async def _stream(body: ChatStreamIn, llm: LLMClient) -> AsyncIterator[dict]:
+    start = time.perf_counter()
     # 1. Persist the user's chat_turn first (so the trigger event exists for bundle)
     turn_id = event_log.append(
         type="chat_turn",
@@ -116,6 +119,8 @@ async def _stream(body: ChatStreamIn, llm: LLMClient) -> AsyncIterator[dict]:
         return
 
     # 4. Fire DelayedMemoryWriter asynchronously (ADR D7 — fire and forget)
+    metrics.observe("chat.latency_ms", (time.perf_counter() - start) * 1000)
+    metrics.increment("chat.count")
     asyncio.create_task(_run_dmw_safely())
 
 
