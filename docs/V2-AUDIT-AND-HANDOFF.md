@@ -77,6 +77,22 @@
 
 ## 二、未完成/有缺陷的任务清单
 
+> **✅ 续接执行已完成（2026-06-02，第二轮 agent）**：下列 G1–G16 全部接通/修复。
+> 验证回路绿（ruff clean，pytest 73→**86** passed）。逐项落点：
+> - **P0**：G1/G2（checkin + scheduled_check → `run_rhythm`，含 v1 fallback）、
+>   G3（actions execute 后 `resume_chat` 续推理）、G4（`llm.py` Langfuse 包裹 + token/延迟）、
+>   G5（`TraceContextMiddleware` traceId 透传）、G6（lifespan 启用结构化日志）、
+>   G7（`GET /api/meta/metrics` + checkin/chat 路径埋点）。
+> - **P1**：G8（README 重写为 v2）、G9（`desktop/assets/tray-icon.png` 32×32）。
+> - **P2**：G10–G13（graph_runner / resume / SSE 顺序 / 可观测 wiring 测试 +13）、
+>   G14（rhythm_graph 死代码）、G15（act_node 复用 `chat_raw`）、G16（`build_mem0_config` + urllib.parse）。
+>
+> 仍受环境限制（langgraph/mem0/langfuse 未安装）：图/语义/trace 走降级路径，
+> 接通代码已就绪，装包后即生效。G11/G12 的「真实 trace 树/Recall@K」需真实服务，
+> 已用结构化/降级测试覆盖其 wiring。
+>
+> 以下为原始缺陷清单（保留作为审计留痕）。
+
 以下任务**代码骨架已写但未真正集成到运行路径中**，即：代码存在、测试通过、但实际运行时不会被调用。
 
 ### 2.1 🔴 关键集成缺失（不修则 v2 功能不生效）

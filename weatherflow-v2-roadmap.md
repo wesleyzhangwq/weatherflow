@@ -306,6 +306,13 @@ L1  Event Log (SQLite, append-only)            ← 唯一真理，永不修改
 | 2026-06-02 | M1E.2-M1E.3 | 健康状态 v2 检查 + OTel 初始化 + docs/interview-notes.md（18 条 Q&A） |
 | 2026-06-02 | M2.1-M2.3 | desktop/：Electron 透明窗 + 6 种 mood emoji/动画 + SSE 聊天 + 克制提示 |
 | 2026-06-02 | M2.4 | SKIPPED — 条件满足但依赖外部视觉/语音服务 |
+| 2026-06-02 | G1/G2/G14 | 续接：checkin + scheduled_check 接入 rhythm 子图（run_rhythm，含 v1 fallback）；清理 hypothesize_node 死代码 |
+| 2026-06-02 | G3 | 续接：actions execute 后 resume 暂停的 chat 图（M1A.5 真正接通），续推理落 L1 |
+| 2026-06-02 | G4/G15 | 续接：llm.py 用 Langfuse 包裹 LLM 调用并记录 token/延迟；新增 chat_raw，act_node 复用 LLMClient |
+| 2026-06-02 | G5/G6/G7 | 续接：TraceContextMiddleware（traceId）+ 结构化日志启用 + /api/meta/metrics |
+| 2026-06-02 | G8/G9 | 续接：README 重写为 v2（拓扑图/多 Agent 图/评测数字/docker-compose）+ 桌面托盘图标 |
+| 2026-06-02 | G16 | 续接：mem0 config 抽成 build_mem0_config（urllib.parse），projector/recall 复用 |
+| 2026-06-02 | G10-G13 | 续接：graph_runner fallback / resume / SSE 事件顺序 / 可观测 wiring 测试（73→86） |
 
 ---
 
