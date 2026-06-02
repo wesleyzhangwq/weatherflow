@@ -76,28 +76,24 @@ class OpenAICompatibleClient:
         await self._client.aclose()
 
     async def _post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST to /chat/completions, wrapped in a Langfuse trace (M1C.1).
-
-        Records model / token usage / latency. Tracing degrades to a no-op
-        when Langfuse is unavailable, so this never breaks the call path.
+        """POST to /chat/completions and record the call as a Langfuse
+        generation under the current run trace/span (ADR-004 D3) — or a
+        standalone trace when no run is bound. Degrades to no-op without keys.
         """
-        from app.observability.langfuse_integration import trace
+        from app.observability.langfuse_integration import record_generation
 
         start = time.perf_counter()
-        with trace("llm.chat", {"model": payload.get("model")}) as span:
-            resp = await self._client.post("/chat/completions", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            latency_ms = (time.perf_counter() - start) * 1000
-            usage = data.get("usage") or {}
-            span.update(
-                output={
-                    "usage": usage,
-                    "latency_ms": round(latency_ms, 1),
-                    "model": data.get("model", payload.get("model")),
-                }
-            )
-            _record_llm_metrics(usage, latency_ms)
+        resp = await self._client.post("/chat/completions", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        latency_ms = (time.perf_counter() - start) * 1000
+        usage = data.get("usage") or {}
+        record_generation(
+            model=data.get("model", payload.get("model")),
+            usage=usage,
+            latency_ms=latency_ms,
+        )
+        _record_llm_metrics(usage, latency_ms)
         return data
 
     async def chat(

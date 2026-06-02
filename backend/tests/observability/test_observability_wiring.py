@@ -52,6 +52,23 @@ def test_langfuse_trace_is_safe_noop_without_keys():
             raise ValueError("boom")
 
 
+def test_observe_node_binds_span_and_record_generation_is_safe():
+    """ADR-004 D3: observe_node binds a current span; record_generation records
+    a generation under it (no-op without keys) and resets cleanly. Outside a
+    run it falls back to a standalone trace — both paths must never raise."""
+    from app.observability.langfuse_integration import observe_node, record_generation
+    from app.observability.tracing import get_current_span
+
+    assert get_current_span() is None
+    with observe_node("plan"):
+        assert get_current_span() is not None  # bound (noop span when langfuse off)
+        record_generation(model="m", usage={"total_tokens": 5}, latency_ms=1.0)
+    assert get_current_span() is None  # reset on exit
+
+    # Outside any run → standalone trace fallback, still must not raise.
+    record_generation(model="m", usage={}, latency_ms=1.0)
+
+
 @pytest.mark.asyncio
 async def test_recall_memory_node_degrades_to_empty():
     from app.agents.graph.chat_graph import recall_memory_node

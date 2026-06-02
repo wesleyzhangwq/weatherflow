@@ -12,13 +12,34 @@ The critic node validates groundedness (source_event_id checks).
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Any
 
 from app.agents.graph.state import AgentState
+from app.observability.langfuse_integration import observe_node
 
 logger = logging.getLogger(__name__)
+
+
+def traced_node(name: str):
+    """Wrap a graph node so it runs inside a Langfuse span (ADR-004 D3).
+
+    The span is bound as the current span (via observe_node → contextvar), so
+    LLM generations made inside the node attach under it — one trace per run,
+    nodes = spans, llm calls = generations.
+    """
+
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(state: AgentState) -> dict[str, Any]:
+            with observe_node(name):
+                return await fn(state)
+
+        return wrapper
+
+    return deco
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +48,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+@traced_node("load_context")
 async def load_context_node(state: AgentState) -> dict[str, Any]:
     """Assemble the evidence bundle via ContextLoader.
 
@@ -47,6 +69,7 @@ async def load_context_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+@traced_node("recall_memory")
 async def recall_memory_node(state: AgentState) -> dict[str, Any]:
     """Query semantic memory (L2.5) for relevant historical memories.
 
@@ -66,15 +89,16 @@ async def recall_memory_node(state: AgentState) -> dict[str, Any]:
         return {"semantic_memories": []}
 
 
+@traced_node("plan")
 async def plan_node(state: AgentState) -> dict[str, Any]:
     """Decide next action based on current context.
 
     Uses the LLM to produce a plan string, which the act node will follow.
     On retry (from critic), includes the critic feedback in the plan.
     """
-    from app.core.llm import build_llm_client
+    from app.core.llm import get_request_llm
 
-    llm = build_llm_client()
+    llm = get_request_llm()
 
     messages = list(state.get("messages", []))
 
@@ -100,10 +124,10 @@ async def plan_node(state: AgentState) -> dict[str, Any]:
         logger.warning("Plan node LLM call failed: %s", exc)
         plan_text = "Provide final answer based on available evidence."
 
-    await llm.aclose()
     return {"plan": plan_text, "critic_verdict": None}
 
 
+@traced_node("act")
 async def act_node(state: AgentState) -> dict[str, Any]:
     """Execute tool calls or produce a final answer (the worker node).
 
@@ -112,7 +136,7 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     """
     import json
 
-    from app.core.llm import build_llm_client
+    from app.core.llm import get_request_llm
     from app.mcp_client.dispatcher import (
         ErrorResult,
         ObservationResult,
@@ -121,7 +145,7 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     )
     from app.mcp_client.tool_registry import registry
 
-    llm = build_llm_client()
+    llm = get_request_llm()
     tools_schemas = registry().openai_tool_schemas()
     messages = list(state.get("messages", []))
 
@@ -150,7 +174,6 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("LLM call failed in act node")
         sse_events.append({"event": "error", "data": {"message": str(exc)}})
-        await llm.aclose()
         return {
             "sse_events": sse_events,
             "final_answer": f"（LLM 调用失败: {exc}）",
@@ -165,7 +188,6 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     if content and not tool_calls:
         sse_events.append({"event": "final_answer", "data": {"content": content}})
         messages.append({"role": "assistant", "content": content})
-        await llm.aclose()
         return {
             "messages": messages,
             "final_answer": content,
@@ -258,8 +280,6 @@ async def act_node(state: AgentState) -> dict[str, Any]:
                 "content": json.dumps({"error": err_msg}, ensure_ascii=False),
             })
 
-    await llm.aclose()
-
     return {
         "messages": messages,
         "observations": observations,
@@ -300,6 +320,7 @@ async def human_review_node(state: AgentState) -> dict[str, Any]:
     return {"messages": messages, "pending_proposal": None}
 
 
+@traced_node("criticize")
 async def criticize_node(state: AgentState) -> dict[str, Any]:
     """Validate groundedness: check that all evidence source_event_ids exist in the bundle.
 
@@ -328,15 +349,16 @@ async def criticize_node(state: AgentState) -> dict[str, Any]:
     return {"critic_verdict": "pass"}
 
 
+@traced_node("synthesize")
 async def synthesize_node(state: AgentState) -> dict[str, Any]:
     """Produce final answer if not already set (handles the case where
     act exhausted max turns without a content-only response)."""
     if state.get("final_answer"):
         return {}
 
-    from app.core.llm import build_llm_client
+    from app.core.llm import get_request_llm
 
-    llm = build_llm_client()
+    llm = get_request_llm()
     messages = list(state.get("messages", []))
     messages.append({
         "role": "user",
@@ -352,8 +374,6 @@ async def synthesize_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("Synthesize node failed")
         return {"final_answer": f"（生成回答失败: {exc}）"}
-    finally:
-        await llm.aclose()
 
 
 # ---------------------------------------------------------------------------

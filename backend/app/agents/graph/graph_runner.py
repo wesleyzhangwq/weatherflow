@@ -67,12 +67,24 @@ async def run_chat(
         "max_turns": settings.rhythm_agent_max_turns,
     }
 
+    from app.observability import langfuse_integration as lf
+    from app.observability.tracing import run_context
+
+    # One trace per run; nodes attach spans, llm calls attach generations.
+    # Bind the request's shared LLM client so all nodes reuse it (ADR-004 D3).
+    root = lf.start_trace(
+        "chat_run",
+        {"conversation_id": conversation_id, "user_id": initial_state["user_id"]},
+    )
     try:
-        result = await graph.ainvoke(initial_state, config=_config(conversation_id))
+        with run_context(trace=root, llm=llm):
+            result = await graph.ainvoke(initial_state, config=_config(conversation_id))
     except Exception as exc:
         logger.exception("Chat graph execution failed")
         yield _sse("error", {"message": str(exc)})
         return
+    finally:
+        lf.flush()
 
     if result.get("__interrupt__"):
         logger.info("Chat graph paused on a proposal for conversation %s", conversation_id)
@@ -97,16 +109,28 @@ async def resume_chat(
     """
     from langgraph.types import Command
 
+    from app.core.llm import build_llm_client
+    from app.observability import langfuse_integration as lf
+    from app.observability.tracing import run_context
+
+    shared = build_llm_client()
+    root = lf.start_trace("chat_resume", {"conversation_id": conversation_id})
+    result: Optional[dict[str, Any]] = None
     try:
-        result = await graph.ainvoke(
-            Command(resume={"proposal_id": proposal_id, "result": execution_result}),
-            config=_config(conversation_id),
-        )
+        with run_context(trace=root, llm=shared):
+            result = await graph.ainvoke(
+                Command(resume={"proposal_id": proposal_id, "result": execution_result}),
+                config=_config(conversation_id),
+            )
     except Exception as exc:
         logger.exception("Chat graph resume failed for conversation %s", conversation_id)
         yield _sse("error", {"message": str(exc)})
-        return
+    finally:
+        await shared.aclose()
+        lf.flush()
 
+    if result is None:
+        return
     final = result.get("final_answer")
     if final:
         yield _sse("final_answer", {"content": final})
