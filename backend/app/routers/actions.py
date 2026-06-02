@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
@@ -152,6 +153,10 @@ async def execute_proposal(proposal_id: str, body: ConfirmIn) -> ExecutedOut:
         refs={"proposal": proposal_id},
     )
 
+    # M1A.5: if a chat graph paused at this proposal (human-in-the-loop
+    # interrupt), resume it now that the write tool has executed.
+    await _maybe_resume_graph(rec.payload.get("conversation_id", ""), proposal_id, result)
+
     asyncio.create_task(_run_dmw_safely())
 
     return ExecutedOut(
@@ -175,6 +180,58 @@ def reject_proposal(proposal_id: str) -> dict:
         refs={"proposal": proposal_id},
     )
     return {"proposal_id": proposal_id, "rejection_event_id": eid}
+
+
+async def _maybe_resume_graph(
+    conversation_id: str, proposal_id: str, result: Any
+) -> None:
+    """Resume a paused chat graph after its proposal executed (M1A.5).
+
+    When the v2 chat graph hits a write tool it pauses (interrupt) and saves
+    state keyed by conversation_id. After the user confirms and the tool runs,
+    we feed the result back and let the graph finish reasoning; the continued
+    final answer is persisted as an assistant chat_turn so it shows in history.
+
+    No-op when langgraph is unavailable or nothing is paused for this
+    conversation — the common v1-fallback case.
+    """
+    from app.agents.graph.checkpoint import has_paused_state
+
+    if not conversation_id or not has_paused_state(conversation_id):
+        return
+
+    from app.agents.graph.graph_runner import resume_chat
+    from app.core.llm import build_llm_client
+
+    llm = build_llm_client()
+    final_answer: Optional[str] = None
+    try:
+        async for ev in resume_chat(
+            llm=llm,
+            conversation_id=conversation_id,
+            proposal_id=proposal_id,
+            execution_result=result,
+        ):
+            if ev.get("event") == "final_answer":
+                try:
+                    final_answer = json.loads(ev["data"]).get("content")
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+    except Exception:
+        logger.exception("Graph resume after proposal %s failed", proposal_id)
+    finally:
+        await llm.aclose()
+
+    if final_answer:
+        event_log.append(
+            type="chat_turn",
+            payload={
+                "role": "assistant",
+                "content": final_answer,
+                "conversation_id": conversation_id,
+            },
+            refs={"conversation_id": conversation_id},
+        )
 
 
 async def _run_dmw_safely() -> None:
