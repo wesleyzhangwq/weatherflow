@@ -165,6 +165,22 @@ def build_llm_client(settings: Optional[Settings] = None) -> LLMClient:
     return OpenAICompatibleClient(settings or get_settings())
 
 
+def get_request_llm() -> LLMClient:
+    """Return the per-request shared LLM client, or a fresh one if unbound.
+
+    Graph nodes call this instead of ``build_llm_client()`` so a single client
+    (with its Langfuse trace context) is reused across all nodes of one run.
+
+    Lifecycle: when a client is bound via ``tracing.run_context(llm=...)``, the
+    run scope owns it — callers MUST NOT ``aclose()`` it. Only close a client
+    you built yourself (the unbound fallback path).
+    """
+    from app.observability.tracing import get_request_llm as _bound
+
+    client = _bound()
+    return client if client is not None else build_llm_client()
+
+
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -208,4 +224,10 @@ async def chat_json(
     return json.loads(cleaned)
 
 
-__all__ = ["LLMClient", "OpenAICompatibleClient", "build_llm_client", "chat_json"]
+__all__ = [
+    "LLMClient",
+    "OpenAICompatibleClient",
+    "build_llm_client",
+    "get_request_llm",
+    "chat_json",
+]
