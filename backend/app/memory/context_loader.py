@@ -18,6 +18,7 @@ from typing import Dict, List, Literal, Optional
 
 from app.config import get_settings
 from app.memory import event_log, profile_md
+from app.memory.retrieval import recall_recent, recall_semantic
 from app.memory.schemas import (
     BundleEntry,
     EventRecord,
@@ -70,50 +71,27 @@ async def load(
         seen.add(rec.id)
         bundle.entries.append(_render_event(rec, must_keep=must_keep))
 
-    # §6.1 most-recent items by type
-    for rec in event_log.latest_by_type(["hypothesis"], user_id=uid, limit=3):
-        _add(rec)
-    for rec in event_log.latest_by_type(["hypothesis_feedback"], user_id=uid, limit=5):
-        _add(rec, must_keep=True)  # high signal, never truncate (§6.3)
-    for rec in event_log.latest_by_type(["checkin"], user_id=uid, limit=3):
-        _add(rec)
+    # §6.1 recency strategy
+    for rec, must_keep in recall_recent(uid):
+        _add(rec, must_keep=must_keep)
 
-    cal = event_log.latest_one("calendar_snapshot", user_id=uid)
-    if cal:
-        _add(cal, must_keep=True)
-    gh = event_log.latest_one("github_snapshot", user_id=uid)
-    if gh:
-        _add(gh, must_keep=True)
-    summary = event_log.latest_one("evidence_summary", user_id=uid)
-    if summary:
-        _add(summary)
-
-    # v2: §13 — add L2.5 semantic recall memories
-    try:
-        from app.memory.semantic.recall import recall_relevant
-
-        trigger = event_log.get(trigger_event_id)
-        query_text = _render_event(trigger).rendered if trigger else ""
-        if query_text:
-            semantic_memories = await recall_relevant(
-                query=query_text,
-                user_id=uid,
-                limit=getattr(settings, "semantic_recall_limit", 5),
+    # §13 semantic strategy (L2.5) — each hit carries a source_event_id back to
+    # L1, so it can be cited/sourced exactly like a recency entry.
+    query_text = _render_event(trigger).rendered if trigger else ""
+    semantic_memories = await recall_semantic(
+        query_text, uid, getattr(settings, "semantic_recall_limit", 5)
+    )
+    for mem in semantic_memories:
+        sid = mem.get("source_event_id", "")
+        if sid and sid not in seen:
+            bundle.entries.append(
+                BundleEntry(
+                    event_id=sid,
+                    event_type="semantic_recall",
+                    rendered=f"[L2.5 recall] {mem.get('text', '')}",
+                )
             )
-            for mem in semantic_memories:
-                sid = mem.get("source_event_id", "")
-                if sid and sid not in seen:
-                    entry = BundleEntry(
-                        event_id=sid,
-                        event_type="semantic_recall",
-                        rendered=f"[L2.5 recall] {mem.get('text', '')}",
-                    )
-                    bundle.entries.append(entry)
-                    seen.add(sid)
-    except ImportError:
-        pass  # mem0 not installed, skip semantic recall
-    except Exception:
-        pass  # graceful degradation
+            seen.add(sid)
 
     # §6.2 profile sections per mode
     bundle.profile_sections = profile_md.read_sections(

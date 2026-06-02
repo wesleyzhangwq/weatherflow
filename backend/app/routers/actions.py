@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.mcp_client import MCPToolClient
 from app.mcp_client.tool_registry import registry
 from app.memory import event_log
+from app.memory.derivations import run_derivations
 from app.memory.schemas import ExecutedActionPayload
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ async def execute_proposal(
     graph = getattr(request.app.state, "chat_graph", None)
     await _maybe_resume_graph(graph, rec.payload.get("conversation_id", ""), proposal_id, result)
 
-    asyncio.create_task(_run_dmw_safely())
+    asyncio.create_task(run_derivations())
 
     return ExecutedOut(
         proposal_id=proposal_id,
@@ -232,13 +233,3 @@ async def _maybe_resume_graph(
             },
             refs={"conversation_id": conversation_id},
         )
-
-
-async def _run_dmw_safely() -> None:
-    try:
-        from app.memory.delayed_writer import maybe_update
-        await maybe_update()
-    except ImportError:
-        pass
-    except Exception:
-        logger.exception("DelayedMemoryWriter run failed")

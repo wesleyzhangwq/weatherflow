@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.agents.graph.rhythm_graph import run_rhythm
 from app.memory import event_log
+from app.memory.derivations import run_derivations
 from app.memory.schemas import CheckinPayload, HypothesisPayload
 from app.observability.structured_logging import metrics
 
@@ -39,21 +40,10 @@ async def submit_checkin(payload: CheckinPayload) -> CheckinResponse:
         raise HTTPException(status_code=502, detail="Hypothesis generation failed.")
     metrics.observe("checkin.latency_ms", (time.perf_counter() - start) * 1000)
     metrics.increment("checkin.count")
-    # §9.2 — fire DelayedMemoryWriter asynchronously (do not block response)
-    asyncio.create_task(_run_dmw_safely())
+    # §9.2 / ADR-004 D5 — fan out to mem0 (L2.5) + profile.md (L3) async.
+    asyncio.create_task(run_derivations())
     return CheckinResponse(
         checkin_id=checkin_id,
         hypothesis_id=hyp_id,
         hypothesis=HypothesisPayload.model_validate(hyp_dict),
     )
-
-
-async def _run_dmw_safely() -> None:
-    try:
-        from app.memory.delayed_writer import maybe_update
-        await maybe_update()
-    except ImportError:
-        # Phase 6 not yet wired up.
-        pass
-    except Exception:
-        logger.exception("DelayedMemoryWriter run failed")

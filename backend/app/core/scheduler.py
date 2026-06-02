@@ -77,9 +77,10 @@ async def _scheduled_check_job() -> None:
 
 async def _delayed_memory_writer_job() -> None:
     try:
-        from app.memory.delayed_writer import maybe_update
+        from app.memory.derivations import run_derivations
 
-        await maybe_update()
+        # Heartbeat fan-out: catch up mem0 (L2.5) + profile.md (L3) from L1.
+        await run_derivations()
     except Exception:
         logger.exception("delayed_memory_writer job failed")
 

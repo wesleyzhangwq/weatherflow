@@ -19,6 +19,7 @@ from app.agents.graph.graph_runner import run_chat
 from app.core.llm import LLMClient
 from app.core.orchestrator import generate_hypothesis
 from app.memory import context_loader, event_log
+from app.memory.derivations import run_derivations
 from app.observability.structured_logging import metrics
 from app.routers._deps import get_llm
 
@@ -121,10 +122,10 @@ async def _stream(body: ChatStreamIn, llm: LLMClient, graph: object) -> AsyncIte
         yield _sse("error", {"message": str(exc)})
         return
 
-    # 4. Fire DelayedMemoryWriter asynchronously (ADR D7 — fire and forget)
+    # 4. Fan out derivations asynchronously (ADR D7 / ADR-004 D5 — fire-and-forget)
     metrics.observe("chat.latency_ms", (time.perf_counter() - start) * 1000)
     metrics.increment("chat.count")
-    asyncio.create_task(_run_dmw_safely())
+    asyncio.create_task(run_derivations())
 
 
 def _is_first_turn(conversation_id: str) -> bool:
@@ -156,16 +157,6 @@ def _event_payload(ev) -> dict:
 
 def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
-
-
-async def _run_dmw_safely() -> None:
-    try:
-        from app.memory.delayed_writer import maybe_update
-        await maybe_update()
-    except ImportError:
-        pass
-    except Exception:
-        logger.exception("DelayedMemoryWriter run failed")
 
 
 # --------------------------------------------------------------------------- history
