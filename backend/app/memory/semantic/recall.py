@@ -26,30 +26,12 @@ async def recall_relevant(
         from mem0 import Memory
 
         from app.config import get_settings
+        from app.memory.semantic.mem0_config import build_mem0_config
 
         settings = get_settings()
         uid = user_id or settings.default_user_id
 
-        config = {
-            "vector_store": {
-                "provider": "qdrant",
-                "config": {
-                    "host": settings.qdrant_url.replace("http://", "").split(":")[0],
-                    "port": int(settings.qdrant_url.split(":")[-1]) if ":" in settings.qdrant_url.split("//")[-1] else 6333,
-                    "collection_name": settings.qdrant_collection,
-                },
-            },
-        }
-        if settings.embedding_api_key:
-            config["embedder"] = {
-                "provider": settings.embedding_provider,
-                "config": {
-                    "model": settings.embedding_model,
-                    "api_key": settings.embedding_api_key,
-                },
-            }
-
-        m = Memory.from_config(config)
+        m = Memory.from_config(build_mem0_config(settings))
         results = m.search(query, user_id=uid, limit=limit)
 
         memories = []

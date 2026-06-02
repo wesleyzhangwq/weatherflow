@@ -86,28 +86,11 @@ async def project_event(rec: Any, user_id: Optional[str] = None) -> bool:
     try:
         from mem0 import Memory
 
-        settings = __import__("app.config", fromlist=["get_settings"]).get_settings()
+        from app.config import get_settings
+        from app.memory.semantic.mem0_config import build_mem0_config
 
-        config = {
-            "vector_store": {
-                "provider": "qdrant",
-                "config": {
-                    "host": settings.qdrant_url.replace("http://", "").split(":")[0],
-                    "port": int(settings.qdrant_url.split(":")[-1]) if ":" in settings.qdrant_url.split("//")[-1] else 6333,
-                    "collection_name": settings.qdrant_collection,
-                },
-            },
-        }
-        if settings.embedding_api_key:
-            config["embedder"] = {
-                "provider": settings.embedding_provider,
-                "config": {
-                    "model": settings.embedding_model,
-                    "api_key": settings.embedding_api_key,
-                },
-            }
-
-        m = Memory.from_config(config)
+        settings = get_settings()
+        m = Memory.from_config(build_mem0_config(settings))
         metadata = {
             "source_event_id": rec.id,
             "event_type": rec.type,
