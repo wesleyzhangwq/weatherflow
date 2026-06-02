@@ -61,32 +61,28 @@ def trace(name: str, metadata: Optional[dict] = None):
             t.update(output={"tokens": 100})
     """
     lf = _get_langfuse()
-    if lf is None:
-        yield _NoopSpan()
-        return
-
-    try:
-        span = lf.trace(name=name, metadata=metadata or {})
-        yield _LangfuseSpan(span)
-    except Exception:
-        logger.exception("Langfuse trace failed")
-        yield _NoopSpan()
+    span_obj: Any = None
+    if lf is not None:
+        try:
+            span_obj = _LangfuseSpan(lf.trace(name=name, metadata=metadata or {}))
+        except Exception:
+            logger.exception("Langfuse trace init failed")
+    # Yield exactly once; let exceptions from the with-body propagate cleanly.
+    yield span_obj if span_obj is not None else _NoopSpan()
 
 
 @contextmanager
 def span(parent: Any, name: str, metadata: Optional[dict] = None):
     """Context manager for a child span within a trace."""
     lf = _get_langfuse()
-    if lf is None:
-        yield _NoopSpan()
-        return
-
-    try:
-        child = parent.span(name=name, metadata=metadata or {}) if hasattr(parent, "span") else lf.trace(name=name)
-        yield _LangfuseSpan(child)
-    except Exception:
-        logger.exception("Langfuse span failed")
-        yield _NoopSpan()
+    span_obj: Any = None
+    if lf is not None:
+        try:
+            child = parent.span(name=name, metadata=metadata or {}) if hasattr(parent, "span") else lf.trace(name=name)
+            span_obj = _LangfuseSpan(child)
+        except Exception:
+            logger.exception("Langfuse span init failed")
+    yield span_obj if span_obj is not None else _NoopSpan()
 
 
 class _LangfuseSpan:

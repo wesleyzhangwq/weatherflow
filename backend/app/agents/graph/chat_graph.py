@@ -137,35 +137,20 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     proposals = list(state.get("proposals", []))
     sse_events = list(state.get("sse_events", []))
 
-    # One LLM call per act invocation
+    # One LLM call per act invocation. Reuse the shared LLMClient (which carries
+    # auth/base_url/timeouts + Langfuse tracing) via chat_raw, which returns the
+    # full assistant message so we can read tool_calls.
     try:
-        payload: dict[str, Any] = {
-            "model": None,  # uses default
-            "messages": messages,
-            "temperature": 0.4,
-            "tools": tools_schemas,
-            "tool_choice": "auto",
-        }
-        # Direct call for tool_calls support
-        import httpx
-        from app.config import get_settings
-
-        s = get_settings()
-        async with httpx.AsyncClient(
-            base_url=s.openai_base_url.rstrip("/"),
-            headers={
-                "Authorization": f"Bearer {s.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=httpx.Timeout(60.0, connect=10.0),
-        ) as client:
-            resp = await client.post("/chat/completions", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            msg = data["choices"][0]["message"]
+        msg = await llm.chat_raw(
+            messages,
+            temperature=0.4,
+            tools=tools_schemas,
+            tool_choice="auto",
+        )
     except Exception as exc:
         logger.exception("LLM call failed in act node")
         sse_events.append({"event": "error", "data": {"message": str(exc)}})
+        await llm.aclose()
         return {
             "sse_events": sse_events,
             "final_answer": f"（LLM 调用失败: {exc}）",
@@ -180,6 +165,7 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     if content and not tool_calls:
         sse_events.append({"event": "final_answer", "data": {"content": content}})
         messages.append({"role": "assistant", "content": content})
+        await llm.aclose()
         return {
             "messages": messages,
             "final_answer": content,
