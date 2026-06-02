@@ -129,7 +129,7 @@ v1 把执行状态藏在 ReAct 循环的局部变量里、活对象待在 `self`
 
 **验证回路**（langgraph 已装，回归 uv）：
 ```
-uv run --package weatherflow-backend --extra dev ruff check backend/app backend/tests cli/weatherflow_cli backend/eval
+uv run --package weatherflow-backend --extra dev ruff check backend/app backend/tests cli/weatherflow_cli
 uv run --package weatherflow-backend --extra dev pytest backend/tests -q
 (cd frontend && npm run lint && npx tsc --noEmit && npm run build)
 ```

@@ -104,20 +104,11 @@ v2 把单 ReAct loop 升级为带 planner / worker / critic 的状态图：
 
 ## 评测（Eval）
 
-```bash
-cd backend && python -m eval.run_eval --format md   # 或 --format json
-```
-
-最近一次回归记分卡（30 条标注样本，结构化静态评分）：
-
-| Category | Passed | Rate | 说明 |
-|---|---|---|---|
-| faithfulness | 6/6 | 100% | 每条 evidence 的 `source_event_id` 真实且相关 |
-| recall | 4/4 | 100% | 语义召回相关性（Recall@1 = 1.00，MRR = 1.00） |
-| groundedness | 4/4 | 100% | 多轮 chat 回答的 evidence 计数 |
-| trajectory | 4/4 | 100% | planner 选工具是否合理、critic 是否抓到注入错误 |
-
-> 当前 judge 用确定性结构检查（不需要外部 LLM）；接入真实 LLM-as-judge 后可产出主观质量分。
+> **🚧 已整体拆除，待重建。** 原 v1 评测框架把静态结构检查与 live 评测混在一起，
+> 且半数 judge（recall/groundedness/trajectory）从未接到真实 agent 链路、12 条
+> check-in 样本被静默丢弃。鉴于 v2 agent 架构（多 Agent 图 / 真 HITL / trace 树）
+> 已巨变，评测体系将针对新架构**推倒重建**（ADR-005）。旧框架与 30 条标注样本保留
+> 在 git 历史中供重建参考。
 
 ---
 
@@ -219,7 +210,6 @@ backend/app/
 ├── providers/              # v2 Provider SPI: base.py / calendar.py / github.py
 ├── routers/                # FastAPI 路由
 └── main.py
-backend/eval/               # v2: datasets/ + judges.py + run_eval.py
 scripts/rebuild_memory.py   # v2: 从 L1 重建 L2.5（证明派生投影不变量）
 mcp_servers/                # Calendar + GitHub MCP server
 frontend/                   # Next.js: HypothesisStack / DataStrip / Chat / Profile

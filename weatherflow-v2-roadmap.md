@@ -318,6 +318,7 @@ L1  Event Log (SQLite, append-only)            ← 唯一真理，永不修改
 | 2026-06-02 | ADR-004 P4 | graph.astream 真流式：边跑边推 SSE（取代跑完一次性吐） |
 | 2026-06-02 | ADR-004 P5 | FIV 记忆：derivations 单一 fan-out 接通 mem0 写入（修 G17）+ 收编 DMW；retrieval.py 两策略 |
 | 2026-06-02 | ADR-004 P6 | 删 v1 chat_agent 旁路；更新 AGENTS.md / 架构 §13/§14（FIV + 真 HITL）；93 测试绿 |
+| 2026-06-02 | eval 拆除 | 整体移除 backend/eval（judges/run_eval/datasets）+ tests/test_eval.py：旧框架静态/live 混置、半数 judge 未接真链路、12 条 checkin 样本被丢弃。待针对 v2 新架构重建（ADR-005）。84 测试绿 |
 
 ---
 

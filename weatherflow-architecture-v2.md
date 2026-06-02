@@ -770,6 +770,12 @@ JSON 日志带 `trace_id / conversation_id / user_id`。
 
 ## 16. 评测（Eval）[v2 新增]
 
+> **🚧 v2.1：本章描述的评测框架已整体拆除，待重建（ADR-005）。** 原实现把静态结构
+> 检查与 live 评测混在一处，recall/groundedness/trajectory 三类 judge 未接真实
+> agent 链路、12 条 check-in 样本未被评估。v2 agent 架构巨变后，评测将针对新架构
+> 重建（拆 static/ 与 live/ 两档、judge 接真图/真召回、叠 LLM-as-judge）。以下小节
+> 保留为重建时的需求参考。
+
 ### 16.1 评测集
 
 `backend/eval/datasets/`：≥30 条标注样本

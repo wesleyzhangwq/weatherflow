@@ -139,10 +139,11 @@ backend/app/
     actions.py (proposals)  profile.py  events.py  dashboard.py
   main.py                ← FastAPI app, lifespan, scheduler wiring
 
-backend/eval/            ← v2: evaluation framework
-  datasets/              ← ≥30 annotated samples
-  judges.py              ← LLM-as-judge + retrieval metrics
-  run_eval.py            ← regression harness + report
+backend/eval/            ← TORN DOWN (pending rebuild). The v1 eval framework
+                           conflated static structural checks with live evals
+                           and half its judges weren't wired to the real graph;
+                           removed wholesale to rebuild against the v2 agent
+                           architecture. History: see git + future ADR-005.
 
 mcp_servers/             ← Calendar + GitHub MCP servers (stdio)
 frontend/                ← Next.js: HypothesisStack + DataStrip + CurrentStateWidget

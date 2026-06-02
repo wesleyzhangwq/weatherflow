@@ -157,7 +157,7 @@
 **验证回路**（每个任务完成后必须跑）：
 ```bash
 cd /Users/wesz_station/Projects/WeatherFlow
-.venv/bin/ruff check backend/app backend/tests cli/weatherflow_cli backend/eval
+.venv/bin/ruff check backend/app backend/tests cli/weatherflow_cli
 .venv/bin/pytest backend/tests -q
 ```
 不绿不提交。commit message 带里程碑号。
