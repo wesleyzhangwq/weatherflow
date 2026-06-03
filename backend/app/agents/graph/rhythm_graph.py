@@ -174,12 +174,25 @@ async def run_rhythm(
         # Inject mode for the rhythm subgraph
         initial_state["mode"] = mode  # type: ignore[assignment]
 
+        # One trace per run (ADR-004 D3): bind a root trace so the hypothesize
+        # LLM call attaches as a generation under `rhythm_run` instead of
+        # floating as a standalone llm.chat trace.
+        from app.observability import langfuse_integration as lf
+        from app.observability.tracing import run_context
+
+        root = lf.start_trace(
+            "rhythm_run",
+            {"mode": mode, "user_id": uid, "trigger_event_id": trigger_event_id},
+        )
         try:
-            result = await graph.ainvoke(initial_state)
+            with run_context(trace=root):
+                result = await graph.ainvoke(initial_state)
             return result.get("hypothesis_id"), result.get("hypothesis")
         except Exception:
             logger.exception("Rhythm subgraph failed, falling back to v1")
             # Fall through to v1
+        finally:
+            lf.flush()
 
     # v1 fallback
     from app.core.llm import build_llm_client

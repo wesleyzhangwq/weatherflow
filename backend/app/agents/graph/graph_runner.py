@@ -172,11 +172,11 @@ def _build_system_prompt(hypothesis: HypothesisPayload, bundle_text: str) -> str
 可用工具：read 类工具可以直接调用，write 类工具会被拦截转为 Proposal 等用户确认。
 
 工作方式：
-- 一步步思考；每个 reasoning_step 用一句话说明你打算做什么。
 - 需要查询数据时调用 read 工具；需要建议用户做改动时调用 write 工具。
-- 最后用中文给用户清晰的回答。
+- 思考过程放在内部，**不要**写进给用户的回答里——不要输出"第一步/第二步""我的计划是"之类的步骤说明或计划复述。
+- 给用户的回答：直接、用中文、聚焦当前这条消息，开门见山给结论。
 
-不要重复 hypothesis 的内容；用户已经看到它。聚焦于回答当前消息。
+不要重复 hypothesis 的内容；用户已经看到它。
 """
 
 
