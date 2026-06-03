@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="text-embedding-v4", alias="EMBEDDING_MODEL")
     embedding_api_key: str = Field(default="", alias="EMBEDDING_API_KEY")
     embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
+    # Vector dimension of the embedding model (Ali text-embedding-v3/v4 = 1024,
+    # OpenAI text-embedding-3-small = 1536). Must match the Qdrant collection.
+    embedding_dims: int = Field(default=1024, alias="EMBEDDING_DIMS")
     semantic_recall_limit: int = Field(default=5, alias="SEMANTIC_RECALL_LIMIT")
 
     # ----- v2: LangGraph -----

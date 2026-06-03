@@ -97,7 +97,10 @@ async def project_event(rec: Any, user_id: Optional[str] = None) -> bool:
             "timestamp": rec.timestamp,
             "user_id": uid,
         }
-        m.add(text, user_id=uid, metadata=metadata)
+        # infer=False: store our curated, source-linked text verbatim (one L1
+        # event → one memory). No LLM extraction, so mem0 needs no LLM config
+        # and the source_event_id backlink stays 1:1 (ADR-004 D5).
+        m.add(text, user_id=uid, metadata=metadata, infer=False)
         logger.info("Projected %s event %s into mem0", rec.type, rec.id)
         return True
 
