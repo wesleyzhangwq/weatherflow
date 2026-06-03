@@ -50,8 +50,22 @@ def test_embedder_threads_base_url(monkeypatch):
     ec = cfg["embedder"]["config"]
     assert ec["openai_base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert ec["embedding_dims"] == 1024
-    # No LLM section — projector uses infer=False (ADR-004 D5)
-    assert "llm" not in cfg
+
+
+def test_llm_section_points_at_chat_gateway(monkeypatch):
+    # mem0 builds the LLM client eagerly at init even though the projector uses
+    # infer=False, so it must carry valid creds (here: the MiniMax gateway).
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-minimax")
+    monkeypatch.setenv("CHAT_MODEL", "MiniMax-M3")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "sk-ali")
+
+    cfg = build_mem0_config(Settings())
+    lc = cfg["llm"]["config"]
+    assert cfg["llm"]["provider"] == "openai"
+    assert lc["model"] == "MiniMax-M3"
+    assert lc["api_key"] == "sk-minimax"
+    assert lc["openai_base_url"] == "https://api.minimaxi.com/v1"
 
 
 def test_no_base_url_when_empty(monkeypatch):

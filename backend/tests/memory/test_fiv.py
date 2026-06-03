@@ -64,6 +64,14 @@ def test_recall_recent_marks_feedback_must_keep():
 
 
 @pytest.mark.asyncio
-async def test_recall_semantic_degrades_to_empty():
-    assert await recall_semantic("", "default", 5) == []  # no query
-    assert await recall_semantic("overload last week", "default", 5) == []  # qdrant down
+async def test_recall_semantic_degrades_to_empty(monkeypatch):
+    # Empty query short-circuits to [].
+    assert await recall_semantic("", "default", 5) == []
+    # On any backend failure (mem0/Qdrant down), recall_semantic swallows it.
+    import app.memory.semantic.recall as recall_mod
+
+    async def boom(*a, **k):
+        raise RuntimeError("qdrant down")
+
+    monkeypatch.setattr(recall_mod, "recall_relevant", boom)
+    assert await recall_semantic("overload last week", "default", 5) == []

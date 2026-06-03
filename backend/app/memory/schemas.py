@@ -204,7 +204,10 @@ class ProfilePatchPayload(BaseModel):
 # ---------------------------------------------------------------------------
 class BundleEntry(BaseModel):
     event_id: str
-    event_type: EventType
+    # L2 working-context label, not an L1 event: usually an EventType, but also
+    # "semantic_recall" for L2.5/mem0 hits. Kept as str so the bundle can carry
+    # derived entry kinds without widening the L1 EventType invariant.
+    event_type: str
     rendered: str  # the chunk the LLM will see
 
 

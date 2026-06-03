@@ -70,7 +70,13 @@ def test_observe_node_binds_span_and_record_generation_is_safe():
 
 
 @pytest.mark.asyncio
-async def test_recall_memory_node_degrades_to_empty():
+async def test_recall_memory_node_degrades_to_empty(monkeypatch):
+    import app.memory.semantic.recall as recall_mod
+
+    async def boom(*a, **k):
+        raise RuntimeError("mem0/qdrant down")
+
+    monkeypatch.setattr(recall_mod, "recall_relevant", boom)
     from app.agents.graph.chat_graph import recall_memory_node
 
     out = await recall_memory_node({"bundle_text": "overload last week", "user_id": "default"})
@@ -78,7 +84,15 @@ async def test_recall_memory_node_degrades_to_empty():
 
 
 @pytest.mark.asyncio
-async def test_semantic_recall_returns_empty_without_mem0():
+async def test_semantic_recall_returns_empty_without_mem0(monkeypatch):
+    # Force the backend-unavailable path deterministically — mem0 may be
+    # installed and Qdrant up in the dev env, so don't rely on ambient state.
+    import mem0
+
+    def boom(*a, **k):
+        raise RuntimeError("mem0 unavailable")
+
+    monkeypatch.setattr(mem0.Memory, "from_config", boom)
     from app.memory.semantic.recall import recall_relevant
 
     assert await recall_relevant("anything", user_id="default") == []

@@ -14,6 +14,25 @@ from urllib.parse import urlparse
 from app.config import Settings
 
 
+def _register_custom_embedders() -> None:
+    """Point mem0's ``openai`` embedder at our subclass that omits the
+    ``dimensions`` param (SiliconFlow bge-m3 rejects it).
+
+    We override the ``openai`` provider rather than registering a new name
+    because mem0's ``EmbedderConfig`` pydantic validator only accepts a fixed
+    allow-list of provider names. This process's only mem0 use is WeatherFlow's
+    L2.5, so overriding ``openai`` here is safe. Idempotent; no-op without mem0.
+    """
+    try:
+        from mem0.utils.factory import EmbedderFactory
+
+        EmbedderFactory.provider_to_class["openai"] = (
+            "app.memory.semantic.siliconflow_embedder.SiliconFlowEmbedding"
+        )
+    except Exception:
+        pass
+
+
 def build_mem0_config(settings: Settings) -> dict[str, Any]:
     """Build a mem0 ``Memory.from_config`` dict from app settings.
 
@@ -23,11 +42,14 @@ def build_mem0_config(settings: Settings) -> dict[str, Any]:
     (e.g. Alibaba dashscope) is actually used instead of api.openai.com, and the
     Qdrant collection is created at the matching vector size.
 
-    No ``llm`` section is configured on purpose: the projector calls
-    ``mem0.add(..., infer=False)`` to store our curated, source-linked projection
-    verbatim, so mem0 never needs an LLM (and never re-generalizes — that is
-    profile.md / L3's job, per ADR-004 D5).
+    The ``llm`` section points at the project's chat gateway (MiniMax). The
+    projector uses ``mem0.add(..., infer=False)`` so this LLM is never *called*
+    for extraction — but mem0 constructs the LLM client eagerly in
+    ``Memory.__init__`` and raises if it has no api_key, so it must be wired
+    with valid creds regardless.
     """
+    _register_custom_embedders()
+
     parsed = urlparse(settings.qdrant_url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 6333
@@ -40,6 +62,14 @@ def build_mem0_config(settings: Settings) -> dict[str, Any]:
                 "port": port,
                 "collection_name": settings.qdrant_collection,
                 "embedding_model_dims": settings.embedding_dims,
+            },
+        },
+        "llm": {
+            "provider": "openai",
+            "config": {
+                "model": settings.chat_model,
+                "api_key": settings.openai_api_key,
+                "openai_base_url": settings.openai_base_url,
             },
         },
     }
