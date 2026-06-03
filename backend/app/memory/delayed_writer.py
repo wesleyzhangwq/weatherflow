@@ -245,7 +245,6 @@ async def _llm_patch(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.2,
-            max_tokens=600,
         )
     except Exception:
         logger.exception("DMW LLM call failed")

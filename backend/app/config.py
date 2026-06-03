@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     chat_model: str = Field(default="gpt-4o-mini", alias="CHAT_MODEL")
     chat_temperature: float = Field(default=0.4, alias="CHAT_TEMPERATURE")
+    # Whether the gateway understands MiniMax's `thinking` param (used to turn
+    # reasoning OFF for JSON-mode calls). "auto" = detect from base_url; the
+    # param is gateway-specific and some OpenAI-compatible APIs 400 on it.
+    llm_thinking_control: str = Field(default="auto", alias="LLM_THINKING_CONTROL")
 
     # ----- App -----
     data_dir: str = Field(default=str(_BACKEND_DIR / "data"), alias="DATA_DIR")
@@ -135,6 +139,17 @@ class Settings(BaseSettings):
 
     # ----- v2: Desktop proactivity -----
     proactivity_enabled: bool = Field(default=True, alias="PROACTIVITY_ENABLED")
+
+    @property
+    def supports_thinking_param(self) -> bool:
+        """Whether to send MiniMax's `thinking` param. 'on'/'off' force it;
+        'auto' enables it only for MiniMax gateways (others may 400 on it)."""
+        ctl = self.llm_thinking_control.strip().lower()
+        if ctl == "on":
+            return True
+        if ctl == "off":
+            return False
+        return "minimax" in self.openai_base_url.lower()
 
     @property
     def parsed_monitored_repos(self) -> list[tuple[str, str]]:

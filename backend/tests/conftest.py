@@ -49,8 +49,8 @@ class StubLLM:
         self._raw_responses = list(raw_responses or [])
         self.calls: list[dict] = []
 
-    async def chat(self, messages, *, model=None, temperature=0.4, max_tokens=None, response_format=None):
-        self.calls.append({"messages": list(messages), "response_format": response_format})
+    async def chat(self, messages, *, model=None, temperature=0.4, max_tokens=None, response_format=None, disable_thinking=False):
+        self.calls.append({"messages": list(messages), "response_format": response_format, "disable_thinking": disable_thinking})
         if not self._responses:
             raise AssertionError("StubLLM out of responses")
         return self._responses.pop(0)

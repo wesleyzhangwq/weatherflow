@@ -41,6 +41,7 @@ class LLMClient(Protocol):
         temperature: float = 0.4,
         max_tokens: Optional[int] = None,
         response_format: Optional[dict[str, Any]] = None,
+        disable_thinking: bool = False,
     ) -> str: ...
 
     async def chat_raw(
@@ -104,6 +105,7 @@ class OpenAICompatibleClient:
         temperature: float = 0.4,
         max_tokens: Optional[int] = None,
         response_format: Optional[dict[str, Any]] = None,
+        disable_thinking: bool = False,
     ) -> str:
         payload: dict[str, Any] = {
             "model": model or self._settings.chat_model,
@@ -114,6 +116,11 @@ class OpenAICompatibleClient:
             payload["max_tokens"] = max_tokens
         if response_format is not None:
             payload["response_format"] = response_format
+        if disable_thinking and self._settings.supports_thinking_param:
+            # MiniMax: turn reasoning OFF so structured output isn't preceded by
+            # a long <think> block that shares (and exhausts) the token budget.
+            # Gated so non-MiniMax gateways aren't sent an unknown param.
+            payload["thinking"] = {"type": "disabled"}
 
         data = await self._post_chat(payload)
         try:
@@ -189,6 +196,11 @@ def _strip_to_json(raw: str) -> str:
     Some models wrap the JSON in a markdown code fence. We strip both.
     """
     text = _THINK_RE.sub("", raw).strip()
+    # A truncated reasoning block can leave an unterminated <think> with no
+    # closing tag; drop everything from the last stray <think> onward.
+    low = text.lower()
+    if "<think>" in low:
+        text = text[: low.rfind("<think>")].strip()
     # Strip code fences (```json ... ``` or ``` ... ```)
     text = text.strip("`").strip()
     if text.lower().startswith("json"):
@@ -201,6 +213,9 @@ def _strip_to_json(raw: str) -> str:
     return text
 
 
+_JSON_MAX_TOKENS_FLOOR = 4096
+
+
 async def chat_json(
     llm: LLMClient,
     messages: Sequence[dict[str, str]],
@@ -208,16 +223,34 @@ async def chat_json(
     model: Optional[str] = None,
     temperature: float = 0.2,
     max_tokens: Optional[int] = None,
+    disable_thinking: bool = True,
 ) -> Any:
-    raw = await llm.chat(
-        messages,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        response_format={"type": "json_object"},
-    )
-    cleaned = _strip_to_json(raw)
-    return json.loads(cleaned)
+    """Call the LLM in JSON mode and parse the result.
+
+    Reasoning models (MiniMax-M3, DeepSeek-R1, …) prepend <think> blocks that
+    share the token budget with the answer. For structured output we turn
+    thinking OFF (where the gateway supports it) and floor ``max_tokens`` so the
+    JSON tail is never truncated. On a parse failure (the classic truncation
+    symptom) we retry once with double the budget.
+    """
+    budget = max(max_tokens or 0, _JSON_MAX_TOKENS_FLOOR)
+
+    async def _attempt(mt: int) -> Any:
+        raw = await llm.chat(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=mt,
+            response_format={"type": "json_object"},
+            disable_thinking=disable_thinking,
+        )
+        return json.loads(_strip_to_json(raw))
+
+    try:
+        return await _attempt(budget)
+    except json.JSONDecodeError:
+        logger.warning("chat_json parse failed (likely truncation); retrying with 2x tokens")
+        return await _attempt(budget * 2)
 
 
 __all__ = [
