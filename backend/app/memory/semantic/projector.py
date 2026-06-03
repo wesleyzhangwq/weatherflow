@@ -72,35 +72,57 @@ def _render_for_memory(rec: Any) -> str:
     return f"{rec.type}: {json.dumps(p, ensure_ascii=False)[:200]}"
 
 
-async def project_event(rec: Any, user_id: Optional[str] = None) -> bool:
-    """Project a single L1 event into mem0 if it passes the whitelist.
+def _store_memory(m: Any, rec: Any, uid: str) -> None:
+    """Add one curated, source-linked memory verbatim.
 
-    Returns True if projected, False if skipped.
+    infer=False: store our rendered text as-is (one L1 event → one memory). No
+    LLM extraction, so the source_event_id backlink stays 1:1 (ADR-004 D5).
     """
+    metadata = {
+        "source_event_id": rec.id,
+        "event_type": rec.type,
+        "timestamp": rec.timestamp,
+        "user_id": uid,
+    }
+    m.add(_render_for_memory(rec), user_id=uid, metadata=metadata, infer=False)
+
+
+def _existing_source_ids(m: Any, uid: str) -> set[str]:
+    """source_event_ids already projected for this user — the idempotency guard.
+
+    mem0 (with infer=False) does not dedup on add, so we skip any event already
+    present. This makes projection idempotent across restarts and re-runs and
+    keeps one L1 event ↔ one memory.
+    """
+    try:
+        res = m.get_all(user_id=uid)
+        items = res.get("results", []) if isinstance(res, dict) else (res or [])
+        return {
+            sid
+            for it in items
+            if (sid := (it.get("metadata") or {}).get("source_event_id"))
+        }
+    except Exception:
+        return set()
+
+
+async def project_event(rec: Any, user_id: Optional[str] = None) -> bool:
+    """Project a single L1 event into mem0 if it passes the whitelist and is not
+    already stored (dedup by source_event_id). Returns True if newly written."""
     if not _is_projectable(rec):
         return False
 
     uid = user_id or rec.user_id
-    text = _render_for_memory(rec)
-
     try:
         from mem0 import Memory
 
         from app.config import get_settings
         from app.memory.semantic.mem0_config import build_mem0_config
 
-        settings = get_settings()
-        m = Memory.from_config(build_mem0_config(settings))
-        metadata = {
-            "source_event_id": rec.id,
-            "event_type": rec.type,
-            "timestamp": rec.timestamp,
-            "user_id": uid,
-        }
-        # infer=False: store our curated, source-linked text verbatim (one L1
-        # event → one memory). No LLM extraction, so mem0 needs no LLM config
-        # and the source_event_id backlink stays 1:1 (ADR-004 D5).
-        m.add(text, user_id=uid, metadata=metadata, infer=False)
+        m = Memory.from_config(build_mem0_config(get_settings()))
+        if rec.id in _existing_source_ids(m, uid):
+            return False  # already projected — idempotent
+        _store_memory(m, rec, uid)
         logger.info("Projected %s event %s into mem0", rec.type, rec.id)
         return True
 
@@ -116,22 +138,45 @@ async def project_high_value_events(
     since: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> int:
-    """Batch project recent high-value L1 events into mem0.
+    """Batch project recent high-value L1 events into mem0. Idempotent: skips any
+    event whose source_event_id is already stored. Returns count newly written.
 
-    Called after hypothesis generation or DMW run.
-    Returns count of events projected.
+    Shares one mem0 client + one existing-ids snapshot per user across the batch.
     """
-    # Fetch recent events of projectable types
-    types_list = list(_PROJECTABLE_TYPES)
-    events = event_log.list_recent(types=types_list, limit=50)
+    events = event_log.list_recent(types=list(_PROJECTABLE_TYPES), limit=50)
+    candidates = [
+        r for r in events if not (since and r.timestamp <= since) and _is_projectable(r)
+    ]
+    if not candidates:
+        return 0
 
+    try:
+        from mem0 import Memory
+
+        from app.config import get_settings
+        from app.memory.semantic.mem0_config import build_mem0_config
+
+        m = Memory.from_config(build_mem0_config(get_settings()))
+    except ImportError:
+        return 0
+    except Exception:
+        logger.exception("mem0 init failed during batch projection")
+        return 0
+
+    seen_by_uid: dict[str, set[str]] = {}
     count = 0
-    for rec in events:
-        if since and rec.timestamp <= since:
+    for rec in candidates:
+        uid = user_id or rec.user_id
+        if uid not in seen_by_uid:
+            seen_by_uid[uid] = _existing_source_ids(m, uid)
+        if rec.id in seen_by_uid[uid]:
             continue
-        if await project_event(rec, user_id=user_id):
+        try:
+            _store_memory(m, rec, uid)
+            seen_by_uid[uid].add(rec.id)
             count += 1
-
+        except Exception:
+            logger.exception("Failed to project event %s into mem0", rec.id)
     return count
 
 
