@@ -215,6 +215,11 @@ class EvidenceBundle(BaseModel):
     trigger_event_id: str
     entries: List[BundleEntry] = Field(default_factory=list)
     profile_sections: Dict[ProfileSection, str] = Field(default_factory=dict)
+    # L3-fast: consolidated profile traits from mem0 infer=True (ADR-006). These
+    # are synthesized facts with no single source event, so they live here —
+    # NOT in `entries` — and are therefore exempt from the critic's
+    # source_event_id check (`all_event_ids` only reads `entries`).
+    live_insights: List[str] = Field(default_factory=list)
     mode: Literal["checkin", "background", "chat"]
     total_chars: int = 0
 
@@ -234,5 +239,10 @@ class EvidenceBundle(BaseModel):
                 lines.append(f"## {section}")
                 lines.append(text.strip())
                 lines.append("")
+        if self.live_insights:
+            lines.append("=== Live Insights (long-term, may be approximate) ===")
+            for fact in self.live_insights:
+                lines.append(f"- {fact.strip()}")
+            lines.append("")
         lines.append("=== End of Bundle ===")
         return "\n".join(lines)

@@ -18,7 +18,7 @@ from typing import Dict, List, Literal, Optional
 
 from app.config import get_settings
 from app.memory import event_log, profile_md
-from app.memory.retrieval import recall_recent, recall_semantic
+from app.memory.retrieval import recall_profile, recall_recent, recall_semantic
 from app.memory.schemas import (
     BundleEntry,
     EventRecord,
@@ -93,10 +93,18 @@ async def load(
             )
             seen.add(sid)
 
-    # §6.2 profile sections per mode
+    # §6.2 profile sections per mode (L3-slow: profile.md)
     bundle.profile_sections = profile_md.read_sections(
         sections=_MODE_TO_SECTIONS[mode], user_id=uid
     )
+
+    # ADR-006 L3-fast: consolidated profile traits (mem0 infer=True). These go
+    # into live_insights (background picture) — NOT entries[] — so they carry no
+    # source_event_id and are never source-checked by the critic.
+    if getattr(settings, "profile_consolidation_enabled", True):
+        bundle.live_insights = await recall_profile(
+            query_text, uid, getattr(settings, "semantic_recall_limit", 5)
+        )
 
     # §6.3 enforce token budget
     _enforce_budget(bundle, budget_tokens=settings.bundle_token_budget)

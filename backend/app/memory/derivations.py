@@ -27,11 +27,36 @@ def _now_iso() -> str:
 
 
 async def run_derivations() -> None:
-    """Fan out L1 → mem0 (L2.5) and profile.md (L3). Both independently safe.
-    Also enforces the hypothesis-card cap (keep latest N)."""
+    """Fan out L1 → mem0 (L2.5 episodic + L3-fast profile) and profile.md (L3).
+    Each step is independently safe. Also enforces the hypothesis-card cap."""
     await _project_safely()
+    await _consolidate_safely()
     await _dmw_safely()
     await _prune_safely()
+
+
+_last_consolidation_ts: Optional[str] = None
+
+
+async def _consolidate_safely() -> None:
+    """L3-fast (ADR-006): merge new high-signal events into the profile collection
+    via mem0 infer=True. Cursor avoids re-processing; gated + isolated."""
+    global _last_consolidation_ts
+    try:
+        from app.config import get_settings
+
+        if not get_settings().profile_consolidation_enabled:
+            return
+        from app.memory.semantic.consolidator import consolidate_recent
+
+        count = await consolidate_recent(since=_last_consolidation_ts)
+        _last_consolidation_ts = _now_iso()
+        if count:
+            logger.info("Consolidated %d signal(s) into L3-fast profile", count)
+    except ImportError:
+        pass
+    except Exception:
+        logger.exception("L3-fast consolidation failed")
 
 
 async def _prune_safely() -> None:

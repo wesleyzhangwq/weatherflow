@@ -68,6 +68,18 @@ def test_llm_section_points_at_chat_gateway(monkeypatch):
     assert lc["openai_base_url"] == "https://api.minimaxi.com/v1"
 
 
+def test_collection_param_selects_profile_collection(monkeypatch):
+    monkeypatch.setenv("QDRANT_URL", "http://127.0.0.1:6333")
+    monkeypatch.setenv("QDRANT_COLLECTION", "weatherflow_memories")
+    monkeypatch.setenv("QDRANT_PROFILE_COLLECTION", "weatherflow_profile")
+
+    s = Settings()
+    episodic = build_mem0_config(s)
+    profile = build_mem0_config(s, collection=s.qdrant_profile_collection)
+    assert episodic["vector_store"]["config"]["collection_name"] == "weatherflow_memories"
+    assert profile["vector_store"]["config"]["collection_name"] == "weatherflow_profile"
+
+
 def test_no_base_url_when_empty(monkeypatch):
     monkeypatch.setenv("QDRANT_URL", "http://127.0.0.1:6333")
     monkeypatch.setenv("EMBEDDING_API_KEY", "sk-openai")
