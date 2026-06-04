@@ -55,4 +55,35 @@ async def recall_relevant(
         return []
 
 
-__all__ = ["recall_relevant"]
+async def recall_profile(
+    query: str,
+    user_id: Optional[str] = None,
+    limit: int = 5,
+) -> list[str]:
+    """Search the L3-fast profile collection (ADR-006) for consolidated traits
+    relevant to the query. Returns plain fact strings (no source_event_id — these
+    are synthesized traits, not citable evidence). Degrades to [] when mem0 down.
+    """
+    try:
+        from mem0 import Memory
+
+        from app.config import get_settings
+        from app.memory.semantic.mem0_config import build_mem0_config
+
+        settings = get_settings()
+        uid = user_id or settings.default_user_id
+        m = Memory.from_config(
+            build_mem0_config(settings, collection=settings.qdrant_profile_collection)
+        )
+        results = m.search(query, user_id=uid, limit=limit)
+        items = results.get("results", results if isinstance(results, list) else [])
+        facts = [it.get("memory", it.get("text", "")) for it in items]
+        return [f for f in facts if f][:limit]
+    except ImportError:
+        return []
+    except Exception:
+        logger.exception("Profile (L3-fast) recall failed")
+        return []
+
+
+__all__ = ["recall_relevant", "recall_profile"]

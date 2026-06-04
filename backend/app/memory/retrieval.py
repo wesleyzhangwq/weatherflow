@@ -65,4 +65,19 @@ async def recall_semantic(
         return []
 
 
-__all__ = ["recall_recent", "recall_semantic"]
+async def recall_profile(query: str, user_id: str, limit: int) -> List[str]:
+    """L3-fast strategy (ADR-006): consolidated profile traits relevant to the
+    query (plain strings, no source). Degrades to [] when mem0 down."""
+    if not query:
+        return []
+    try:
+        from app.memory.semantic.recall import recall_profile as _recall
+
+        return await _recall(query=query, user_id=user_id, limit=limit)
+    except ImportError:
+        return []
+    except Exception:
+        return []
+
+
+__all__ = ["recall_recent", "recall_semantic", "recall_profile"]

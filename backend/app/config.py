@@ -118,6 +118,15 @@ class Settings(BaseSettings):
     # ----- v2: Semantic memory (L2.5 / mem0 + Qdrant) -----
     qdrant_url: str = Field(default="http://127.0.0.1:6333", alias="QDRANT_URL")
     qdrant_collection: str = Field(default="weatherflow_memories", alias="QDRANT_COLLECTION")
+    # L3-fast profile layer (ADR-006): a SEPARATE mem0 collection written with
+    # infer=True (consolidated traits), kept apart from the episodic source-
+    # linked `qdrant_collection` so it never pollutes the critic-checked evidence.
+    qdrant_profile_collection: str = Field(
+        default="weatherflow_profile", alias="QDRANT_PROFILE_COLLECTION"
+    )
+    profile_consolidation_enabled: bool = Field(
+        default=True, alias="PROFILE_CONSOLIDATION_ENABLED"
+    )
     mem0_api_key: str = Field(default="", alias="MEM0_API_KEY")
     embedding_provider: str = Field(default="openai", alias="EMBEDDING_PROVIDER")
     embedding_model: str = Field(default="text-embedding-v4", alias="EMBEDDING_MODEL")
