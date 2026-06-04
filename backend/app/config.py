@@ -127,6 +127,11 @@ class Settings(BaseSettings):
     # OpenAI text-embedding-3-small = 1536). Must match the Qdrant collection.
     embedding_dims: int = Field(default=1024, alias="EMBEDDING_DIMS")
     semantic_recall_limit: int = Field(default=5, alias="SEMANTIC_RECALL_LIMIT")
+    # Hypothesis card cap: keep only the latest N hypothesis events; older ones
+    # are physically pruned from L1 (deviation from append-only — see
+    # event_log.delete / DECISIONS-v2). Raise this to keep DMW pattern-learning
+    # and past-rhythm recall working on more history.
+    hypothesis_keep_limit: int = Field(default=3, alias="HYPOTHESIS_KEEP_LIMIT")
 
     # ----- v2: LangGraph -----
     graph_checkpoints_db: str = Field(default="graph_checkpoints.db", alias="GRAPH_CHECKPOINTS_DB")

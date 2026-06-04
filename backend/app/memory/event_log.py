@@ -210,6 +210,26 @@ def list_recent(
     return [_row_to_record(r) for r in rows]
 
 
+def delete(ids: Iterable[str]) -> int:
+    """Physically remove events by id. Returns the number of rows deleted.
+
+    ⚠️ DELIBERATE DEVIATION from the §4.1 append-only invariant. Added solely for
+    the hypothesis-card cap (keep only the latest N hypotheses), per an explicit
+    product decision (see docs/DECISIONS-v2.md). Do NOT use this anywhere else:
+    physical deletion breaks evidence traceability, mem0 backlinks, and the
+    rebuild-from-L1 guarantee. `append` remains immutable (no update path).
+    """
+    id_list = [i for i in ids if i]
+    if not id_list:
+        return 0
+    placeholders = ",".join("?" * len(id_list))
+    with get_conn() as conn:
+        cur = conn.execute(
+            f"DELETE FROM events WHERE id IN ({placeholders})", id_list
+        )
+        return cur.rowcount
+
+
 def _row_to_record(row: sqlite3.Row) -> EventRecord:
     payload = json.loads(row["payload"]) if row["payload"] else {}
     refs = json.loads(row["refs"]) if row["refs"] else {}
@@ -225,6 +245,7 @@ def _row_to_record(row: sqlite3.Row) -> EventRecord:
 
 __all__ = [
     "append",
+    "delete",
     "find_refs",
     "get",
     "get_conn",

@@ -69,3 +69,19 @@ re-propose the same write tool (loop). Focused synthesis is the safe human-in-th
 continuation. A real langgraph checkpointer + `interrupt()` (Appendix D.1) remains the
 future upgrade for true mid-graph resume.
 **Appendix D reference**: D.1 — "选最不破坏 v1 不变量 + 最易自验证方案".
+
+## Decision 7: Hypothesis-card cap allows physical L1 deletion (append-only exception)
+**Date**: 2026-06-04
+**Decision**: The home card stack keeps only the latest N hypotheses
+(`HYPOTHESIS_KEEP_LIMIT`, default 3); older hypothesis events are **physically
+deleted** from L1, cascading to their feedback events and mem0 projections
+(`memory/pruning.py`, fired from `derivations.run_derivations`).
+**Rationale**: Explicit product request — the user chose physical deletion over
+the view-only cap and the append-only "dismissed" alternative, after being shown
+the trade-offs.
+**Deviation**: This breaks the §4.1 append-only invariant (the one and only
+sanctioned use of `event_log.delete`). Consequence, accepted: DMW pattern-
+learning (needs ≥3 confirmed occurrences in 14 days) and past-rhythm semantic
+recall lose history; mitigated by making the keep-count configurable.
+**Appendix D reference**: D.1 — recorded here per §0.7 because it changes a hard
+contract; AGENTS.md hard-contracts table + `test_event_log.py` updated to match.

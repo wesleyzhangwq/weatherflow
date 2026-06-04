@@ -27,9 +27,20 @@ def _now_iso() -> str:
 
 
 async def run_derivations() -> None:
-    """Fan out L1 → mem0 (L2.5) and profile.md (L3). Both independently safe."""
+    """Fan out L1 → mem0 (L2.5) and profile.md (L3). Both independently safe.
+    Also enforces the hypothesis-card cap (keep latest N)."""
     await _project_safely()
     await _dmw_safely()
+    await _prune_safely()
+
+
+async def _prune_safely() -> None:
+    try:
+        from app.memory.pruning import prune_hypotheses
+
+        await prune_hypotheses()
+    except Exception:
+        logger.exception("hypothesis prune failed")
 
 
 async def _project_safely() -> None:

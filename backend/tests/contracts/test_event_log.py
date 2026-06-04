@@ -24,11 +24,22 @@ def test_event_round_trip():
 
 def test_append_is_immutable_no_update_path():
     cid = event_log.append(type="checkin", payload={"weather": "sunny"})
-    # The repo deliberately exposes no update/delete API. The contract is
-    # enforced by absence — any future regression would surface here.
+    # append stays immutable: there is no in-place UPDATE path (status is always
+    # derived from later events). `delete` is the ONE sanctioned exception — it
+    # exists only for the hypothesis-card cap (see DECISIONS-v2) and is otherwise
+    # off-limits; it must never be used to "update" an event.
     assert not hasattr(event_log, "update")
-    assert not hasattr(event_log, "delete")
     assert event_log.get(cid) is not None
+
+
+def test_delete_removes_rows_and_is_scoped():
+    a = event_log.append(type="hypothesis", payload={"label": "Flow"})
+    b = event_log.append(type="hypothesis", payload={"label": "Steady"})
+    n = event_log.delete([a])
+    assert n == 1
+    assert event_log.get(a) is None
+    assert event_log.get(b) is not None  # only the targeted row is removed
+    assert event_log.delete([]) == 0
 
 
 def test_latest_by_type_orders_desc():

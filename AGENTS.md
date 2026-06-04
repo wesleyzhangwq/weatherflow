@@ -87,7 +87,7 @@ column.
 | `weather` ∈ 6 fixed values | same |
 | `destructive` tools never reach the LLM (not even the schema) | `ToolRegistry.register` skips them |
 | All `write` tool calls become Proposal events; user must explicitly confirm | LangGraph `interrupt()` in the act node + `AsyncSqliteSaver` checkpointer; resumed by `POST /api/actions/{id}/execute` (ADR-004 D2) |
-| L1 events are never updated/deleted; status of a hypothesis is *derived* from later feedback events | `app/memory/event_log.py` exposes no update/delete |
+| L1 events are never **updated** (status is *derived* from later feedback events). Deletion is forbidden **except** the hypothesis-card cap | `app/memory/event_log.py` exposes no `update`; `delete` exists ONLY for `memory/pruning.py` (keep latest N hypotheses — see DECISIONS-v2) |
 | Calibration does **not** generate a new hypothesis | `app/routers/hypotheses.py::submit_feedback` |
 | Proposal generation is **only** in the Chat flow | check-in & T2 paths simply don't have a Dispatcher |
 | L2.5 (mem0) is a derived projection of L1, never a source of truth | `scripts/rebuild_memory.py` can rebuild from L1; every mem0 memory carries `source_event_id` |
