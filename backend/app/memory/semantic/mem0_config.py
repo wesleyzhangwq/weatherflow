@@ -15,25 +15,37 @@ from app.config import Settings
 
 
 def _register_custom_embedders() -> None:
-    """Point mem0's ``openai`` embedder at our subclass that omits the
-    ``dimensions`` param (SiliconFlow bge-m3 rejects it).
+    """Point mem0's ``openai`` provider at our subclasses:
+      - embedder → SiliconFlowEmbedding (omits the ``dimensions`` param that
+        bge-m3 rejects);
+      - llm → MiniMaxLLM (strips MiniMax-M3 ``<think>`` blocks so infer=True
+        fact-extraction can JSON-parse the response — ADR-006).
 
-    We override the ``openai`` provider rather than registering a new name
-    because mem0's ``EmbedderConfig`` pydantic validator only accepts a fixed
-    allow-list of provider names. This process's only mem0 use is WeatherFlow's
-    L2.5, so overriding ``openai`` here is safe. Idempotent; no-op without mem0.
+    We override the ``openai`` provider in place rather than registering a new
+    name (mem0's pydantic validators only accept a fixed allow-list). This
+    process's only mem0 use is WeatherFlow, so overriding is safe. Idempotent;
+    no-op without mem0.
     """
     try:
-        from mem0.utils.factory import EmbedderFactory
+        from mem0.utils.factory import EmbedderFactory, LlmFactory
 
         EmbedderFactory.provider_to_class["openai"] = (
             "app.memory.semantic.siliconflow_embedder.SiliconFlowEmbedding"
+        )
+        # LlmFactory entries are (class_path, config_class) tuples — keep the
+        # config class, swap only the LLM class.
+        _, llm_cfg = LlmFactory.provider_to_class["openai"]
+        LlmFactory.provider_to_class["openai"] = (
+            "app.memory.semantic.minimax_llm.MiniMaxLLM",
+            llm_cfg,
         )
     except Exception:
         pass
 
 
-def build_mem0_config(settings: Settings) -> dict[str, Any]:
+def build_mem0_config(
+    settings: Settings, *, collection: str | None = None
+) -> dict[str, Any]:
     """Build a mem0 ``Memory.from_config`` dict from app settings.
 
     Parses ``QDRANT_URL`` robustly (scheme/host/port) and wires the embedder
@@ -60,7 +72,7 @@ def build_mem0_config(settings: Settings) -> dict[str, Any]:
             "config": {
                 "host": host,
                 "port": port,
-                "collection_name": settings.qdrant_collection,
+                "collection_name": collection or settings.qdrant_collection,
                 "embedding_model_dims": settings.embedding_dims,
             },
         },
