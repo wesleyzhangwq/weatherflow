@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.memory import event_log, hypotheses_view
+from app.memory.derivations import run_derivations
 from app.memory.schemas import FeedbackVerdict, HypothesisFeedbackPayload
 
 logger = logging.getLogger(__name__)
@@ -57,16 +58,7 @@ async def submit_feedback(hypothesis_id: str, body: FeedbackIn) -> FeedbackOut:
         payload=payload.model_dump(),
         refs={"target": hypothesis_id},
     )
-    # §5.3 —校准动作不主动生成新 hypothesis；只异步触发 DelayedMemoryWriter
-    asyncio.create_task(_run_dmw_safely())
+    # §5.3 — calibration never generates a new hypothesis; just fan out
+    # derivations async (a confirmed hypothesis now becomes projectable → mem0).
+    asyncio.create_task(run_derivations())
     return FeedbackOut(feedback_id=fb_id, hypothesis_id=hypothesis_id, verdict=body.verdict)
-
-
-async def _run_dmw_safely() -> None:
-    try:
-        from app.memory.delayed_writer import maybe_update
-        await maybe_update()
-    except ImportError:
-        pass
-    except Exception:
-        logger.exception("DelayedMemoryWriter run failed")

@@ -1,0 +1,18 @@
+{
+  "name": "weatherflow-desktop",
+  "version": "2.0.0",
+  "description": "WeatherFlow desktop pet — ambient rhythm companion",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsc && electron .",
+    "build": "tsc",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^33.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  }
+}

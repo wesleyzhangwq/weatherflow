@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeatherFlow Pet</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Character container — draggable -->
+  <div id="pet-container" class="pet-container">
+    <div id="pet-character" class="pet-character" data-mood="steady">
+      <div id="pet-face" class="pet-face">😊</div>
+      <div id="pet-label" class="pet-label">Steady</div>
+    </div>
+  </div>
+
+  <!-- Chat panel (hidden by default) -->
+  <div id="chat-panel" class="chat-panel hidden">
+    <div class="chat-header">
+      <span>WeatherFlow Chat</span>
+      <button id="chat-close" class="chat-close">×</button>
+    </div>
+    <div id="chat-messages" class="chat-messages"></div>
+    <div class="chat-input-row">
+      <input id="chat-input" type="text" placeholder="说点什么..." autocomplete="off">
+      <button id="chat-send" class="chat-send">→</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

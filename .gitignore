@@ -14,6 +14,9 @@ venv/
 .env.*
 !.env.example
 !.env.example.ollama
+# OAuth client secrets / tokens (Google Calendar setup)
+credentials.json
+*_token.json
 
 # ===== Data =====
 backend/data/

@@ -12,10 +12,10 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from app.agents.graph.rhythm_graph import run_rhythm
 from app.config import get_settings
 from app.core import evidence_summarizer
 from app.core.llm import LLMClient
-from app.core.orchestrator import generate_hypothesis
 from app.memory import event_log
 from app.providers import calendar as calendar_provider
 from app.providers import github as github_provider
@@ -62,20 +62,30 @@ async def run(
         refs=refs,
     )
 
-    hyp_id, hyp = await generate_hypothesis(
+    # v2 (M1A.6): route through the rhythm subgraph (langgraph), with the v1
+    # orchestrator as the fallback inside run_rhythm.
+    hyp_id, hyp = await run_rhythm(
         trigger_event_id=summary_id,
         mode="background",
-        llm=llm,
         user_id=uid,
     )
+    if hyp_id is None or hyp is None:
+        logger.warning("Scheduled check: hypothesis generation failed.")
+        return {
+            "status": "error",
+            "reason": "hypothesis_failed",
+            "calendar_snapshot_id": cal_id,
+            "github_snapshot_id": gh_id,
+            "evidence_summary_id": summary_id,
+        }
     return {
         "status": "ok",
         "calendar_snapshot_id": cal_id,
         "github_snapshot_id": gh_id,
         "evidence_summary_id": summary_id,
         "hypothesis_id": hyp_id,
-        "label": hyp.label,
-        "confidence": hyp.confidence,
+        "label": hyp.get("label"),
+        "confidence": hyp.get("confidence"),
     }
 
 

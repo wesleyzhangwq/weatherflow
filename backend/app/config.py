@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     chat_model: str = Field(default="gpt-4o-mini", alias="CHAT_MODEL")
     chat_temperature: float = Field(default=0.4, alias="CHAT_TEMPERATURE")
+    # Whether the gateway understands MiniMax's `thinking` param (used to turn
+    # reasoning OFF for JSON-mode calls). "auto" = detect from base_url; the
+    # param is gateway-specific and some OpenAI-compatible APIs 400 on it.
+    llm_thinking_control: str = Field(default="auto", alias="LLM_THINKING_CONTROL")
 
     # ----- App -----
     data_dir: str = Field(default=str(_BACKEND_DIR / "data"), alias="DATA_DIR")
@@ -111,6 +115,47 @@ class Settings(BaseSettings):
     # ----- Proposal expiry -----
     proposal_expiry_hours: int = Field(default=24, alias="PROPOSAL_EXPIRY_HOURS")
 
+    # ----- v2: Semantic memory (L2.5 / mem0 + Qdrant) -----
+    qdrant_url: str = Field(default="http://127.0.0.1:6333", alias="QDRANT_URL")
+    qdrant_collection: str = Field(default="weatherflow_memories", alias="QDRANT_COLLECTION")
+    mem0_api_key: str = Field(default="", alias="MEM0_API_KEY")
+    embedding_provider: str = Field(default="openai", alias="EMBEDDING_PROVIDER")
+    embedding_model: str = Field(default="text-embedding-v4", alias="EMBEDDING_MODEL")
+    embedding_api_key: str = Field(default="", alias="EMBEDDING_API_KEY")
+    embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
+    # Vector dimension of the embedding model (Ali text-embedding-v3/v4 = 1024,
+    # OpenAI text-embedding-3-small = 1536). Must match the Qdrant collection.
+    embedding_dims: int = Field(default=1024, alias="EMBEDDING_DIMS")
+    semantic_recall_limit: int = Field(default=5, alias="SEMANTIC_RECALL_LIMIT")
+    # Hypothesis card cap: keep only the latest N hypothesis events; older ones
+    # are physically pruned from L1 (deviation from append-only — see
+    # event_log.delete / DECISIONS-v2). Raise this to keep DMW pattern-learning
+    # and past-rhythm recall working on more history.
+    hypothesis_keep_limit: int = Field(default=3, alias="HYPOTHESIS_KEEP_LIMIT")
+
+    # ----- v2: LangGraph -----
+    graph_checkpoints_db: str = Field(default="graph_checkpoints.db", alias="GRAPH_CHECKPOINTS_DB")
+
+    # ----- v2: Observability (Langfuse) -----
+    langfuse_public_key: str = Field(default="", alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str = Field(default="", alias="LANGFUSE_SECRET_KEY")
+    langfuse_host: str = Field(default="http://127.0.0.1:3000", alias="LANGFUSE_HOST")
+    otel_exporter: str = Field(default="console", alias="OTEL_EXPORTER")
+
+    # ----- v2: Desktop proactivity -----
+    proactivity_enabled: bool = Field(default=True, alias="PROACTIVITY_ENABLED")
+
+    @property
+    def supports_thinking_param(self) -> bool:
+        """Whether to send MiniMax's `thinking` param. 'on'/'off' force it;
+        'auto' enables it only for MiniMax gateways (others may 400 on it)."""
+        ctl = self.llm_thinking_control.strip().lower()
+        if ctl == "on":
+            return True
+        if ctl == "off":
+            return False
+        return "minimax" in self.openai_base_url.lower()
+
     @property
     def parsed_monitored_repos(self) -> list[tuple[str, str]]:
         repos: list[tuple[str, str]] = []
@@ -147,6 +192,12 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         origins = [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
         return origins or ["http://127.0.0.1:3000", "http://localhost:3000"]
+
+    @property
+    def graph_checkpoints_path(self) -> str:
+        data_dir = Path(os.path.expandvars(self.data_dir)).expanduser()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return str(data_dir / self.graph_checkpoints_db)
 
 
 @lru_cache(maxsize=1)

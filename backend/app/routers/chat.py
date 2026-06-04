@@ -5,23 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import asdict
 from typing import AsyncIterator
 
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.chat_agent import (
-    ChatAgent,
-    ErrorEvent,
-    FinalAnswerEvent,
-)
+from app.agents.graph.graph_runner import run_chat
 from app.core.llm import LLMClient
 from app.core.orchestrator import generate_hypothesis
 from app.memory import context_loader, event_log
+from app.memory.derivations import run_derivations
+from app.observability.structured_logging import metrics
 from app.routers._deps import get_llm
 
 logger = logging.getLogger(__name__)
@@ -37,12 +36,15 @@ class ChatStreamIn(BaseModel):
 @router.post("/stream")
 async def stream_chat(
     body: ChatStreamIn,
+    request: Request,
     llm: LLMClient = Depends(get_llm),
 ) -> EventSourceResponse:
-    return EventSourceResponse(_stream(body, llm))
+    graph = request.app.state.chat_graph
+    return EventSourceResponse(_stream(body, llm, graph))
 
 
-async def _stream(body: ChatStreamIn, llm: LLMClient) -> AsyncIterator[dict]:
+async def _stream(body: ChatStreamIn, llm: LLMClient, graph: object) -> AsyncIterator[dict]:
+    start = time.perf_counter()
     # 1. Persist the user's chat_turn first (so the trigger event exists for bundle)
     turn_id = event_log.append(
         type="chat_turn",
@@ -99,29 +101,31 @@ async def _stream(body: ChatStreamIn, llm: LLMClient) -> AsyncIterator[dict]:
         yield _sse("error", {"message": f"hypothesis failed: {exc}"})
         return
 
-    # 3. ReAct loop
-    agent = ChatAgent(llm)
-    bundle_text = bundle.render()
+    # 3. Run chat agent (graph with v1 fallback)
+    bundle_event_ids = [e.event_id for e in bundle.entries]
 
     try:
-        async for ev in agent.run(
+        async for ev in run_chat(
+            graph=graph,
+            llm=llm,
             user_message=body.message,
             hypothesis=hyp,
-            bundle_text=bundle_text,
+            bundle_text=bundle.render(),
+            bundle_event_ids=bundle_event_ids,
             conversation_id=body.conversation_id,
-            parent_event_id=turn_id,
+            trigger_event_id=turn_id,
         ):
-            yield _sse(ev.event, _event_payload(ev))
-            if isinstance(ev, (FinalAnswerEvent, ErrorEvent)):
-                # Terminate after final/error
-                break
+            # run_chat yields {"event": ..., "data": json_string} — pass through
+            yield ev
     except Exception as exc:
-        logger.exception("ChatAgent crashed")
+        logger.exception("Chat graph crashed")
         yield _sse("error", {"message": str(exc)})
         return
 
-    # 4. Fire DelayedMemoryWriter asynchronously (ADR D7 — fire and forget)
-    asyncio.create_task(_run_dmw_safely())
+    # 4. Fan out derivations asynchronously (ADR D7 / ADR-004 D5 — fire-and-forget)
+    metrics.observe("chat.latency_ms", (time.perf_counter() - start) * 1000)
+    metrics.increment("chat.count")
+    asyncio.create_task(run_derivations())
 
 
 def _is_first_turn(conversation_id: str) -> bool:
@@ -153,16 +157,6 @@ def _event_payload(ev) -> dict:
 
 def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
-
-
-async def _run_dmw_safely() -> None:
-    try:
-        from app.memory.delayed_writer import maybe_update
-        await maybe_update()
-    except ImportError:
-        pass
-    except Exception:
-        logger.exception("DelayedMemoryWriter run failed")
 
 
 # --------------------------------------------------------------------------- history

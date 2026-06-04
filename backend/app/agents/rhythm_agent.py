@@ -1,8 +1,8 @@
 """RhythmAgent — generates Hypothesis objects given an EvidenceBundle.
 
-This module owns the Hypothesis-generation half of the system. The ReAct loop
-(Chat flow, T4) lives in ``app.agents.chat_agent`` and treats the Hypothesis
-produced here as fixed input.
+This module owns the Hypothesis-generation half of the system. The Chat flow
+(T4) runs through the LangGraph chat graph (``app.agents.graph``) and treats the
+Hypothesis produced here as fixed input.
 
 See architecture-v1.md §4.2 / §4.3 / §5.1 / §5.5 for the hard contracts:
 - Every evidence item MUST carry a `source_event_id` that exists in the bundle
