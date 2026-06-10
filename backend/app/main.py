@@ -18,6 +18,24 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    # Environment hardening — must run before any HTTP client / mem0 import:
+    # 1) mem0's PostHog telemetry phones home and retry-storms the logs when a
+    #    proxy blocks it; a local-first app should not phone home by default.
+    # 2) NO_PROXY_HOSTS routes the listed API hosts around a MITM-ing local
+    #    proxy (see config.py) — httpx/openai clients read proxy env at build.
+    import os
+
+    os.environ.setdefault("MEM0_TELEMETRY", "False")
+    if settings.no_proxy_hosts.strip():
+        for var in ("NO_PROXY", "no_proxy"):
+            existing = os.environ.get(var, "")
+            merged = [h.strip() for h in existing.split(",") if h.strip()]
+            for host in settings.no_proxy_hosts.split(","):
+                if (h := host.strip()) and h not in merged:
+                    merged.append(h)
+            os.environ[var] = ",".join(merged)
+        logger.info("NO_PROXY extended with: %s", settings.no_proxy_hosts)
+
     # v2 (M1C.3): JSON logs enriched with trace_id / conversation_id / user_id.
     from app.observability.structured_logging import setup_structured_logging
 

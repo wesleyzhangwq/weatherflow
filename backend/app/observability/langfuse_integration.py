@@ -100,8 +100,10 @@ class _LangfuseSpan:
     def generation(self, *, name: str, model: Any = None, usage: Optional[dict] = None,
                    metadata: Optional[dict] = None) -> None:
         try:
+            # usage must stay None when unknown — the SDK raises (and error-logs)
+            # on an empty dict, e.g. streaming responses without a usage block.
             self._obj.generation(
-                name=name, model=model, usage=usage or {}, metadata=metadata or {}
+                name=name, model=model, usage=usage, metadata=metadata or {}
             )
         except Exception:
             pass
@@ -168,14 +170,23 @@ def observe_node(name: str, metadata: Optional[dict] = None):
             child.end()
 
 
-def _map_usage(usage: dict) -> dict:
+def _map_usage(usage: dict) -> Optional[dict]:
+    """Map OpenAI-style usage onto Langfuse's shape, or None when unknown.
+
+    None matters: Langfuse raises on a usage dict without any recognised key,
+    and streaming responses often carry no usage block at all — that must not
+    error the observability path.
+    """
     if not usage:
-        return {}
-    return {
+        return None
+    mapped = {
         "input": usage.get("prompt_tokens"),
         "output": usage.get("completion_tokens"),
         "total": usage.get("total_tokens"),
     }
+    if all(v is None for v in mapped.values()):
+        return None
+    return mapped
 
 
 def record_generation(

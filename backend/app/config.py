@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     # param is gateway-specific and some OpenAI-compatible APIs 400 on it.
     llm_thinking_control: str = Field(default="auto", alias="LLM_THINKING_CONTROL")
 
+    # ----- Networking -----
+    # Comma-separated hosts to exclude from the system HTTP(S) proxy. On
+    # machines where a local proxy (Clash/V2Ray…) MITMs domestic API domains
+    # with a self-signed cert, LLM/embedding calls fail intermittently with
+    # CERTIFICATE_VERIFY_FAILED — list those API hosts here to force direct
+    # connections. Appended to NO_PROXY at startup; leave empty if your LLM
+    # endpoint actually needs the proxy.
+    no_proxy_hosts: str = Field(default="", alias="NO_PROXY_HOSTS")
+
     # ----- App -----
     data_dir: str = Field(default=str(_BACKEND_DIR / "data"), alias="DATA_DIR")
     db_filename: str = Field(default="weatherflow.db", alias="DB_FILENAME")

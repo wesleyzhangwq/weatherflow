@@ -24,11 +24,31 @@ def isolated_storage(monkeypatch) -> Iterator[Path]:
     monkeypatch.setenv("DATA_DIR", str(tmp_dir))
     monkeypatch.setenv("MEMORY_MARKDOWN_DIR", str(profile_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    # Hermetic network: the developer's .env carries REAL LLM/embedding
+    # endpoints, and mem0's infer=True consolidation path constructs its own
+    # clients from settings (bypassing the StubLLM). Point every outbound
+    # base URL at a dead local port so anything that slips through fails in
+    # milliseconds instead of dialing a real API with a fake key.
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "test-key")
     # Tests must never inherit real observability credentials from the
     # developer's .env — a configured Langfuse client spawns background
     # ingestion threads that hammer the (absent) host and spam stderr.
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    # NB: setenv("") — not delenv — because pydantic-settings falls back to
+    # the .env FILE when the process env var is missing; an empty env var is
+    # the only thing that actually overrides it.
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "")
+    # mem0's PostHog telemetry: at runtime the app lifespan disables it, but
+    # tests construct mem0 directly — without this, each blocked upload retries
+    # through the proxy and adds seconds per test.
+    monkeypatch.setenv("MEM0_TELEMETRY", "False")
+    # Strip the shell's proxy settings: every endpoint a test may touch is a
+    # dead local port, and a stray external call routed through the system
+    # proxy blocks for its full timeout (observed: +15-20s per chat request).
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
     # Point Qdrant at a dead port: with the dev Qdrant running, semantic
     # recall/projection would otherwise hit the REAL vector store — tests
     # would pollute it and read each other's (and the developer's) memories.
