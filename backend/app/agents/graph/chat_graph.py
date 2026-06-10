@@ -83,10 +83,30 @@ async def recall_memory_node(state: AgentState) -> dict[str, Any]:
             query=state.get("bundle_text", ""),
             user_id=state.get("user_id"),
         )
-        return {"semantic_memories": memories}
-    except (ImportError, Exception) as exc:
+    except Exception as exc:
         logger.debug("Semantic recall unavailable, continuing without: %s", exc)
         return {"semantic_memories": []}
+
+    if not memories:
+        return {"semantic_memories": []}
+
+    # Surface the recall in the SSE stream (§13): the UI renders these as
+    # chips with source_event_id drill-down — semantic memory made visible.
+    sse_events = list(state.get("sse_events", []))
+    sse_events.append({
+        "event": "memories_recalled",
+        "data": {
+            "memories": [
+                {
+                    "text": m.get("text", ""),
+                    "source_event_id": m.get("source_event_id", ""),
+                    "event_type": m.get("event_type", ""),
+                }
+                for m in memories[:5]
+            ]
+        },
+    })
+    return {"semantic_memories": memories, "sse_events": sse_events}
 
 
 @traced_node("plan")
@@ -118,7 +138,12 @@ async def plan_node(state: AgentState) -> dict[str, Any]:
     messages.append({"role": "user", "content": plan_prompt})
 
     try:
-        response = await llm.chat(messages, temperature=0.3, max_tokens=500)
+        # disable_thinking: planning is short structured output — a reasoning
+        # model's <think> preamble would add ~8-10s latency for no plan quality
+        # gain (the act node still reasons with thinking on).
+        response = await llm.chat(
+            messages, temperature=0.3, max_tokens=500, disable_thinking=True
+        )
         plan_text = _strip_think(response)
     except Exception as exc:
         logger.warning("Plan node LLM call failed: %s", exc)
@@ -162,15 +187,30 @@ async def act_node(state: AgentState) -> dict[str, Any]:
     sse_events = list(state.get("sse_events", []))
 
     # One LLM call per act invocation. Reuse the shared LLMClient (which carries
-    # auth/base_url/timeouts + Langfuse tracing) via chat_raw, which returns the
-    # full assistant message so we can read tool_calls.
+    # auth/base_url/timeouts + Langfuse tracing). When the run was started with
+    # a "custom" stream channel, push token deltas through get_stream_writer()
+    # so the client renders the answer as it is generated; otherwise (resume via
+    # ainvoke, tests with stub clients) fall back to the buffered chat_raw.
+    writer = _stream_writer()
     try:
-        msg = await llm.chat_raw(
-            messages,
-            temperature=0.4,
-            tools=tools_schemas,
-            tool_choice="auto",
-        )
+        if writer is not None and hasattr(llm, "chat_raw_stream"):
+            def _emit_delta(text: str) -> None:
+                writer({"event": "answer_delta", "data": {"content": text}})
+
+            msg = await llm.chat_raw_stream(
+                messages,
+                on_delta=_emit_delta,
+                temperature=0.4,
+                tools=tools_schemas,
+                tool_choice="auto",
+            )
+        else:
+            msg = await llm.chat_raw(
+                messages,
+                temperature=0.4,
+                tools=tools_schemas,
+                tool_choice="auto",
+            )
     except Exception as exc:
         logger.exception("LLM call failed in act node")
         sse_events.append({"event": "error", "data": {"message": str(exc)}})
@@ -470,6 +510,17 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 def _strip_think(text: str) -> str:
     """Strip <think>...</think> blocks from reasoning-model output."""
     return _THINK_RE.sub("", text or "").strip()
+
+
+def _stream_writer():
+    """The run's custom-stream writer, or None when the graph was invoked
+    without a "custom" channel (resume path, plain ainvoke, unit tests)."""
+    try:
+        from langgraph.config import get_stream_writer
+
+        return get_stream_writer()
+    except Exception:
+        return None
 
 
 def _summarize_observation(result: Any) -> str:

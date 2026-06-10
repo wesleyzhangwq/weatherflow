@@ -68,14 +68,10 @@ def _render_signal(rec: Any) -> str:
 
 
 def _profile_memory() -> Any:
-    from mem0 import Memory
-
-    from app.memory.semantic.mem0_config import build_mem0_config
+    from app.memory.semantic.mem0_config import get_memory
 
     s = get_settings()
-    return Memory.from_config(
-        build_mem0_config(s, collection=s.qdrant_profile_collection)
-    )
+    return get_memory(s, collection=s.qdrant_profile_collection)
 
 
 async def consolidate_event(

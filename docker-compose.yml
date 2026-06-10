@@ -40,7 +40,10 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      # The qdrant image ships no curl/wget — a curl-based check stays
+      # "unhealthy" forever and the backend (condition: service_healthy)
+      # never starts. Probe the TCP port with bash's /dev/tcp instead.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 5

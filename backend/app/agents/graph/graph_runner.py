@@ -35,17 +35,22 @@ async def run_chat(
     conversation_id: str,
     trigger_event_id: str,
     user_id: Optional[str] = None,
+    history_messages: Optional[list[dict[str, str]]] = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the chat graph, yielding SSE-compatible event dicts.
 
     SSE order follows v1 §10.2. If a write tool fires, the graph pauses at the
     human_review interrupt; we emit events through proposal_created and the
     stream ends (the continuation arrives later via /execute → resume → L1).
+
+    ``history_messages`` is the conversation's prior user/assistant window
+    (loaded from L1 by the router) so follow-up turns keep their context.
     """
     settings = get_settings()
     initial_state: AgentState = {
         "messages": [
             {"role": "system", "content": _build_system_prompt(hypothesis, bundle_text)},
+            *(history_messages or []),
             {"role": "user", "content": user_message},
         ],
         "conversation_id": conversation_id,
@@ -76,17 +81,30 @@ async def run_chat(
         "chat_run",
         {"conversation_id": conversation_id, "user_id": initial_state["user_id"]},
     )
-    # Stream per super-step (ADR-004 D4): the graph accumulates sse_events in
-    # state; we emit the newly-appended ones after each node so the client sees
-    # reasoning/tool/proposal events as they happen. On a write proposal the
-    # graph interrupts and the stream ends right after proposal_created.
+    # Two stream channels (ADR-004 D4):
+    #   - "values": the graph accumulates sse_events in state; we emit the
+    #     newly-appended ones after each node (reasoning/tool/proposal events).
+    #   - "custom": token deltas emitted mid-node via get_stream_writer(), so
+    #     the client renders the answer as it is generated instead of waiting
+    #     for the super-step to finish.
+    # On a write proposal the graph interrupts and the stream ends right after
+    # proposal_created.
     emitted = 0
     try:
         with run_context(trace=root, llm=llm):
-            async for snapshot in graph.astream(
-                initial_state, config=_config(conversation_id), stream_mode="values"
+            async for mode, payload in graph.astream(
+                initial_state,
+                config=_config(conversation_id),
+                stream_mode=["custom", "values"],
             ):
-                events = snapshot.get("sse_events", [])
+                if mode == "custom":
+                    if isinstance(payload, dict) and payload.get("event"):
+                        yield {
+                            "event": payload["event"],
+                            "data": json.dumps(payload.get("data", {}), ensure_ascii=False),
+                        }
+                    continue
+                events = payload.get("sse_events", [])
                 for ev in events[emitted:]:
                     yield {"event": ev["event"], "data": json.dumps(ev["data"], ensure_ascii=False)}
                 emitted = len(events)

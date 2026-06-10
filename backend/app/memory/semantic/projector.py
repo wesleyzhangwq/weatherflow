@@ -114,12 +114,10 @@ async def project_event(rec: Any, user_id: Optional[str] = None) -> bool:
 
     uid = user_id or rec.user_id
     try:
-        from mem0 import Memory
-
         from app.config import get_settings
-        from app.memory.semantic.mem0_config import build_mem0_config
+        from app.memory.semantic.mem0_config import get_memory
 
-        m = Memory.from_config(build_mem0_config(get_settings()))
+        m = get_memory(get_settings())
         if rec.id in _existing_source_ids(m, uid):
             return False  # already projected — idempotent
         _store_memory(m, rec, uid)
@@ -151,12 +149,10 @@ async def project_high_value_events(
         return 0
 
     try:
-        from mem0 import Memory
-
         from app.config import get_settings
-        from app.memory.semantic.mem0_config import build_mem0_config
+        from app.memory.semantic.mem0_config import get_memory
 
-        m = Memory.from_config(build_mem0_config(get_settings()))
+        m = get_memory(get_settings())
     except ImportError:
         return 0
     except Exception:

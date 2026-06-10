@@ -104,11 +104,13 @@ async def _stream(body: ChatStreamIn, llm: LLMClient, graph: object) -> AsyncIte
     # 3. Run chat agent (graph with v1 fallback)
     bundle_event_ids = [e.event_id for e in bundle.entries]
 
+    final_answer: str | None = None
     try:
         async for ev in run_chat(
             graph=graph,
             llm=llm,
             user_message=body.message,
+            history_messages=_conversation_history(body.conversation_id, exclude_event_id=turn_id),
             hypothesis=hyp,
             bundle_text=bundle.render(),
             bundle_event_ids=bundle_event_ids,
@@ -116,16 +118,61 @@ async def _stream(body: ChatStreamIn, llm: LLMClient, graph: object) -> AsyncIte
             trigger_event_id=turn_id,
         ):
             # run_chat yields {"event": ..., "data": json_string} — pass through
+            if ev.get("event") == "final_answer":
+                try:
+                    final_answer = json.loads(ev["data"]).get("content")
+                except (json.JSONDecodeError, TypeError):
+                    pass
             yield ev
     except Exception as exc:
         logger.exception("Chat graph crashed")
         yield _sse("error", {"message": str(exc)})
         return
 
-    # 4. Fan out derivations asynchronously (ADR D7 / ADR-004 D5 — fire-and-forget)
+    # 4. Persist the assistant's reply to L1 — the source of truth that both
+    # /history rehydration and the next turn's history window read from.
+    if final_answer:
+        event_log.append(
+            type="chat_turn",
+            payload={
+                "role": "assistant",
+                "content": final_answer,
+                "conversation_id": body.conversation_id,
+            },
+            refs={"conversation_id": body.conversation_id},
+        )
+
+    # 5. Fan out derivations asynchronously (ADR D7 / ADR-004 D5 — fire-and-forget)
     metrics.observe("chat.latency_ms", (time.perf_counter() - start) * 1000)
     metrics.increment("chat.count")
     asyncio.create_task(run_derivations())
+
+
+_HISTORY_WINDOW_TURNS = 12
+
+
+def _conversation_history(
+    conversation_id: str, *, exclude_event_id: str
+) -> list[dict[str, str]]:
+    """Last N user/assistant turns of this conversation as chat messages.
+
+    Read from L1 (the source of truth) so the graph's message window survives
+    process restarts and checkpointer resets. The just-written trigger turn is
+    excluded — run_chat appends the current user message itself.
+    """
+    rows = event_log.find_refs(
+        ref_key="conversation_id",
+        ref_value=conversation_id,
+        type_="chat_turn",
+        limit=_HISTORY_WINDOW_TURNS + 1,
+    )
+    rows = [r for r in rows if r.id != exclude_event_id]
+    rows = sorted(rows, key=lambda r: r.timestamp)[-_HISTORY_WINDOW_TURNS:]
+    return [
+        {"role": r.payload.get("role", "user"), "content": r.payload.get("content", "")}
+        for r in rows
+        if r.payload.get("content")
+    ]
 
 
 def _is_first_turn(conversation_id: str) -> bool:

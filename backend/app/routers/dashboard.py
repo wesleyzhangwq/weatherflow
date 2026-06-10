@@ -166,7 +166,10 @@ def _scheduler_heartbeat() -> SchedulerHeartbeat:
             if cand > now_local:
                 candidates.append(cand)
     next_dt = min(candidates) if candidates else None
-    next_at = next_dt.replace(tzinfo=timezone.utc).isoformat() if next_dt else None
+    # next_dt is naive LOCAL time — attach the local offset (astimezone on a
+    # naive datetime assumes local), not UTC, or the absolute timestamp is off
+    # by the UTC offset for every non-UTC user.
+    next_at = next_dt.astimezone().isoformat() if next_dt else None
     next_minutes = int((next_dt - now_local).total_seconds() // 60) if next_dt else None
 
     return SchedulerHeartbeat(

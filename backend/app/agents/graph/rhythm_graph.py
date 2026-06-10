@@ -72,7 +72,10 @@ async def verify_sources_node(state: AgentState) -> dict[str, Any]:
             rec = event_log.get(sid)
             if rec is None:
                 logger.warning("verify_sources: source_event_id %s not in L1", sid)
-                return {"critic_verdict": "retry"}
+                return {
+                    "critic_verdict": "retry",
+                    "turn_count": state.get("turn_count", 0) + 1,
+                }
 
     return {"critic_verdict": "pass"}
 
@@ -99,9 +102,23 @@ async def persist_node(state: AgentState) -> dict[str, Any]:
     return {"hypothesis_id": hyp_id}
 
 
+_MAX_VERIFY_RETRIES = 1
+
+
 def after_verify(state: AgentState) -> str:
-    """Conditional edge: retry hypothesize if verification failed, else persist."""
-    if state.get("critic_verdict") == "retry":
+    """Conditional edge: retry hypothesize once if verification failed, else persist.
+
+    The cap matters: a persistently-failing verify would otherwise loop
+    hypothesize → verify until the recursion limit, burning a ~10s LLM call
+    per lap. Persisting after the retry budget is safe because RhythmAgent
+    already rejects payloads whose source_event_id is not in the bundle
+    (two attempts, then a trigger-only fallback) — so by the time a payload
+    reaches this edge its references were validated against the bundle once.
+    """
+    if (
+        state.get("critic_verdict") == "retry"
+        and state.get("turn_count", 0) <= _MAX_VERIFY_RETRIES
+    ):
         return "hypothesize"
     return "persist"
 

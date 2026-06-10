@@ -2,10 +2,16 @@
 
 Per weatherflow-architecture-v2.md §13.2, this module provides semantic search
 over L2.5 memories, returning results with source_event_id backlinks.
+
+Implementation notes: the mem0 ``Memory`` instance is process-cached (building
+one constructs Qdrant/embedder/LLM clients eagerly), and its synchronous
+``search`` runs in a worker thread so recall never blocks the event loop that
+is concurrently pushing SSE frames.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -23,16 +29,14 @@ async def recall_relevant(
     Falls back to empty list when mem0 is unavailable.
     """
     try:
-        from mem0 import Memory
-
         from app.config import get_settings
-        from app.memory.semantic.mem0_config import build_mem0_config
+        from app.memory.semantic.mem0_config import get_memory
 
         settings = get_settings()
         uid = user_id or settings.default_user_id
 
-        m = Memory.from_config(build_mem0_config(settings))
-        results = m.search(query, user_id=uid, limit=limit)
+        m = get_memory(settings)
+        results = await asyncio.to_thread(m.search, query, user_id=uid, limit=limit)
 
         memories = []
         for item in results.get("results", results if isinstance(results, list) else []):
@@ -65,17 +69,13 @@ async def recall_profile(
     are synthesized traits, not citable evidence). Degrades to [] when mem0 down.
     """
     try:
-        from mem0 import Memory
-
         from app.config import get_settings
-        from app.memory.semantic.mem0_config import build_mem0_config
+        from app.memory.semantic.mem0_config import get_memory
 
         settings = get_settings()
         uid = user_id or settings.default_user_id
-        m = Memory.from_config(
-            build_mem0_config(settings, collection=settings.qdrant_profile_collection)
-        )
-        results = m.search(query, user_id=uid, limit=limit)
+        m = get_memory(settings, collection=settings.qdrant_profile_collection)
+        results = await asyncio.to_thread(m.search, query, user_id=uid, limit=limit)
         items = results.get("results", results if isinstance(results, list) else [])
         facts = [it.get("memory", it.get("text", "")) for it in items]
         return [f for f in facts if f][:limit]

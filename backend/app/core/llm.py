@@ -56,6 +56,18 @@ class LLMClient(Protocol):
         response_format: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]: ...
 
+    async def chat_raw_stream(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        on_delta: Any,
+        model: Optional[str] = None,
+        temperature: float = 0.4,
+        max_tokens: Optional[int] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> dict[str, Any]: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -162,6 +174,161 @@ class OpenAICompatibleClient:
             return data["choices"][0]["message"]
         except (KeyError, IndexError) as exc:
             raise RuntimeError(f"Unexpected chat response shape: {data!r}") from exc
+
+    async def chat_raw_stream(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        on_delta: Any,
+        model: Optional[str] = None,
+        temperature: float = 0.4,
+        max_tokens: Optional[int] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Stream /chat/completions, invoking ``on_delta(text)`` per visible
+        content chunk, and return the fully-assembled assistant message.
+
+        ``<think>…</think>`` spans (reasoning models inline them in content)
+        are filtered out of the delta callbacks but kept in the returned
+        message content, so downstream behaviour matches ``chat_raw``.
+        Tool-call fragments are merged by index per the OpenAI stream shape.
+        """
+        payload: dict[str, Any] = {
+            "model": model or self._settings.chat_model,
+            "messages": list(messages),
+            "temperature": temperature,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice or "auto"
+
+        from app.observability.langfuse_integration import record_generation
+
+        start = time.perf_counter()
+        content_parts: list[str] = []
+        tool_calls_acc: dict[int, dict[str, Any]] = {}
+        usage: dict[str, Any] = {}
+        think_filter = _ThinkStreamFilter()
+
+        async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                chunk_raw = line[5:].strip()
+                if chunk_raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(chunk_raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(chunk.get("usage"), dict):
+                    usage = chunk["usage"]
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                piece = delta.get("content")
+                if piece:
+                    content_parts.append(piece)
+                    visible = think_filter.feed(piece)
+                    if visible:
+                        try:
+                            on_delta(visible)
+                        except Exception:  # delta fan-out must never kill the call
+                            pass
+                for tc in delta.get("tool_calls") or []:
+                    idx = tc.get("index", 0)
+                    acc = tool_calls_acc.setdefault(
+                        idx,
+                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                    )
+                    if tc.get("id"):
+                        acc["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        acc["function"]["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        acc["function"]["arguments"] += fn["arguments"]
+
+        tail = think_filter.flush()
+        if tail:
+            try:
+                on_delta(tail)
+            except Exception:
+                pass
+
+        latency_ms = (time.perf_counter() - start) * 1000
+        record_generation(
+            model=payload.get("model"), usage=usage, latency_ms=latency_ms
+        )
+        _record_llm_metrics(usage, latency_ms)
+
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(content_parts) or None,
+        }
+        if tool_calls_acc:
+            message["tool_calls"] = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+        return message
+
+
+class _ThinkStreamFilter:
+    """Stateful filter that drops ``<think>…</think>`` spans from a token
+    stream. Tags can be split across chunks, so a small carry buffer holds any
+    trailing text that could be the start of a tag."""
+
+    _OPEN, _CLOSE = "<think>", "</think>"
+
+    def __init__(self) -> None:
+        self._inside = False
+        self._carry = ""
+
+    def feed(self, piece: str) -> str:
+        text = self._carry + piece
+        self._carry = ""
+        out: list[str] = []
+        while text:
+            if self._inside:
+                pos = text.find(self._CLOSE)
+                if pos == -1:
+                    keep = self._partial_suffix_len(text, self._CLOSE)
+                    self._carry = text[len(text) - keep:] if keep else ""
+                    return "".join(out)
+                text = text[pos + len(self._CLOSE):]
+                self._inside = False
+            else:
+                pos = text.find(self._OPEN)
+                if pos == -1:
+                    keep = self._partial_suffix_len(text, self._OPEN)
+                    if keep:
+                        self._carry = text[len(text) - keep:]
+                        out.append(text[: len(text) - keep])
+                    else:
+                        out.append(text)
+                    return "".join(out)
+                out.append(text[:pos])
+                text = text[pos + len(self._OPEN):]
+                self._inside = True
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Return any carried text that turned out not to be a tag prefix."""
+        tail = "" if self._inside else self._carry
+        self._carry = ""
+        return tail
+
+    @staticmethod
+    def _partial_suffix_len(text: str, tag: str) -> int:
+        for k in range(min(len(tag) - 1, len(text)), 0, -1):
+            if text.endswith(tag[:k]):
+                return k
+        return 0
 
 
 def build_llm_client(settings: Optional[Settings] = None) -> LLMClient:

@@ -100,4 +100,26 @@ def build_mem0_config(
     return config
 
 
-__all__ = ["build_mem0_config"]
+_MEMORY_CACHE: dict[str, Any] = {}
+
+
+def get_memory(settings: Settings, *, collection: str | None = None) -> Any:
+    """Process-wide cached mem0 ``Memory``, one per (qdrant url, collection).
+
+    ``Memory.from_config`` eagerly constructs the Qdrant client, embedder and
+    LLM client — rebuilding all of that on every recall added avoidable
+    latency to every chat turn and every check-in. The cache key includes the
+    Qdrant URL so tests (or env changes) pointing at a different instance get
+    a fresh client instead of a stale one.
+    """
+    from mem0 import Memory
+
+    key = f"{settings.qdrant_url}|{collection or settings.qdrant_collection}"
+    m = _MEMORY_CACHE.get(key)
+    if m is None:
+        m = Memory.from_config(build_mem0_config(settings, collection=collection))
+        _MEMORY_CACHE[key] = m
+    return m
+
+
+__all__ = ["build_mem0_config", "get_memory"]
