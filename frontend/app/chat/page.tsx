@@ -2,19 +2,30 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE, api, newConversationId, type ProposalCard } from "@/lib/api";
+import { EvidenceModal } from "@/components/EvidenceModal";
 
 const CID_STORAGE_KEY = "wf_conversation_id";
+
+type RecalledMemory = {
+  text: string;
+  source_event_id: string;
+  event_type: string;
+};
 
 type ChatEvent =
   | { kind: "user_message"; content: string }
   | { kind: "context_loaded"; message: string }
   | { kind: "hypothesis"; label: string; confidence: number; summary: string }
+  | { kind: "memories"; memories: RecalledMemory[] }
   | { kind: "reasoning"; content: string }
   | { kind: "tool_started"; tool_name: string }
   | { kind: "tool_finished"; tool_name: string; status: string }
   | { kind: "observation"; content: string }
   | { kind: "proposal"; proposalId: string; toolName: string; arguments: Record<string, unknown>; rationale: string }
+  // draft = 流式生成中的回答缓冲；final_answer 到达时被替换
+  | { kind: "draft"; content: string }
   | { kind: "final"; content: string }
+  | { kind: "notice"; message: string }
   | { kind: "error"; message: string }
   | { kind: "divider"; label: string };
 
@@ -26,6 +37,7 @@ export default function ChatPage() {
   const [proposalStatuses, setProposalStatuses] = useState<
     Record<string, ProposalCard["status"]>
   >({});
+  const [traceEventId, setTraceEventId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   // -------- conversation id persistence (fixes "history lost on navigation")
@@ -196,6 +208,14 @@ export default function ChatPage() {
       ]);
     } finally {
       setStreaming(false);
+      // 流意外中断时，把生成到一半的 draft 固化下来，不让它带着光标悬置。
+      setEvents((p) => {
+        const last = p[p.length - 1];
+        if (last && last.kind === "draft") {
+          return [...p.slice(0, -1), { kind: "final", content: last.content }];
+        }
+        return p;
+      });
     }
   }
 
@@ -220,6 +240,29 @@ export default function ChatPage() {
           { kind: "context_loaded", message: String(payload.message ?? "") }
         ]);
         break;
+      case "memories_recalled":
+        setEvents((p) => [
+          ...p,
+          {
+            kind: "memories",
+            memories: Array.isArray(payload.memories)
+              ? (payload.memories as RecalledMemory[])
+              : []
+          }
+        ]);
+        break;
+      case "answer_delta": {
+        const piece = String(payload.content ?? "");
+        if (!piece) break;
+        setEvents((p) => {
+          const last = p[p.length - 1];
+          if (last && last.kind === "draft") {
+            return [...p.slice(0, -1), { kind: "draft", content: last.content + piece }];
+          }
+          return [...p, { kind: "draft", content: piece }];
+        });
+        break;
+      }
       case "hypothesis_generated":
         setEvents((p) => [
           ...p,
@@ -232,14 +275,16 @@ export default function ChatPage() {
         ]);
         break;
       case "reasoning_step":
+        // 流式 draft 缓冲的其实是这段 reasoning（content + tool_calls 同发）——
+        // 用正式的 reasoning 行替换掉 draft，避免同一段文字出现两次。
         setEvents((p) => [
-          ...p,
+          ...dropTrailingDraft(p),
           { kind: "reasoning", content: stripThink(String(payload.content ?? "")) }
         ]);
         break;
       case "tool_call_started":
         setEvents((p) => [
-          ...p,
+          ...dropTrailingDraft(p),
           { kind: "tool_started", tool_name: String(payload.tool_name ?? "") }
         ]);
         break;
@@ -276,8 +321,9 @@ export default function ChatPage() {
         }));
         break;
       case "final_answer":
+        // 替换流式 draft，而不是再追加一条 —— 内容相同，状态升级为 final。
         setEvents((p) => [
-          ...p,
+          ...dropTrailingDraft(p),
           { kind: "final", content: String(payload.content ?? "") }
         ]);
         break;
@@ -292,19 +338,26 @@ export default function ChatPage() {
 
   async function confirmProposal(id: string) {
     setProposalStatuses((p) => ({ ...p, [id]: "confirmed" }));
+    setEvents((p) => [
+      ...p,
+      { kind: "notice", message: "已确认执行，Agent 正在基于执行结果继续…" }
+    ]);
     try {
       await api.executeProposal(id);
+      // 执行成功后后端会 resume 暂停的 graph，并把续写的回答落进 L1 —
+      // 重新拉取历史，让用户当场看到 Agent 的后续回答而不用手动刷新。
+      await loadHistory(conversationId);
     } catch (e) {
       const msg = (e as Error).message;
       // 409 means the proposal is already in a terminal state on the server.
       // Reverting to "pending" would re-show the buttons and the user would
       // 409 again — keep it sticky at "confirmed" instead.
       if (/\b409\b|already/.test(msg)) {
-        // status already correct; nothing else to do
+        await loadHistory(conversationId);
         return;
       }
       setProposalStatuses((p) => ({ ...p, [id]: "pending" }));
-      alert("执行失败：" + msg);
+      setEvents((p) => [...p, { kind: "error", message: "执行失败：" + msg }]);
     }
   }
 
@@ -316,7 +369,7 @@ export default function ChatPage() {
       const msg = (e as Error).message;
       if (/\b409\b|already/.test(msg)) return;
       setProposalStatuses((p) => ({ ...p, [id]: "pending" }));
-      alert("拒绝失败：" + msg);
+      setEvents((p) => [...p, { kind: "error", message: "拒绝失败：" + msg }]);
     }
   }
 
@@ -359,10 +412,15 @@ export default function ChatPage() {
             }
             onConfirm={() => ev.kind === "proposal" && confirmProposal(ev.proposalId)}
             onReject={() => ev.kind === "proposal" && rejectProposal(ev.proposalId)}
+            onTrace={(eventId) => setTraceEventId(eventId)}
           />
         ))}
         <div ref={endRef} />
       </div>
+
+      {traceEventId && (
+        <EvidenceModal eventId={traceEventId} onClose={() => setTraceEventId(null)} />
+      )}
 
       <div className="flex gap-2">
         <input
@@ -401,16 +459,23 @@ function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
 
+function dropTrailingDraft(events: ChatEvent[]): ChatEvent[] {
+  const last = events[events.length - 1];
+  return last && last.kind === "draft" ? events.slice(0, -1) : events;
+}
+
 function EventLine({
   ev,
   proposalStatus,
   onConfirm,
-  onReject
+  onReject,
+  onTrace
 }: {
   ev: ChatEvent;
   proposalStatus?: ProposalCard["status"];
   onConfirm?: () => void;
   onReject?: () => void;
+  onTrace?: (eventId: string) => void;
 }) {
   switch (ev.kind) {
     case "user_message":
@@ -421,6 +486,38 @@ function EventLine({
       );
     case "context_loaded":
       return <p className="text-xs muted">· {ev.message}</p>;
+    case "memories":
+      if (ev.memories.length === 0) return null;
+      return (
+        <div className="text-xs">
+          <span className="muted">🧠 想起了 {ev.memories.length} 段过往：</span>
+          <span className="inline-flex flex-wrap gap-1.5 align-middle ml-1">
+            {ev.memories.map((m, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => m.source_event_id && onTrace?.(m.source_event_id)}
+                title={m.text}
+                className="max-w-[16rem] truncate rounded-full border border-black/10 dark:border-white/20 px-2 py-0.5 hover:bg-black/5 dark:hover:bg-white/10"
+              >
+                {m.text}
+              </button>
+            ))}
+          </span>
+        </div>
+      );
+    case "notice":
+      return <p className="text-xs muted">⏳ {ev.message}</p>;
+    case "draft":
+      return (
+        <div className="rounded-md bg-black/5 dark:bg-white/5 p-3">
+          <div className="text-xs uppercase tracking-widest muted">回答中…</div>
+          <p className="mt-1 text-sm whitespace-pre-wrap">
+            {ev.content}
+            <span className="animate-pulse">▌</span>
+          </p>
+        </div>
+      );
     case "hypothesis":
       return (
         <div className="rounded-md border-l-2 border-black/40 dark:border-white/40 pl-3 py-1">
@@ -475,7 +572,7 @@ function EventLine({
       return (
         <div className="rounded-md bg-black/5 dark:bg-white/5 p-3">
           <div className="text-xs uppercase tracking-widest muted">最终回答</div>
-          <p className="mt-1 text-sm">{ev.content}</p>
+          <p className="mt-1 text-sm whitespace-pre-wrap">{ev.content}</p>
         </div>
       );
     case "error":

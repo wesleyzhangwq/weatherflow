@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api, type HypothesisCard as Card } from "@/lib/api";
+import { EvidenceModal } from "./EvidenceModal";
 import { LABEL_GLYPH, LABEL_TEXT, SOURCE_TAG_TEXT } from "@/lib/labels";
 
 export function HypothesisCard({
@@ -96,31 +97,19 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function EvidenceLine({ text, eventId }: { text: string; eventId: string }) {
+  const [open, setOpen] = useState(false);
   return (
     <li className="text-sm flex items-start gap-2">
       <span className="flex-1">· {text}</span>
       <button
         type="button"
-        onClick={async () => {
-          try {
-            const rec = await api.event(eventId);
-            // Show raw JSON in an alert for now — fancy modal can come later
-            alert(
-              `${rec.type}  ${rec.timestamp}\n\n${JSON.stringify(
-                rec.payload,
-                null,
-                2
-              )}`
-            );
-          } catch (e) {
-            alert("无法溯源：" + (e as Error).message);
-          }
-        }}
-        className="text-xs muted underline decoration-dotted"
-        title={eventId}
+        onClick={() => setOpen(true)}
+        className="text-xs muted underline decoration-dotted shrink-0"
+        title={`查看来源事件 ${eventId}`}
       >
-        ⓘ
+        溯源
       </button>
+      {open && <EvidenceModal eventId={eventId} onClose={() => setOpen(false)} />}
     </li>
   );
 }
