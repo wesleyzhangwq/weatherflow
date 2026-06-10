@@ -88,8 +88,10 @@ v2 把单 ReAct loop 升级为带 planner / worker / critic 的状态图：
 - **Proposal interrupt**：write tool 让图暂停并由 checkpointer 持久化；`POST /api/actions/{id}/execute` 确认后从断点 `resume`，继续推理。
 - **RhythmAgent 子图**（T1/T2）：`recall → hypothesize → verify_sources → persist`，与 chat 图共享 recall 节点。
 
-> **降级**：未安装 `langgraph` 时，`run_chat` / `run_rhythm` 自动回退到 v1 的 `ChatAgent` / `generate_hypothesis`，
-> SSE 事件契约（§10.2）保持不变。所有 langgraph / mem0 / langfuse 导入都走 try/except 降级模式。
+> **降级**：`langgraph` 现在是硬依赖（chat 图 + checkpointer 在 lifespan 编译）；`run_rhythm` 在图执行失败时
+> 回退 v1 `generate_hypothesis`。mem0 / langfuse 保持 try/except 降级：Qdrant 不在 → 纯 recency 召回，
+> 缺 Langfuse key → 只打结构化日志。SSE 事件契约（§10.2）不变，新增 `answer_delta`（token 流）与
+> `memories_recalled`（语义召回可视化）两个事件。
 
 ---
 
@@ -128,7 +130,7 @@ curl http://127.0.0.1:8765/api/meta/status   # v2_services 健康检查
 
 ```bash
 cp .env.example .env
-uv sync
+uv sync --all-packages --all-extras
 
 # 后端
 uv run uvicorn app.main:app --app-dir backend --port 8765
@@ -136,11 +138,18 @@ uv run uvicorn app.main:app --app-dir backend --port 8765
 cd frontend && npm install && npm run dev
 # (可选) 语义记忆只需 Qdrant：
 docker compose up -d qdrant
+# (可选) Langfuse trace 树：
+docker compose up -d langfuse
 
 # CLI
 uv run wf start              # 一键起后端 + 前端
 uv run wf setup-calendar     # 一次性的 Google OAuth 授权
 ```
+
+> **本机代理用户**（Clash/V2Ray 等）：若 LLM/embedding 调用偶发
+> `CERTIFICATE_VERIFY_FAILED`，在 `.env` 里把这些 API 域名加入
+> `NO_PROXY_HOSTS`（例：`NO_PROXY_HOSTS=api.minimaxi.com,api.siliconflow.cn`）
+> 让它们绕开代理直连。
 
 ### 桌面宠物（Electron）
 

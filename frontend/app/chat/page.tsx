@@ -197,7 +197,9 @@ export default function ChatPage() {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n\n");
+        // sse-starlette terminates frames with \r\n\r\n (not \n\n) — split on
+        // both, or the buffer never flushes and the UI renders nothing.
+        const parts = buffer.split(/\r?\n\r?\n/);
         buffer = parts.pop() ?? "";
         for (const part of parts) handleSseChunk(part);
       }
@@ -222,7 +224,7 @@ export default function ChatPage() {
   function handleSseChunk(chunk: string) {
     let event = "";
     let data = "";
-    for (const line of chunk.split("\n")) {
+    for (const line of chunk.split(/\r?\n/)) {
       if (line.startsWith("event:")) event = line.slice(6).trim();
       else if (line.startsWith("data:")) data += line.slice(5).trim();
     }
