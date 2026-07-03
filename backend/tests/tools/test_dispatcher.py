@@ -39,17 +39,15 @@ async def test_unknown_tool_returns_error_not_exception():
 
 @pytest.mark.asyncio
 async def test_write_tool_creates_proposal_without_executing(monkeypatch):
-    # Stub the MCP client; if a write tool is dispatched we should NOT see
-    # a session call.
+    # Seam: the read path calls dispatcher.pool_call; a write dispatch must
+    # never reach the MCP session pool.
     called = {"calls": 0}
 
-    class _NeverCalled:
-        def __init__(self, *a, **kw): ...
-        def session(self):  # pragma: no cover
-            called["calls"] += 1
-            raise AssertionError("Write tools must not run the MCP")
+    async def _never_called(name, arguments, **kw):  # pragma: no cover
+        called["calls"] += 1
+        raise AssertionError("Write tools must not run the MCP")
 
-    monkeypatch.setattr(dispatcher_mod, "MCPToolClient", _NeverCalled)
+    monkeypatch.setattr(dispatcher_mod, "pool_call", _never_called)
 
     result = await dispatch(
         tool_name="calendar.create_focus_block",
@@ -66,31 +64,11 @@ async def test_write_tool_creates_proposal_without_executing(monkeypatch):
 async def test_read_tool_writes_tool_call_event(monkeypatch):
     captured: dict = {}
 
-    class _StubClient:
-        def __init__(self, *a, **kw): ...
-        def session(self):
-            return _StubSession()
+    async def _stub_pool_call(name, arguments, **kw):
+        captured["called"] = (name, arguments)
+        return {"events": [{"start": "x", "summary": "y"}]}
 
-        async def call_tool(self, session, name, args):  # pragma: no cover
-            raise AssertionError("read path uses session context manager")
-
-    class _StubSession:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return None
-
-    class _StubMCPClient:
-        def __init__(self, *a, **kw): ...
-        def session(self):
-            class _Ctx:
-                async def __aenter__(_self): return object()
-                async def __aexit__(_self, *a): return None
-            return _Ctx()
-
-        async def call_tool(self, session, name, args):
-            captured["called"] = (name, args)
-            return {"events": [{"start": "x", "summary": "y"}]}
-
-    monkeypatch.setattr(dispatcher_mod, "MCPToolClient", _StubMCPClient)
+    monkeypatch.setattr(dispatcher_mod, "pool_call", _stub_pool_call)
 
     result = await dispatch(
         tool_name="calendar.search_events",

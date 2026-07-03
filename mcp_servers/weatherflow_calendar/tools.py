@@ -171,7 +171,6 @@ async def find_free_slots(
     if not window_start or not window_end:
         return {"slots": []}
 
-    tz = window_start.tzinfo
 
     def _workday_bound(date: datetime, time_str: str) -> datetime:
         h, m = (int(x) for x in time_str.split(":"))

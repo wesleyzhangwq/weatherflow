@@ -101,9 +101,24 @@ class MCPToolClient:
                 yield session
 
     async def list_tools(self, session: ClientSession) -> list[dict[str, Any]]:
+        """Full discovery payload — schema, annotations, and server meta.
+
+        The legacy version kept only name/description, which is exactly why a
+        hand-maintained registry had to exist; returning the whole surface
+        lets the backend build its registry *from the protocol*.
+        """
         try:
             result = await asyncio.wait_for(session.list_tools(), timeout=self.timeout)
-            return [{"name": t.name, "description": t.description or ""} for t in result.tools]
+            return [
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "input_schema": t.inputSchema or {},
+                    "annotations": t.annotations.model_dump() if t.annotations else None,
+                    "meta": t.meta or {},
+                }
+                for t in result.tools
+            ]
         except asyncio.TimeoutError as exc:
             raise RuntimeError(f"MCP list_tools timed out after {self.timeout}s") from exc
 

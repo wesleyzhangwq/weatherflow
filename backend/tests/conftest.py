@@ -24,6 +24,8 @@ def isolated_storage(monkeypatch) -> Iterator[Path]:
     monkeypatch.setenv("DATA_DIR", str(tmp_dir))
     monkeypatch.setenv("MEMORY_MARKDOWN_DIR", str(profile_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    # Hermetic: never spawn the MCP server subprocess from app startup.
+    monkeypatch.setenv("WF_MCP_DISCOVERY_ENABLED", "false")
     # Hermetic network: the developer's .env carries REAL LLM/embedding
     # endpoints, and mem0's infer=True consolidation path constructs its own
     # clients from settings (bypassing the StubLLM). Point every outbound

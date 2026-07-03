@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -123,7 +122,7 @@ async def test_find_free_slots_overlapping_meetings_merge() -> None:
         _client=client,
     )
     slots = result["slots"]
-    starts = [s["start"] for s in slots]
+    [s["start"] for s in slots]
     # merged busy block: 10:00-11:30 → free: 9:00-10:00 and 11:30-18:00
     assert len(slots) == 2
     total_free = sum(s["duration_minutes"] for s in slots)
@@ -255,7 +254,7 @@ async def test_create_focus_block_fallback_when_preferred_window_busy(monkeypatc
     monkeypatch.setenv("WF_MCP_WRITE_TOOLS_ENABLED", "false")
 
     call_count = {"n": 0}
-    morning_items = [
+    [
         _event("Busy All Morning", "2026-05-23T09:00:00+00:00", "2026-05-23T12:00:00+00:00"),
     ]
 

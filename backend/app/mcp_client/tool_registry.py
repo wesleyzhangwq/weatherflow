@@ -7,10 +7,13 @@ v1's enforcement of architecture-v1.md §7.1's destructive-filtering rule.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal
+from typing import Dict, List
 
 from app.memory.schemas import ToolMode
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,7 +22,7 @@ class Tool:
     mode: ToolMode
     description: str
     parameters: dict  # JSON schema
-    server: Literal["calendar", "github"]
+    server: str  # tool-name prefix, e.g. "calendar" / "github"
 
 
 def _param(props: dict, required: list[str]) -> dict:
@@ -232,6 +235,84 @@ def build_default_registry() -> ToolRegistry:
     return reg
 
 
+# ---------------------------------------------------------------------------
+# Protocol-first discovery (overhaul phase 2)
+#
+# The MCP server is the single source of truth for tool schemas. At startup
+# the backend lists tools over the protocol and rebuilds its registry from
+# what the server actually serves: three-state mode comes from the server's
+# `_meta.weatherflow.mode` (authoritative) or, for foreign servers, from
+# ToolAnnotations. The hand-written tables above remain only as an offline
+# fallback (tests / server unavailable) — they are no longer the truth.
+# ---------------------------------------------------------------------------
+
+def _mode_from_annotations(annotations: dict | None) -> ToolMode:
+    if annotations is None:
+        return "write"  # unknown mutation profile -> most conservative gated bucket
+    if annotations.get("readOnlyHint"):
+        return "read"
+    if annotations.get("destructiveHint"):
+        return "destructive"
+    return "write"
+
+
+async def discover_from_mcp(
+    command: str | None = None, timeout: float = 20.0
+) -> ToolRegistry | None:
+    """Build a registry from the unified MCP server; None on any failure."""
+    from app.config import get_settings
+    from app.mcp_client.client import MCPToolClient
+
+    cmd = command or get_settings().wf_mcp_unified_command
+    client = MCPToolClient(cmd, timeout=timeout)
+    try:
+        async with client.session() as session:
+            listed = await client.list_tools(session)
+    except Exception as exc:  # noqa: BLE001 — discovery must never break startup
+        logger.warning("MCP tool discovery failed (%s); using static registry", exc)
+        return None
+
+    reg = ToolRegistry()
+    skipped: list[str] = []
+    for t in listed:
+        mode = (t.get("meta") or {}).get("weatherflow", {}).get("mode") or (
+            _mode_from_annotations(t.get("annotations"))
+        )
+        if mode == "destructive":
+            skipped.append(t["name"])  # invariant: never reaches the LLM
+        reg.register(
+            Tool(
+                name=t["name"],
+                mode=mode,
+                description=t["description"],
+                parameters=t.get("input_schema") or {},
+                server=t["name"].split(".", 1)[0],
+            )
+        )
+    if not reg.tools:
+        logger.warning("MCP discovery returned no registrable tools; using static registry")
+        return None
+    logger.info(
+        "Tool registry discovered via MCP: %d tools (%d destructive filtered: %s)",
+        len(reg.tools), len(skipped), ", ".join(skipped) or "-",
+    )
+    return reg
+
+
+def set_registry(reg: ToolRegistry) -> None:
+    global _REGISTRY
+    _REGISTRY = reg
+
+
+async def init_registry_via_discovery() -> bool:
+    """Swap the process registry for a protocol-discovered one. True on success."""
+    reg = await discover_from_mcp()
+    if reg is None:
+        return False
+    set_registry(reg)
+    return True
+
+
 # Singleton — v1 only ever has one user, one registry.
 _REGISTRY: ToolRegistry | None = None
 
@@ -243,4 +324,12 @@ def registry() -> ToolRegistry:
     return _REGISTRY
 
 
-__all__ = ["Tool", "ToolRegistry", "build_default_registry", "registry"]
+__all__ = [
+    "Tool",
+    "ToolRegistry",
+    "build_default_registry",
+    "discover_from_mcp",
+    "init_registry_via_discovery",
+    "registry",
+    "set_registry",
+]

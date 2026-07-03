@@ -76,6 +76,23 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.debug("FastAPI OTel instrumentation skipped", exc_info=True)
 
+    # Overhaul phase 2: the MCP server is the single source of truth for tool
+    # schemas — discover the registry over the protocol; any failure keeps the
+    # static fallback so startup never blocks on a subprocess.
+    if settings.wf_mcp_discovery_enabled:
+        from app.mcp_client.tool_registry import init_registry_via_discovery
+
+        try:
+            import asyncio as _asyncio
+
+            ok = await _asyncio.wait_for(init_registry_via_discovery(), timeout=30)
+            logger.info(
+                "MCP tool discovery: %s",
+                "registry built from protocol" if ok else "fell back to static registry",
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("MCP tool discovery errored; static registry in use", exc_info=True)
+
     scheduler = None
     try:
         from app.core.scheduler import build_scheduler
@@ -90,6 +107,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        from app.mcp_client.pool import shutdown_pool
+
+        try:
+            await shutdown_pool()
+        except Exception:  # noqa: BLE001
+            logger.debug("MCP session pool shutdown failed", exc_info=True)
         if scheduler is not None:
             scheduler.shutdown(wait=False)
         cm = getattr(app.state, "graph_saver_cm", None)
