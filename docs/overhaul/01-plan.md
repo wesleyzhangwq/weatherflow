@@ -55,8 +55,8 @@ skills/
 ## 进度勾选
 
 - [x] Phase 0 审计（00-audit.md）
-- [ ] Phase 1 统一 MCP server + shim + 冒烟
-- [ ] Phase 2 发现式注册表 + 会话池
-- [ ] Phase 3 Skills 三件套 + skill:// resources
-- [ ] Phase 4 ruff/测试/README
-- [ ] Phase 5 REPORT.md
+- [x] Phase 1 统一 MCP server + shim + 冒烟（dbf0867）
+- [x] Phase 2 发现式注册表 + 会话池（d7a9543）
+- [x] Phase 3 Skills 三件套 + skill:// resources（8cdc465）
+- [x] Phase 4 ruff 清零 / 196 tests / README 门面
+- [x] Phase 5 REPORT.md

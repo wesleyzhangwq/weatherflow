@@ -11,6 +11,40 @@ v1 文档存档：[weatherflow-architecture-v1.md](./weatherflow-architecture-v1
 > **全链路可观测（Langfuse trace + OpenTelemetry traceId + 指标）**、**评测回归 harness**，
 > 以及一个体现「克制的主动」的**桌面宠物卫星 App（Electron）**。
 > 关键不变量没有放松：**L1 永远 append-only，一切皆派生**。
+>
+> **v2.5（overhaul）**：Agent 原生接口层重造——**统一 MCP server（全协议表面）+ Skills 体系 + 协议先行的工具注册**。详见下节与 [docs/overhaul/](./docs/overhaul/)。
+
+---
+
+## Agent 原生接口：MCP × Skills
+
+任何 MCP host（Claude Code / Keel / 自研客户端）一条命令接入 WeatherFlow 的全部能力：
+
+```bash
+claude mcp add weatherflow -- uv run python -m mcp_servers.weatherflow
+# 或远程多客户端：uv run python -m mcp_servers.weatherflow --transport http --port 8765
+```
+
+**统一 server 的协议表面**（`mcp_servers/weatherflow/`）：
+
+| 维度 | 内容 |
+|---|---|
+| **Tools ×15** | `calendar.*` + `github.*`，全部带 **ToolAnnotations**（readOnly/destructive/idempotent/openWorld）+ `_meta.weatherflow.mode` 三态桶——host 可据此自建门禁策略 |
+| **Resources ×5** | `weatherflow://profile`（L3 画像）· `events/recent`（L1 尾）· `rhythm/current` · `hypotheses/active` · `skills`（技能索引）——只读、store 缺失时优雅降级 |
+| **Prompts ×3** | `weekly_review` / `plan_today` / `rhythm_checkin` 参数化工作流 |
+| **传输 ×2** | stdio（默认）+ streamable HTTP（`--transport http`） |
+
+**Skills**（[skills/](./skills/)）：能力（MCP）之上的方法论层——周回顾怎么做才有证据纪律、
+教练该有什么礼仪、server 怎么接怎么修。渐进披露格式，且**可经协议分发**：
+`skill://weatherflow/{name}` 直接取 SKILL.md 全文，远程 host 无需文件系统。
+
+**协议先行**：backend 启动时经 MCP `list_tools` **发现**工具注册表
+（三态从 annotations/meta 推导，destructive 永不注册），手写表只是离线兜底——
+schema 的唯一事实源是 server 本身；读路径走 actor 式**长驻会话池**（每命令一个 owner task），
+复用连接、传输开销摊销为零。
+
+**安全模型三层**：annotations 声明（server 诚实自报）→ host 门禁（三态注册表 + 写操作一律
+Proposal/HITL）→ server 侧兜底（`WF_MCP_WRITE_TOOLS_ENABLED` 总闸 + 全部写工具支持 `dry_run`）。
 
 ---
 
