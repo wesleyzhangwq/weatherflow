@@ -11,10 +11,32 @@ from mcp_servers.weatherflow.toolset import SPECS
 def test_unified_surface_counts() -> None:
     tools = asyncio.run(mcp.list_tools())
     resources = asyncio.run(mcp.list_resources())
+    templates = asyncio.run(mcp.list_resource_templates())
     prompts = asyncio.run(mcp.list_prompts())
     assert len(tools) == len(SPECS) == 15
-    assert len(resources) == 4
+    assert len(resources) == 5  # profile / events / rhythm / hypotheses / skills index
+    assert "skill://weatherflow/{name}" in {t.uriTemplate for t in templates}
     assert {p.name for p in prompts} == {"weekly_review", "plan_today", "rhythm_checkin"}
+
+
+def test_skills_served_over_protocol() -> None:
+    import json
+
+    async def read(uri: str) -> str:
+        out = await mcp.read_resource(uri)
+        return next(iter(out)).content
+
+    index = json.loads(asyncio.run(read("weatherflow://skills")))
+    names = {s["name"] for s in index}
+    assert {
+        "weatherflow-weekly-review",
+        "weatherflow-rhythm-coach",
+        "weatherflow-mcp-integration",
+    } <= names
+    body = asyncio.run(read("skill://weatherflow/weatherflow-weekly-review"))
+    assert body.startswith("---") and "Fast path" in body
+    # traversal guard + unknown name degrade gracefully
+    assert json.loads(asyncio.run(read("skill://weatherflow/nope")))["available"] is False
 
 
 def test_annotations_match_three_state_taxonomy() -> None:

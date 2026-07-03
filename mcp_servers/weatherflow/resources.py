@@ -39,6 +39,28 @@ def _profile_path() -> Path:
     return base / "profile.md"
 
 
+def _skills_dir() -> Path:
+    return _REPO_ROOT / "skills"
+
+
+def _frontmatter(path: Path) -> dict:
+    """Minimal YAML frontmatter reader (name/description only, no deps)."""
+    meta: dict = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return meta
+    if not lines or lines[0].strip() != "---":
+        return meta
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, sep, value = line.partition(":")
+        if sep:
+            meta[key.strip()] = value.strip()
+    return meta
+
+
 def _unavailable(reason: str, **extra) -> str:
     return json.dumps({"available": False, "reason": reason, **extra}, ensure_ascii=False)
 
@@ -120,6 +142,44 @@ def register_resources(mcp: FastMCP) -> None:
             },
             ensure_ascii=False,
         )
+
+    @mcp.resource(
+        "weatherflow://skills",
+        name="Skills index",
+        description="Agent skills shipped with WeatherFlow — methodology documents "
+                    "any host can fetch over the protocol via skill://weatherflow/{name}.",
+        mime_type="application/json",
+    )
+    def skills_index() -> str:
+        out = []
+        for skill_md in sorted(_skills_dir().glob("*/SKILL.md")):
+            meta = _frontmatter(skill_md)
+            out.append(
+                {
+                    "name": meta.get("name", skill_md.parent.name),
+                    "description": meta.get("description", ""),
+                    "uri": f"skill://weatherflow/{skill_md.parent.name}",
+                }
+            )
+        if not out:
+            return _unavailable("no skills found", path=str(_skills_dir()))
+        return json.dumps(out, ensure_ascii=False)
+
+    @mcp.resource(
+        "skill://weatherflow/{name}",
+        name="Skill document",
+        description="Full SKILL.md body for one WeatherFlow skill (progressive "
+                    "disclosure: load only when its trigger matches).",
+        mime_type="text/markdown",
+    )
+    def skill_document(name: str) -> str:
+        # Path-traversal guard: a skill name is a plain directory name.
+        if "/" in name or ".." in name:
+            return _unavailable("invalid skill name", name=name)
+        path = _skills_dir() / name / "SKILL.md"
+        if not path.is_file():
+            return _unavailable("skill not found", name=name, path=str(path))
+        return path.read_text(encoding="utf-8")
 
     @mcp.resource(
         "weatherflow://hypotheses/active",
