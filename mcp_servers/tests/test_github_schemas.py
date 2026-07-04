@@ -8,7 +8,6 @@ from mcp_servers.weatherflow_github.schemas import (
     GitHubCreateOrUpdateFileInput,
     GitHubGetFileInput,
     GitHubListIssuesInput,
-    GitHubRecentCommitsInput,
     GitHubRepoInput,
 )
 

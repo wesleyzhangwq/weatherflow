@@ -11,13 +11,17 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Optional, Union
 
-from app.config import get_settings
-from app.mcp_client import MCPToolClient
+from app.mcp_client import pool
 from app.mcp_client.tool_registry import Tool, registry
 from app.memory import event_log
 from app.memory.schemas import ProposalPayload, ToolCallPayload
 
 logger = logging.getLogger(__name__)
+
+# Module seam for tests: read-path MCP calls go through here. The pool keeps
+# one live session per server command (no per-call subprocess spawn) and
+# routes everything to the unified server by default.
+pool_call = pool.call_tool
 
 
 @dataclass
@@ -77,14 +81,8 @@ async def _dispatch_read(
     conversation_id: str,
     parent_event_id: Optional[str],
 ) -> DispatchResult:
-    s = get_settings()
-    command = (
-        s.wf_calendar_mcp_command if tool.server == "calendar" else s.wf_github_mcp_command
-    )
-    client = MCPToolClient(command, timeout=s.wf_mcp_tool_timeout_seconds)
     try:
-        async with client.session() as session:
-            result = await client.call_tool(session, tool.name, arguments)
+        result = await pool_call(tool.name, arguments)
     except Exception as exc:
         logger.exception("Tool %s failed", tool.name)
         return ErrorResult(tool_name=tool.name, message=str(exc))

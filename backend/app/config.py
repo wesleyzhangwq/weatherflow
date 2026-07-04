@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     wf_mcp_tool_timeout_seconds: float = Field(
         default=20.0, alias="WF_MCP_TOOL_TIMEOUT_SECONDS"
     )
+    # Unified full-surface server (tools+resources+prompts). The per-domain
+    # commands above remain for hosts that want a narrower surface.
+    wf_mcp_unified_command: str = Field(
+        default="uv run python -m mcp_servers.weatherflow",
+        alias="WF_MCP_UNIFIED_COMMAND",
+    )
+    # Discover the tool registry from the MCP server at startup (protocol as
+    # the single source of truth). Any failure falls back to the static
+    # registry; tests disable this to stay hermetic.
+    wf_mcp_discovery_enabled: bool = Field(
+        default=True, alias="WF_MCP_DISCOVERY_ENABLED"
+    )
     # MCP server-side safety switch. Default true because Backend already
     # gates write tools via the Proposal flow (ADR D19) — the MCP-side switch
     # is defence-in-depth, not the primary control. Set false to dry-run
