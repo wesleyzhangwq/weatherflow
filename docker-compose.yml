@@ -55,11 +55,14 @@ services:
       - "3001:3000"
     environment:
       DATABASE_URL: postgresql://postgres:postgres@langfuse-db:5432/langfuse
-      NEXTAUTH_SECRET: langfuse-secret-change-me
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse-secret-change-me}
       NEXTAUTH_URL: http://localhost:3001
-      # Required by langfuse:2 (self-hosted). Local-dev values; rotate for prod.
-      SALT: "8e+5npDW9ms7blu/JwtAVEm0gItbD+DANimsTuROQ+I="
-      ENCRYPTION_KEY: "e1fcdafd1dd52974a22457e87975e44f22c51d0311de0f74c50d30454e633a00"
+      # Required by langfuse:2 (self-hosted). Values come from .env (compose
+      # reads it automatically) — never hardcode secrets here. Generate with:
+      #   LANGFUSE_SALT:           openssl rand -base64 32
+      #   LANGFUSE_ENCRYPTION_KEY: openssl rand -hex 32
+      SALT: ${LANGFUSE_SALT:?set LANGFUSE_SALT in .env}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set LANGFUSE_ENCRYPTION_KEY in .env}
       TELEMETRY_ENABLED: "false"
     depends_on:
       langfuse-db:
