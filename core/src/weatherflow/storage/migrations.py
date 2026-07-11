@@ -122,4 +122,18 @@ MIGRATIONS = (
         CREATE INDEX idx_artifacts_run ON artifacts(run_id, created_at, id);
         """,
     ),
+    Migration(
+        version=6,
+        sql="""
+        CREATE TABLE checkpoints (
+            run_id TEXT PRIMARY KEY REFERENCES runs(id),
+            version INTEGER NOT NULL,
+            step_index INTEGER NOT NULL,
+            transcript TEXT NOT NULL,
+            state TEXT NOT NULL,
+            pending_action_id TEXT,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 )
