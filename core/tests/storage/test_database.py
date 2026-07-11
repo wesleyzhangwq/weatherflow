@@ -17,15 +17,17 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
         migration = await (
             await connection.execute("SELECT MAX(version) FROM schema_migrations")
         ).fetchone()
-        event_table = await (
+        tables = await (
             await connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'"
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name IN ('events', 'actions', 'approvals') "
+                "ORDER BY name"
             )
-        ).fetchone()
+        ).fetchall()
 
     assert journal_mode == ("wal",)
-    assert migration == (2,)
-    assert event_table == ("events",)
+    assert migration == (3,)
+    assert tables == [("actions",), ("approvals",), ("events",)]
 
 
 async def test_connection_enables_foreign_keys(tmp_path: Path) -> None:
@@ -49,4 +51,4 @@ async def test_initialize_is_idempotent(tmp_path: Path) -> None:
             await connection.execute("SELECT COUNT(*) FROM schema_migrations")
         ).fetchone()
 
-    assert tuple(count) == (2,)
+    assert tuple(count) == (3,)

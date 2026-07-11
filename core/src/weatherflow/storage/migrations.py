@@ -55,4 +55,39 @@ MIGRATIONS = (
         CREATE INDEX idx_runs_status ON runs(status, updated_at);
         """,
     ),
+    Migration(
+        version=3,
+        sql="""
+        CREATE TABLE actions (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            tool_id TEXT NOT NULL,
+            arguments TEXT NOT NULL,
+            effect TEXT NOT NULL,
+            status TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            preview TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            result TEXT,
+            error_class TEXT,
+            error_message TEXT
+        );
+        CREATE INDEX idx_actions_run_status ON actions(run_id, status, updated_at);
+
+        CREATE TABLE approvals (
+            id TEXT PRIMARY KEY,
+            action_id TEXT NOT NULL UNIQUE REFERENCES actions(id),
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            status TEXT NOT NULL,
+            requested_at TEXT NOT NULL,
+            decided_at TEXT,
+            decided_by TEXT,
+            rationale TEXT,
+            version INTEGER NOT NULL
+        );
+        CREATE INDEX idx_approvals_run_status ON approvals(run_id, status, requested_at);
+        """,
+    ),
 )
