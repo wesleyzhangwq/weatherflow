@@ -14,7 +14,9 @@ P1c2b atomically persists side-effect proposals before parking Runs, resumes
 after approve/deny without executing implicitly, and pauses expired approvals.
 P1c3 resolves the smallest authorized tool surface and freezes canonical,
 digest-addressed ToolSpecs per Run; catalog changes affect only new Runs.
-Artifacts, the shared turn loop, Rhythm Intelligence, desktop, and Packs follow.
+P1d1 adds SHA-256 content-addressed artifacts with immutable manifests,
+provenance events, physical deduplication, and rollback cleanup. The shared turn
+loop, Rhythm Intelligence, desktop, and Packs follow.
 
 ## Read first
 
