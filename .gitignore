@@ -37,3 +37,8 @@ target/
 .vscode/
 .idea/
 *.log
+
+# Reproducible local release outputs (manifests remain tracked)
+release/pyinstaller/
+release/macos/*.app/
+release/macos/*.dmg

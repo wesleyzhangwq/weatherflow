@@ -34,9 +34,9 @@
 
 ### P4e: macOS packaging and release validation
 
-- [ ] Replace the shell sidecar shim with a standalone arm64 Python daemon, verify Tauri supervision against it, and build release `.app` and `.dmg` artifacts.
-- [ ] Add entitlements, icons/metadata, release scripts, checksum manifest, SBOM/license inventory, and a clean-machine-oriented release checklist.
-- [ ] Run unsigned bundle smoke tests and all release gates. Sign/notarize only when valid Apple credentials are present; otherwise record the exact credential-only blocker without weakening verification.
-- [ ] Perform the final P0-P4 architecture, privacy, authority, recovery, and distribution audit; commit `release: harden WeatherFlow v3.0`.
+- [x] Replace the shell sidecar shim with a standalone arm64 Python daemon, verify Tauri supervision against it, and build release `.app` and `.dmg` artifacts.
+- [x] Add entitlements, icons/metadata, release tools, checksum manifest, SBOM/license inventory, and a clean-machine-oriented release checklist.
+- [x] Run unsigned bundle smoke tests and all release gates. Sign/notarize only when valid Apple credentials are present; otherwise record the exact credential-only blocker without weakening verification.
+- [x] Perform the final P0-P4 architecture, privacy, authority, recovery, and distribution audit; commit `release: harden WeatherFlow v3.0`.
 
 No P4 work may add an alternate Run, policy, approval, or state-inference path.

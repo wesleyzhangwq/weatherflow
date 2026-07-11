@@ -1,4 +1,4 @@
-.PHONY: install lint format-check test eval security-check desktop-check rust-check check dev clean
+.PHONY: install lint format-check test eval security-check desktop-check rust-check check sidecar-check release-check dev clean
 
 PY := uv run --package weatherflow-core --extra dev
 
@@ -28,6 +28,14 @@ rust-check:
 	cd desktop/src-tauri && TOOLCHAIN_BIN=$$(dirname "$$(rustup which cargo)") && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo fmt --check && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo test --lib && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo check
 
 check: lint format-check test eval security-check desktop-check rust-check
+
+sidecar-check:
+	python3 tools/release/test_sidecar.py desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin
+
+release-check: check sidecar-check
+	cd release/macos && shasum -a 256 -c CHECKSUMS.sha256
+	codesign --verify --deep --strict --verbose=2 release/macos/WeatherFlow.app
+	hdiutil verify release/macos/WeatherFlow_3.0.0-alpha.1_aarch64.dmg
 
 dev:
 	uv run --package weatherflow-core weatherflow serve --reload

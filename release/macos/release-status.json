@@ -1,0 +1,5 @@
+{
+  "version": "3.0.0-alpha.1",
+  "architecture": "arm64",
+  "signing": "adhoc_unsigned_credentials_missing"
+}
