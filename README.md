@@ -16,7 +16,9 @@ P1c3 resolves the smallest authorized tool surface and freezes canonical,
 digest-addressed ToolSpecs per Run; catalog changes affect only new Runs.
 P1d1 adds SHA-256 content-addressed artifacts with immutable manifests,
 provenance events, physical deduplication, and rollback cleanup. The shared turn
-loop, Rhythm Intelligence, desktop, and Packs follow.
+loop begins with P1d2a provider-neutral model/tool protocols and optimistic,
+durable Run checkpoints. Execution dispatch, Rhythm Intelligence, desktop, and
+Packs follow.
 
 ## Read first
 
