@@ -5,5 +5,17 @@ from weatherflow.artifacts.repository import (
     ArtifactRepository,
     DuplicateArtifactError,
 )
+from weatherflow.artifacts.store import (
+    ArtifactIntegrityError,
+    ArtifactNameError,
+    ArtifactStore,
+)
 
-__all__ = ["ArtifactManifest", "ArtifactRepository", "DuplicateArtifactError"]
+__all__ = [
+    "ArtifactIntegrityError",
+    "ArtifactManifest",
+    "ArtifactNameError",
+    "ArtifactRepository",
+    "ArtifactStore",
+    "DuplicateArtifactError",
+]

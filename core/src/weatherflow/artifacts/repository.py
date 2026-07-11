@@ -64,6 +64,15 @@ class ArtifactRepository:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
+    async def count_digest(self, digest: str) -> int:
+        async with self.database.connect() as connection:
+            row = await (
+                await connection.execute(
+                    "SELECT COUNT(*) AS count FROM artifacts WHERE digest = ?", (digest,)
+                )
+            ).fetchone()
+        return int(row["count"])
+
     @staticmethod
     def _from_row(row: Any) -> ArtifactManifest:
         return ArtifactManifest.model_validate(
