@@ -18,17 +18,22 @@ from weatherflow.rhythm.models import (
     WorkMode,
 )
 from weatherflow.rhythm.projections import project_policy, project_weather
+from weatherflow.rhythm.repository import RhythmSnapshotRepository
+from weatherflow.rhythm.service import CurrentRhythm, RhythmService
 
 __all__ = [
     "ActivityMetadata",
     "AppCategory",
     "CheckInSignal",
     "CorrectionSignal",
+    "CurrentRhythm",
     "DimensionEstimate",
     "DimensionName",
     "Freshness",
     "HumanStateSnapshot",
     "RhythmPolicy",
+    "RhythmService",
+    "RhythmSnapshotRepository",
     "RhythmEstimator",
     "RhythmSignal",
     "SignalFact",

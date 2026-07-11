@@ -150,4 +150,15 @@ MIGRATIONS = (
         CREATE INDEX idx_workspaces_name ON workspaces(name, created_at, id);
         """,
     ),
+    Migration(
+        version=8,
+        sql="""
+        CREATE TABLE rhythm_snapshots (
+            workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+            snapshot TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 )

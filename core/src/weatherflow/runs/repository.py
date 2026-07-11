@@ -54,6 +54,18 @@ class RunRepository:
         async with self.database.connect() as connection:
             return await self.get_by_client_request_id_in(connection, value)
 
+    async def list_recent(self, *, limit: int = 50) -> list[Run]:
+        if limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        async with self.database.connect() as connection:
+            rows = await (
+                await connection.execute(
+                    "SELECT * FROM runs ORDER BY updated_at DESC, id DESC LIMIT ?",
+                    (limit,),
+                )
+            ).fetchall()
+        return [self._from_row(row) for row in rows]
+
     async def get_by_client_request_id_in(
         self, connection: aiosqlite.Connection, value: str
     ) -> Run | None:

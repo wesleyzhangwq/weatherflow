@@ -10,6 +10,7 @@ from weatherflow.capabilities import (
 )
 from weatherflow.config import Settings
 from weatherflow.events import EventLedger
+from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
     ActionExecutionCoordinator,
@@ -56,6 +57,8 @@ class RuntimeContainer:
     checkpoints: RunCheckpointRepository
     artifacts: ArtifactRepository
     artifact_store: ArtifactStore
+    rhythm_snapshots: RhythmSnapshotRepository
+    rhythm: RhythmService
     catalog: CapabilityCatalog
     model: ModelAdapter
     executors: ToolExecutorRegistry
@@ -116,6 +119,13 @@ class RuntimeContainer:
             repository=artifacts,
             ledger=ledger,
         )
+        rhythm_snapshots = RhythmSnapshotRepository(database)
+        rhythm = RhythmService(
+            database=database,
+            ledger=ledger,
+            snapshots=rhythm_snapshots,
+            estimator=RhythmEstimator(),
+        )
         resolved_catalog = catalog or CapabilityCatalog()
         resolved_model = model or EchoModelAdapter()
         executors = ToolExecutorRegistry()
@@ -156,6 +166,8 @@ class RuntimeContainer:
             checkpoints=checkpoints,
             artifacts=artifacts,
             artifact_store=artifact_store,
+            rhythm_snapshots=rhythm_snapshots,
+            rhythm=rhythm,
             catalog=resolved_catalog,
             model=resolved_model,
             executors=executors,

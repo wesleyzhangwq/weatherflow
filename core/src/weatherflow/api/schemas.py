@@ -2,6 +2,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from weatherflow.rhythm import CurrentRhythm
+from weatherflow.runs import Run
+
 
 class HealthResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -27,3 +30,10 @@ class ApprovalDecisionRequest(BaseModel):
     expected_version: int
     rationale: str | None = None
     resume: bool = True
+
+
+class DesktopSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    rhythm: CurrentRhythm
+    latest_run: Run | None = None

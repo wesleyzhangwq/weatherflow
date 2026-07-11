@@ -4,11 +4,17 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response, status
 
 from weatherflow import __version__
-from weatherflow.api.schemas import ApprovalDecisionRequest, HealthResponse, RunCreateRequest
+from weatherflow.api.schemas import (
+    ApprovalDecisionRequest,
+    DesktopSnapshot,
+    HealthResponse,
+    RunCreateRequest,
+)
 from weatherflow.artifacts import ArtifactManifest
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
 from weatherflow.events import Event
+from weatherflow.rhythm import CurrentRhythm, RhythmSignal
 from weatherflow.runs import InvalidTransitionError, Run, RunStatus
 from weatherflow.trust import (
     Approval,
@@ -174,6 +180,27 @@ def create_app(
             artifact.relative_path,
         )
         return Response(content=content, media_type=artifact.media_type)
+
+    @app.post(
+        "/v1/rhythm/signals",
+        response_model=CurrentRhythm,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def ingest_rhythm_signal(signal: RhythmSignal) -> CurrentRhythm:
+        service = await runtime()
+        return await service.rhythm.ingest(service.default_workspace.id, signal)
+
+    @app.get("/v1/rhythm/current", response_model=CurrentRhythm)
+    async def current_rhythm() -> CurrentRhythm:
+        service = await runtime()
+        return await service.rhythm.current(service.default_workspace.id)
+
+    @app.get("/v1/desktop/snapshot", response_model=DesktopSnapshot)
+    async def desktop_snapshot() -> DesktopSnapshot:
+        service = await runtime()
+        rhythm = await service.rhythm.current(service.default_workspace.id)
+        recent = await service.runs.list_recent(limit=1)
+        return DesktopSnapshot(rhythm=rhythm, latest_run=recent[0] if recent else None)
 
     return app
 
