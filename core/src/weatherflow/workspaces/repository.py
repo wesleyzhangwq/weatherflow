@@ -11,6 +11,10 @@ class DuplicateWorkspaceError(ValueError):
     pass
 
 
+class WorkspaceVersionConflict(RuntimeError):
+    pass
+
+
 class WorkspaceRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -42,11 +46,12 @@ class WorkspaceRepository:
 
     async def get(self, workspace_id: str) -> Workspace | None:
         async with self.database.connect() as connection:
-            row = await (
-                await connection.execute(
-                    "SELECT config FROM workspaces WHERE id = ?", (workspace_id,)
-                )
-            ).fetchone()
+            return await self.get_in(connection, workspace_id)
+
+    async def get_in(self, connection: aiosqlite.Connection, workspace_id: str) -> Workspace | None:
+        row = await (
+            await connection.execute("SELECT config FROM workspaces WHERE id = ?", (workspace_id,))
+        ).fetchone()
         return self._from_row(row) if row else None
 
     async def list_all(self) -> list[Workspace]:
@@ -55,6 +60,32 @@ class WorkspaceRepository:
                 await connection.execute("SELECT config FROM workspaces ORDER BY created_at, id")
             ).fetchall()
         return [self._from_row(row) for row in rows]
+
+    async def update_in(
+        self,
+        connection: aiosqlite.Connection,
+        workspace: Workspace,
+        *,
+        expected_version: int,
+    ) -> None:
+        if workspace.version != expected_version + 1:
+            raise WorkspaceVersionConflict(workspace.id)
+        cursor = await connection.execute(
+            """
+            UPDATE workspaces
+            SET config = ?, version = ?, updated_at = ?
+            WHERE id = ? AND version = ?
+            """,
+            (
+                workspace.model_dump_json(),
+                workspace.version,
+                workspace.updated_at.isoformat(),
+                workspace.id,
+                expected_version,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise WorkspaceVersionConflict(workspace.id)
 
     @staticmethod
     def _from_row(row: Any) -> Workspace:

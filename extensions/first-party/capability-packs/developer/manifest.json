@@ -1,0 +1,24 @@
+{
+  "schema_version": "1",
+  "kind": "capability_pack",
+  "name": "developer",
+  "version": "3.0.0",
+  "description": "Scoped local development, validation artifacts, and supervised GitHub release operations.",
+  "files": [],
+  "tool_ids": [
+    "developer.read_file",
+    "developer.write_file",
+    "developer.write_artifact",
+    "developer.git_status",
+    "developer.run_command",
+    "github.inspect_release",
+    "github.create_release"
+  ],
+  "requested_scopes": [
+    "workspace:read",
+    "workspace:write",
+    "workspace:execute",
+    "github:read",
+    "github:write"
+  ]
+}

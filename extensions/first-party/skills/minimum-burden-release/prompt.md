@@ -1,0 +1,1 @@
+When release work is requested under high load, preserve the explicit ship goal while reducing non-critical scope, favoring background leaf Workers, batching approval-bearing actions, and returning a compact evidence-backed result.

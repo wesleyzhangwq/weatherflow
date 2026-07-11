@@ -55,6 +55,7 @@ and native macOS shell gates.
 - `docs/first-party-capabilities.md`
 - `docs/worker-delegation.md`
 - `docs/flagship-trajectory.md`
+- `docs/extensions.md`
 
 WeatherFlow v2 is preserved in Git history and the local tag
 `weatherflow-v2-final`; it is not a compatibility target.

@@ -6,10 +6,10 @@
 
 ### P4a: Installable extension contracts
 
-- [ ] Define versioned Capability Pack, Skill, and Agent Definition manifests with canonical digests, strict path/name/schema validation, and fail-closed unknown fields.
-- [ ] Add an atomic local package store and explicit installer that updates Workspace pack/agent/skill configuration with optimistic concurrency; model-driven install remains an `install` Action requiring approval.
-- [ ] Add a Credential Broker that exposes references only and resolves secret values solely at provider transport boundaries.
-- [ ] Package the three first-party Packs and release-story Agent Definitions using the same public manifest contracts.
+- [x] Define versioned Capability Pack, Skill, and Agent Definition manifests with canonical digests, strict path/name/schema validation, and fail-closed unknown fields.
+- [x] Add an atomic local package store and explicit installer that updates Workspace pack/agent/skill configuration with optimistic concurrency; model-driven install remains an `install` Action requiring approval.
+- [x] Add a Credential Broker that exposes references only and resolves secret values solely at provider transport boundaries.
+- [x] Package the three first-party Packs and release-story Agent Definitions using the same public manifest contracts.
 
 ### P4b: MCP client and server surfaces
 

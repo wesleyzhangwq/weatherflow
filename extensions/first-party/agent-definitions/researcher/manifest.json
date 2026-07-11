@@ -1,0 +1,14 @@
+{
+  "schema_version": "1",
+  "kind": "agent_definition",
+  "name": "researcher",
+  "version": "3.0.0",
+  "description": "Leaf Worker for bounded provenance-aware research.",
+  "files": [{"path": "prompt.md", "sha256": "fff48df21645fd80a03a62167ef69503d297ff69c6240b38f92bb6893f698e97"}],
+  "agent_id": "researcher",
+  "prompt_file": "prompt.md",
+  "is_leaf": true,
+  "tool_filter": ["research.gather"],
+  "skill_filter": [],
+  "max_steps": 8
+}

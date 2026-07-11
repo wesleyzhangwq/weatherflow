@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "kind": "skill",
+  "name": "minimum-burden-release",
+  "version": "3.0.0",
+  "description": "Strategy guidance for preserving ship goals while reducing interaction burden.",
+  "files": [{"path": "prompt.md", "sha256": "08588ed8c7a00eb46392d2f1eaf26a2f974b094d3f526d6ea790012d435e96b3"}],
+  "prompt_file": "prompt.md",
+  "suggested_tool_ids": ["developer.read_file", "developer.run_command", "research.gather"]
+}

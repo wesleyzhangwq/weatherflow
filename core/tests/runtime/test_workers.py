@@ -118,6 +118,7 @@ async def setup_runtime(tmp_path: Path, model, *, max_concurrency: int = 3):
         requested_tool_ids={item.tool_id for item in tools},
     )
     artifacts = ArtifactRepository(database)
+    checkpoints = RunCheckpointRepository(database)
     workers = WorkerCoordinator(
         database=database,
         runs=runs,
@@ -126,6 +127,7 @@ async def setup_runtime(tmp_path: Path, model, *, max_concurrency: int = 3):
         capability_coordinator=capability_coordinator,
         ledger=ledger,
         artifacts=artifacts,
+        checkpoints=checkpoints,
         definitions={
             "researcher": AgentDefinition(
                 agent_id="researcher",
@@ -141,7 +143,7 @@ async def setup_runtime(tmp_path: Path, model, *, max_concurrency: int = 3):
         database=database,
         runs=runs,
         run_coordinator=run_coordinator,
-        checkpoints=RunCheckpointRepository(database),
+        checkpoints=checkpoints,
         snapshots=snapshots,
         ledger=ledger,
         model=model,

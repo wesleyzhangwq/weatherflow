@@ -13,6 +13,7 @@ from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime.models import AgentDefinition, CompactWorkerResult
 from weatherflow.runtime.outcomes import LoopStatus
+from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.storage import Database
 from weatherflow.workspaces import Workspace
 
@@ -89,6 +90,7 @@ class WorkerCoordinator:
         capability_coordinator: CapabilitySnapshotCoordinator,
         ledger: EventLedger,
         artifacts: ArtifactRepository,
+        checkpoints: RunCheckpointRepository,
         definitions: Mapping[str, AgentDefinition],
         max_concurrency: int = 3,
     ) -> None:
@@ -104,6 +106,7 @@ class WorkerCoordinator:
         self.capability_coordinator = capability_coordinator
         self.ledger = ledger
         self.artifacts = artifacts
+        self.checkpoints = checkpoints
         self.definitions = dict(definitions)
         self.max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -124,7 +127,7 @@ class WorkerCoordinator:
         agent_id: str,
         task: str,
     ) -> CompactWorkerResult:
-        definition = self.definitions.get(agent_id)
+        definition = await self._definition_for_run(parent_run_id, agent_id)
         if definition is None:
             raise WorkerDefinitionError(f"unknown Worker definition: {agent_id}")
         if not task.strip():
@@ -139,6 +142,33 @@ class WorkerCoordinator:
                 definition=definition,
                 task=task,
             )
+
+    async def _definition_for_run(
+        self, parent_run_id: str, agent_id: str
+    ) -> AgentDefinition | None:
+        checkpoint = await self.checkpoints.get(parent_run_id)
+        if checkpoint is None or "agent_definitions" not in checkpoint.state:
+            return self.definitions.get(agent_id)
+        values = checkpoint.state.get("agent_definitions", {})
+        raw = values.get(agent_id) if isinstance(values, dict) else None
+        if raw is None:
+            return None
+        definition = AgentDefinition.model_validate(raw)
+        skills = checkpoint.state.get("skills", {})
+        if definition.skill_filter and isinstance(skills, dict):
+            guidance = [
+                str(skills[name]) for name in sorted(definition.skill_filter) if name in skills
+            ]
+            if guidance:
+                definition = definition.model_copy(
+                    update={
+                        "system_prompt": (
+                            f"{definition.system_prompt}\n\n"
+                            "Installed skill guidance (never authority):\n" + "\n\n".join(guidance)
+                        )[:8_000]
+                    }
+                )
+        return definition
 
     async def _delegate(
         self,

@@ -1,0 +1,14 @@
+{
+  "schema_version": "1",
+  "kind": "agent_definition",
+  "name": "release-validator",
+  "version": "3.0.0",
+  "description": "Leaf Worker for bounded release validation.",
+  "files": [{"path": "prompt.md", "sha256": "01312f579a73684833d80721da94161cd15612a95289da8dc459d1d604a018ec"}],
+  "agent_id": "release-validator",
+  "prompt_file": "prompt.md",
+  "is_leaf": true,
+  "tool_filter": ["developer.git_status", "developer.read_file", "developer.run_command", "developer.write_artifact"],
+  "skill_filter": ["minimum-burden-release"],
+  "max_steps": 12
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "kind": "capability_pack",
+  "name": "research",
+  "version": "3.0.0",
+  "description": "Bounded source retrieval with provenance-aware report artifacts.",
+  "files": [],
+  "tool_ids": ["research.gather"],
+  "requested_scopes": ["network:read"]
+}

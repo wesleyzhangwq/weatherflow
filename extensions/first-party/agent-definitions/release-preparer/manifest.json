@@ -1,0 +1,14 @@
+{
+  "schema_version": "1",
+  "kind": "agent_definition",
+  "name": "release-preparer",
+  "version": "3.0.0",
+  "description": "Leaf Worker for minimal scoped release preparation.",
+  "files": [{"path": "prompt.md", "sha256": "784bd02905066cc2fefc86258abddc3278cede6dafe8e0cf5d3911d3ef400c75"}],
+  "agent_id": "release-preparer",
+  "prompt_file": "prompt.md",
+  "is_leaf": true,
+  "tool_filter": ["developer.git_status", "developer.read_file", "developer.write_artifact", "developer.write_file"],
+  "skill_filter": ["minimum-burden-release"],
+  "max_steps": 12
+}

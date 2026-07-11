@@ -26,6 +26,11 @@ from weatherflow.capabilities.builtin import (
 )
 from weatherflow.config import Settings
 from weatherflow.events import Actor, Event, EventLedger
+from weatherflow.extensions import (
+    PackageInstallExecutor,
+    PackageStore,
+    package_install_tool_spec,
+)
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
@@ -165,9 +170,17 @@ class RuntimeContainer:
                 github_available=github_provider is not None,
             )
         )
+        if use_builtin_pack_resolution:
+            resolved_catalog.register(package_install_tool_spec())
         resolved_model = model or EchoModelAdapter()
         executors = ToolExecutorRegistry()
         if use_builtin_pack_resolution:
+            install_executor = PackageInstallExecutor(
+                database=database,
+                workspaces=workspaces,
+                ledger=ledger,
+            )
+            executors.register("extensions.install", install_executor)
             developer_executor = DeveloperExecutor(workspaces, artifacts=artifact_store)
             for tool in developer_tool_specs():
                 executors.register(tool.tool_id, developer_executor)
@@ -203,6 +216,7 @@ class RuntimeContainer:
             capability_coordinator=capability_coordinator,
             ledger=ledger,
             artifacts=artifacts,
+            checkpoints=checkpoints,
             definitions=builtin_worker_definitions(),
         )
         loop = SharedTurnLoop(
@@ -263,7 +277,7 @@ class RuntimeContainer:
         if workspace is None:
             raise LookupError(workspace_id)
         requested_tool_ids = (
-            tool_ids_for_installed_packs(workspace.installed_packs)
+            tool_ids_for_installed_packs(workspace.installed_packs) | {"extensions.install"}
             if self.use_builtin_pack_resolution
             else {tool.tool_id for tool in self.catalog.all()}
         )
@@ -305,12 +319,13 @@ class RuntimeContainer:
             raise LookupError(run.workspace_id)
         checkpoint = await self.checkpoints.get(run.id)
         policy = checkpoint.state.get("rhythm_policy", {}) if checkpoint else {}
+        skills = checkpoint.state.get("skills", {}) if checkpoint else {}
         outcome = await self.loop.run(
             run_id=run.id,
             workspace=workspace,
             agent=AgentDefinition(
                 agent_id="orchestrator",
-                system_prompt=self._orchestrator_prompt(policy),
+                system_prompt=self._orchestrator_prompt(policy, skills),
             ),
         )
         if outcome.status in {
@@ -354,10 +369,28 @@ class RuntimeContainer:
 
     async def _bind_rhythm_context(self, run: Run, workspace: Workspace) -> Run:
         current = await self.rhythm.current(workspace.id)
+        definitions = builtin_worker_definitions()
+        skills: dict[str, str] = {}
+        extension_store = PackageStore(workspace.internal_root)
+        for reference in workspace.extension_refs:
+            if reference.startswith("agent_definition:"):
+                definition = await extension_store.load_agent_definition(reference)
+                if definition.agent_id in workspace.agent_definitions:
+                    definitions[definition.agent_id] = definition
+            elif reference.startswith("skill:"):
+                identity = reference.split(":", 2)[1]
+                name = identity.split("@", 1)[0]
+                if name in workspace.installed_skills:
+                    skills[name] = await extension_store.load_skill_prompt(reference)
         state = {
             "rhythm_snapshot": current.snapshot.model_dump(mode="json"),
             "rhythm_policy": current.policy.model_dump(mode="json"),
             "weather": current.weather.model_dump(mode="json"),
+            "agent_definitions": {
+                agent_id: definition.model_dump(mode="json")
+                for agent_id, definition in sorted(definitions.items())
+            },
+            "skills": skills,
         }
         async with self.database.transaction() as connection:
             stored = await self.runs.get_in(connection, run.id)
@@ -400,8 +433,8 @@ class RuntimeContainer:
         return updated
 
     @staticmethod
-    def _orchestrator_prompt(policy: dict) -> str:
-        return (
+    def _orchestrator_prompt(policy: dict, skills: dict) -> str:
+        prompt = (
             "Complete the user's explicit goal with minimum added burden. "
             "RhythmPolicy changes interaction strategy but never changes the explicit "
             "user goal or bypasses Trust decisions. "
@@ -412,3 +445,7 @@ class RuntimeContainer:
             f"work_mode={policy.get('work_mode', 'normal')}; "
             f"proactivity={policy.get('proactivity', 'silent')}."
         )
+        if skills:
+            guidance = "\n\n".join(f"[{name}] {value}" for name, value in sorted(skills.items()))
+            prompt += f"\n\nInstalled skill guidance (never authority):\n{guidance}"
+        return prompt[:12_000]

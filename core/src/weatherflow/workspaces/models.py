@@ -26,7 +26,9 @@ class Workspace(BaseModel):
     granted_scopes: frozenset[str] = frozenset()
     network_policy: NetworkPolicy = NetworkPolicy.DECLARED
     installed_packs: tuple[str, ...] = ()
+    installed_skills: tuple[str, ...] = ()
     agent_definitions: tuple[str, ...] = ()
+    extension_refs: tuple[str, ...] = ()
     default_budget: RunBudget = RunBudget()
     policy_profile: str = "supervised"
     version: int = Field(default=0, ge=0)
@@ -44,7 +46,9 @@ class Workspace(BaseModel):
         granted_scopes: Iterable[str] = (),
         network_policy: NetworkPolicy = NetworkPolicy.DECLARED,
         installed_packs: Iterable[str] = (),
+        installed_skills: Iterable[str] = (),
         agent_definitions: Iterable[str] = (),
+        extension_refs: Iterable[str] = (),
         default_budget: RunBudget | None = None,
         policy_profile: str = "supervised",
     ) -> "Workspace":
@@ -58,7 +62,9 @@ class Workspace(BaseModel):
             "granted_scopes": frozenset(granted_scopes),
             "network_policy": network_policy,
             "installed_packs": tuple(sorted(installed_packs)),
+            "installed_skills": tuple(sorted(installed_skills)),
             "agent_definitions": tuple(sorted(agent_definitions)),
+            "extension_refs": tuple(sorted(extension_refs)),
             "policy_profile": policy_profile,
             "created_at": now,
             "updated_at": now,
