@@ -43,7 +43,10 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 
 ```text
 core/
-  src/weatherflow/   Python daemon package
+  src/weatherflow/
+    api/             HTTP adapter
+    events/          immutable Event envelope and append-only ledger
+    storage/         SQLite connection and numbered migrations
   tests/             unit, contract, and integration tests
 docs/superpowers/    approved specifications and implementation plans
 weatherflow-architecture-v3.md
