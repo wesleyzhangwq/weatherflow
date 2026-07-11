@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -19,6 +20,10 @@ class CheckpointNotFoundError(LookupError):
 
 
 class CheckpointVersionConflict(RuntimeError):
+    pass
+
+
+class CheckpointCorruptionError(RuntimeError):
     pass
 
 
@@ -44,7 +49,36 @@ class RunCheckpointRepository:
 
     async def get(self, run_id: str) -> RunCheckpoint | None:
         async with self.database.connect() as connection:
-            return await self.get_in(connection, run_id)
+            try:
+                return await self.get_in(connection, run_id)
+            except (ValueError, TypeError, json.JSONDecodeError) as error:
+                raise CheckpointCorruptionError(run_id) from error
+
+    async def quarantine(self, run_id: str, *, reason: str) -> str:
+        async with self.database.transaction() as connection:
+            row = await (
+                await connection.execute("SELECT * FROM checkpoints WHERE run_id = ?", (run_id,))
+            ).fetchone()
+            if row is None:
+                raise LookupError(run_id)
+            raw = json.dumps(
+                {key: row[key] for key in row.keys()},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            digest = hashlib.sha256(raw).hexdigest()
+            await connection.execute(
+                """
+                INSERT INTO checkpoint_quarantine(
+                    run_id, reason, raw_payload, payload_sha256, quarantined_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (run_id, reason, raw, digest, datetime.now(UTC).isoformat()),
+            )
+            await connection.execute("DELETE FROM checkpoints WHERE run_id = ?", (run_id,))
+        return digest
 
     async def get_in(self, connection: aiosqlite.Connection, run_id: str) -> RunCheckpoint | None:
         row = await (

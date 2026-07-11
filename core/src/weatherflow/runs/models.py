@@ -30,12 +30,13 @@ class RunStatus(StrEnum):
 
 
 TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
-    RunStatus.QUEUED: frozenset({RunStatus.PLANNING, RunStatus.CANCELLED}),
+    RunStatus.QUEUED: frozenset({RunStatus.PLANNING, RunStatus.NEEDS_REVIEW, RunStatus.CANCELLED}),
     RunStatus.PLANNING: frozenset(
         {
             RunStatus.RUNNING,
             RunStatus.WAITING_USER,
             RunStatus.PAUSED,
+            RunStatus.NEEDS_REVIEW,
             RunStatus.FAILED,
             RunStatus.CANCELLED,
         }

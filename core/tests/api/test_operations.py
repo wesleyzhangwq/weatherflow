@@ -14,6 +14,11 @@ async def test_status_metrics_export_and_reset_require_explicit_requests(
     container = await RuntimeContainer.create(settings)
     transport = ASGITransport(app=create_app(settings, container=container))
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        onboarding_before = await client.get("/v1/onboarding")
+        onboarding_complete = await client.post(
+            "/v1/onboarding/complete",
+            json={"confirm_local_ownership": True, "enable_metadata_sensor": True},
+        )
         status = await client.get("/v1/system/status")
         metrics = await client.get("/v1/diagnostics/metrics")
         export = await client.post("/v1/diagnostics/export")
@@ -21,7 +26,11 @@ async def test_status_metrics_export_and_reset_require_explicit_requests(
         rejected = await client.post("/v1/privacy/reset/behavior", json={"confirm": False})
         accepted = await client.post("/v1/privacy/reset/behavior", json={"confirm": True})
 
+    assert onboarding_before.json()["completed"] is False
+    assert onboarding_complete.json()["completed"] is True
+    assert onboarding_complete.json()["metadata_sensor_enabled"] is True
     assert status.status_code == 200
+    assert status.json()["onboarding_completed"] is True
     assert status.json()["local_only"] is True
     assert status.json()["telemetry_upload"] is False
     assert status.json()["behavior_sensor"]["raw_content_captured"] is False

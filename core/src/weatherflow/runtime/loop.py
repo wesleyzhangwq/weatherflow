@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any
 
@@ -105,7 +106,9 @@ class SharedTurnLoop:
                     tools=tools,
                 )
                 try:
-                    turn = agent.validate_turn(await self.model.complete(request))
+                    turn = agent.validate_turn(await self._complete_with_retry(request))
+                except (TimeoutError, ConnectionError):
+                    return await self._pause_for_model(run, checkpoint)
                 except LeafDelegationError:
                     return await self._fail(
                         run,
@@ -462,6 +465,49 @@ class SharedTurnLoop:
                 error_message=error,
             )
         return LoopOutcome(run_id=run.id, status=LoopStatus.FAILED, error=error)
+
+    async def _complete_with_retry(self, request: ModelRequest) -> ModelTurn:
+        for attempt in range(1, 4):
+            try:
+                return await self.model.complete(request)
+            except (TimeoutError, ConnectionError):
+                if attempt == 3:
+                    raise
+                await self.ledger.append(
+                    Event.new(
+                        type="runtime.model_retry",
+                        actor=Actor.SYSTEM,
+                        stream_kind="run",
+                        stream_id=request.run_id,
+                        correlation_id=request.run_id,
+                        payload={"attempt": attempt, "max_attempts": 3},
+                    )
+                )
+                await asyncio.sleep(0.05 * (2 ** (attempt - 1)))
+        raise RuntimeError("unreachable")
+
+    async def _pause_for_model(self, run: Run, checkpoint: RunCheckpoint) -> LoopOutcome:
+        state = dict(checkpoint.state)
+        state["pause_reason"] = "model_provider_unavailable"
+        desired = checkpoint.model_copy(update={"state": state})
+        current = await self.runs.get(run.id)
+        if current is None:
+            raise LookupError(run.id)
+        async with self.database.transaction() as connection:
+            await self.checkpoints.save_in(connection, desired, expected_version=checkpoint.version)
+            await self.run_coordinator.transition_in(
+                connection,
+                run_id=run.id,
+                target=RunStatus.PAUSED,
+                expected_version=current.version,
+                error_class="ModelProviderUnavailable",
+                error_message="model provider unavailable after bounded retry",
+            )
+        return LoopOutcome(
+            run_id=run.id,
+            status=LoopStatus.PAUSED,
+            error="model provider unavailable after bounded retry",
+        )
 
     @staticmethod
     def _turn_message(turn: ModelTurn) -> AgentMessage:

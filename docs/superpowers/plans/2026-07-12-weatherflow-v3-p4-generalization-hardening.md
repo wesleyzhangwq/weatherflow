@@ -26,11 +26,11 @@
 
 ### P4d: Diagnostics, privacy, reliability, and onboarding
 
-- [ ] Add local structured Run metrics and an explicitly requested redacted diagnostic export; never upload telemetry by default.
-- [ ] Implement retention expiry and independent reset operations for behavior evidence, memory/profile, artifacts, and Workspace data, with deletion audit summaries that do not retain deleted content.
-- [ ] Add checkpoint-corruption quarantine, bounded model retry/pause semantics, provider-degradation events, and startup recovery audit.
-- [ ] Add first-run onboarding/status APIs and Cockpit controls for local ownership, Pack/provider health, sensor fallback, retention, and diagnostic export.
-- [ ] Add security scans for secret markers and forbidden sensor content across durable stores and exported diagnostics.
+- [x] Add local structured Run metrics and an explicitly requested redacted diagnostic export; never upload telemetry by default.
+- [x] Implement retention expiry and independent reset operations for behavior evidence, memory/profile, artifacts, and Workspace data, with deletion audit summaries that do not retain deleted content.
+- [x] Add checkpoint-corruption quarantine, bounded model retry/pause semantics, provider-degradation events, and startup recovery audit.
+- [x] Add first-run onboarding/status APIs and Cockpit controls for local ownership, Pack/provider health, sensor fallback, retention, and diagnostic export.
+- [x] Add security scans for secret markers and forbidden sensor content across durable stores and exported diagnostics.
 
 ### P4e: macOS packaging and release validation
 

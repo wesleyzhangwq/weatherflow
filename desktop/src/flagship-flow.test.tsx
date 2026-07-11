@@ -52,6 +52,7 @@ describe("flagship macOS desktop story", () => {
       timeline: vi.fn().mockResolvedValue([{ id: "event-1", type: "approval.requested", recorded_at: "2026-07-12", payload: {} }]),
       artifacts: vi.fn().mockResolvedValue([{ id: "artifact-1", run_id: "run-flagship", name: "release-checklist.md", media_type: "text/markdown", digest: "digest", size_bytes: 42 }]),
       decide: vi.fn().mockImplementation(async () => { approvalStatus = "approved"; return {}; }),
+      status: vi.fn().mockResolvedValue({ local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: ["developer"], providers: {}, behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {} }),
     } as unknown as WeatherFlowClient;
 
     const { container } = render(<FlagshipDesktopStory client={client} />);

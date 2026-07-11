@@ -19,6 +19,7 @@ from weatherflow.api.schemas import (
     ApprovalView,
     DesktopSnapshot,
     HealthResponse,
+    OnboardingCompleteRequest,
     ResetConfirmRequest,
     RunCreateRequest,
     SystemStatus,
@@ -30,6 +31,7 @@ from weatherflow.events import Event, UnknownEventCursor
 from weatherflow.operations import (
     DiagnosticExport,
     LocalMetrics,
+    OnboardingState,
     ResetCategory,
     ResetPreview,
     ResetResult,
@@ -282,8 +284,10 @@ def create_app(
                 else "unavailable"
             )
             providers[f"mcp.{connection.client.server_name}"] = health
+        onboarding = await service.onboarding.get(workspace.id)
         return SystemStatus(
             workspace_id=workspace.id,
+            onboarding_completed=onboarding.completed,
             installed_packs=workspace.installed_packs,
             providers=providers,
             behavior_sensor={
@@ -296,6 +300,26 @@ def create_app(
                 "aggregate_behavior": "90d",
                 "memory": "until_explicit_reset",
             },
+        )
+
+    @app.get("/v1/onboarding", response_model=OnboardingState)
+    async def onboarding_state() -> OnboardingState:
+        service = await runtime()
+        return await service.onboarding.get(service.default_workspace.id)
+
+    @app.post("/v1/onboarding/complete", response_model=OnboardingState)
+    async def complete_onboarding(
+        request: OnboardingCompleteRequest,
+    ) -> OnboardingState:
+        if not request.confirm_local_ownership:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "local_ownership_confirmation_required"},
+            )
+        service = await runtime()
+        return await service.onboarding.complete(
+            service.default_workspace.id,
+            metadata_sensor_enabled=request.enable_metadata_sensor,
         )
 
     @app.get("/v1/diagnostics/metrics", response_model=LocalMetrics)

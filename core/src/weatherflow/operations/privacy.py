@@ -35,6 +35,12 @@ class PrivacyService:
         artifact_paths: list[Path] = []
         async with self.database.transaction() as connection:
             count = await self._count_in(connection, workspace_id, category)
+            run_rows = await (
+                await connection.execute(
+                    "SELECT id FROM runs WHERE workspace_id = ?", (workspace_id,)
+                )
+            ).fetchall()
+            run_ids = [row["id"] for row in run_rows]
             categories = (
                 (
                     ResetCategory.BEHAVIOR,
@@ -107,6 +113,40 @@ class PrivacyService:
                         (workspace_id,),
                     )
                     deleted += cursor.rowcount
+            if category is ResetCategory.WORKSPACE:
+                for table in (
+                    "approvals",
+                    "actions",
+                    "capability_snapshots",
+                    "checkpoints",
+                    "checkpoint_quarantine",
+                ):
+                    cursor = await connection.execute(
+                        f"DELETE FROM {table} WHERE run_id IN "
+                        "(SELECT id FROM runs WHERE workspace_id = ?)",
+                        (workspace_id,),
+                    )
+                    deleted += cursor.rowcount
+                if run_ids:
+                    placeholders = ",".join("?" for _ in run_ids)
+                    cursor = await connection.execute(
+                        f"""
+                        DELETE FROM events WHERE stream_id = ? OR correlation_id = ?
+                        OR stream_id IN ({placeholders})
+                        OR correlation_id IN ({placeholders})
+                        """,
+                        (workspace_id, workspace_id, *run_ids, *run_ids),
+                    )
+                    deleted += cursor.rowcount
+                cursor = await connection.execute(
+                    "DELETE FROM runs WHERE workspace_id = ?", (workspace_id,)
+                )
+                deleted += cursor.rowcount
+                cursor = await connection.execute(
+                    "DELETE FROM onboarding_preferences WHERE workspace_id = ?",
+                    (workspace_id,),
+                )
+                deleted += cursor.rowcount
             await self.ledger.append_in(
                 connection,
                 Event.new(
@@ -168,8 +208,21 @@ class PrivacyService:
             ),
         }
         if category is ResetCategory.WORKSPACE:
-            return sum(
+            content_count = sum(
                 await self._count_in(connection, workspace_id, selected) for selected in queries
             )
+            operational = await (
+                await connection.execute(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM runs WHERE workspace_id = ?) +
+                      (SELECT COUNT(*) FROM events WHERE stream_id = ? OR correlation_id = ?) +
+                      (SELECT COUNT(*) FROM onboarding_preferences WHERE workspace_id = ?)
+                      AS count
+                    """,
+                    (workspace_id, workspace_id, workspace_id, workspace_id),
+                )
+            ).fetchone()
+            return content_count + int(operational["count"])
         row = await (await connection.execute(queries[category], (workspace_id,))).fetchone()
         return int(row["count"])

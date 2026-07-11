@@ -203,4 +203,28 @@ MIGRATIONS = (
             ON memory_search_index(workspace_id, entry_kind, entry_id);
         """,
     ),
+    Migration(
+        version=10,
+        sql="""
+        CREATE TABLE checkpoint_quarantine (
+            run_id TEXT PRIMARY KEY REFERENCES runs(id),
+            reason TEXT NOT NULL,
+            raw_payload BLOB NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            quarantined_at TEXT NOT NULL
+        );
+        """,
+    ),
+    Migration(
+        version=11,
+        sql="""
+        CREATE TABLE onboarding_preferences (
+            workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+            completed INTEGER NOT NULL,
+            metadata_sensor_enabled INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 )

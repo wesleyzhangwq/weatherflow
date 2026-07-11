@@ -56,3 +56,12 @@ class SecurityScan(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     findings: tuple[SecurityFinding, ...]
+
+
+class OnboardingState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    workspace_id: str
+    completed: bool = False
+    metadata_sensor_enabled: bool = False
+    version: int = Field(default=0, ge=0)

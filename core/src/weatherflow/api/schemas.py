@@ -53,11 +53,19 @@ class ResetConfirmRequest(BaseModel):
     confirm: bool = False
 
 
+class OnboardingCompleteRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    confirm_local_ownership: bool
+    enable_metadata_sensor: bool = False
+
+
 class SystemStatus(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     local_only: Literal[True] = True
     telemetry_upload: Literal[False] = False
+    onboarding_completed: bool
     workspace_id: str
     installed_packs: tuple[str, ...]
     providers: dict[str, str]

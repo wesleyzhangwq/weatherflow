@@ -1,4 +1,4 @@
-.PHONY: install lint format-check test eval desktop-check rust-check check dev clean
+.PHONY: install lint format-check test eval security-check desktop-check rust-check check dev clean
 
 PY := uv run --package weatherflow-core --extra dev
 
@@ -18,13 +18,16 @@ test:
 eval:
 	$(PY) pytest core/tests/eval -q
 
+security-check:
+	$(PY) pytest core/tests/operations/test_hardening.py -q
+
 desktop-check:
 	cd desktop && npm run lint && npm run typecheck && npm test && npm run build
 
 rust-check:
 	cd desktop/src-tauri && TOOLCHAIN_BIN=$$(dirname "$$(rustup which cargo)") && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo fmt --check && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo test --lib && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo check
 
-check: lint format-check test eval desktop-check rust-check
+check: lint format-check test eval security-check desktop-check rust-check
 
 dev:
 	uv run --package weatherflow-core weatherflow serve --reload

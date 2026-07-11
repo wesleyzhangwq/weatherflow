@@ -39,3 +39,16 @@ export interface Approval {
 }
 export interface LedgerEvent { id: string; type: string; recorded_at: string; payload: Record<string, unknown> }
 export interface Artifact { id: string; run_id: string; name: string; media_type: string; digest: string; size_bytes: number }
+export interface SystemStatus {
+  local_only: true;
+  telemetry_upload: false;
+  onboarding_completed: boolean;
+  workspace_id: string;
+  installed_packs: string[];
+  providers: Record<string, string>;
+  behavior_sensor: { mode: string; raw_content_captured: false; fallback_to_deliberate_signals: true };
+  retention: Record<string, string>;
+}
+export interface ResetPreview { category: string; count: number }
+export interface ResetResult { category: string; deleted_count: number }
+export interface DiagnosticExport { path: string; sha256: string; size_bytes: number }

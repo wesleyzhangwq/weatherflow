@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { WeatherFlowClient } from "../bridge";
-import type { Approval, Artifact, DesktopSnapshot, LedgerEvent } from "../types";
+import type { Approval, Artifact, DesktopSnapshot, LedgerEvent, ResetPreview, SystemStatus } from "../types";
 
 interface CockpitProps { client: WeatherFlowClient; snapshot: DesktopSnapshot | null; offline: boolean }
 
@@ -8,9 +8,14 @@ export function Cockpit({ client, snapshot, offline }: CockpitProps) {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [timeline, setTimeline] = useState<LedgerEvent[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [system, setSystem] = useState<SystemStatus | null>(null);
+  const [resetPreview, setResetPreview] = useState<ResetPreview | null>(null);
+  const [operation, setOperation] = useState<string | null>(null);
   const run = snapshot?.latest_run;
   const refresh = useCallback(async () => {
-    setApprovals(await client.approvals());
+    const [pending, status] = await Promise.all([client.approvals(), client.status()]);
+    setApprovals(pending);
+    setSystem(status);
     if (run) {
       const [events, files] = await Promise.all([client.timeline(run.id), client.artifacts(run.id)]);
       setTimeline(events);
@@ -22,6 +27,23 @@ export function Cockpit({ client, snapshot, offline }: CockpitProps) {
   const decide = async (approval: Approval, decision: "approve" | "deny") => {
     await client.decide(approval.id, decision, approval.version);
     await refresh();
+  };
+  const exportDiagnostics = async () => {
+    const result = await client.exportDiagnostics();
+    setOperation(`Diagnostic saved locally: ${result.path}`);
+  };
+  const reviewBehaviorReset = async () => {
+    setResetPreview(await client.previewReset("behavior"));
+  };
+  const resetBehavior = async () => {
+    const result = await client.reset("behavior");
+    setResetPreview(null);
+    setOperation(`Deleted ${result.deleted_count} behavior records.`);
+  };
+  const completeOnboarding = async () => {
+    await client.completeOnboarding(true);
+    setSystem(await client.status());
+    setOperation("Local ownership confirmed. Metadata-only sensing is enabled.");
   };
 
   return (
@@ -65,7 +87,14 @@ export function Cockpit({ client, snapshot, offline }: CockpitProps) {
         </section>
         <section className="panel settings-panel">
           <span className="panel-label">Settings & diagnostics</span>
-          <dl><div><dt>Proactivity</dt><dd>Silent</dd></div><div><dt>Motion</dt><dd>System preference</dd></div><div><dt>Bridge</dt><dd>{offline ? "Recovering" : "Authenticated loopback"}</dd></div></dl>
+          {system && !system.onboarding_completed && <div className="onboarding-card"><strong>Your data stays on this Mac</strong><p>WeatherFlow captures coarse activity metadata only. It never captures screenshots, window titles, clipboard content, or keystrokes.</p><button className="primary" onClick={() => void completeOnboarding()}>Confirm local setup</button></div>}
+          <dl><div><dt>Proactivity</dt><dd>Silent</dd></div><div><dt>Behavior sensor</dt><dd>{system?.behavior_sensor.mode === "metadata_only" ? "Metadata only" : "Checking"}</dd></div><div><dt>Data ownership</dt><dd>{system?.local_only ? "Local only · no telemetry upload" : "Checking"}</dd></div><div><dt>Packs</dt><dd>{system?.installed_packs.join(", ") || "None"}</dd></div><div><dt>Bridge</dt><dd>{offline ? "Recovering" : "Authenticated loopback"}</dd></div></dl>
+          <div className="settings-actions">
+            <button onClick={() => void exportDiagnostics()}>Export local diagnostics</button>
+            {!resetPreview && <button onClick={() => void reviewBehaviorReset()}>Review behavior reset</button>}
+            {resetPreview && <button onClick={() => void resetBehavior()}>Delete {resetPreview.count} behavior records</button>}
+          </div>
+          {operation && <small role="status">{operation}</small>}
         </section>
       </div>
     </main>

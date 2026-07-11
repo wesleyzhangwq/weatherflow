@@ -26,6 +26,7 @@ from weatherflow.runtime.models import (
 from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopStatus
 from weatherflow.runtime.protocols import ModelAdapter, ToolExecutor
 from weatherflow.runtime.repository import (
+    CheckpointCorruptionError,
     CheckpointNotFoundError,
     CheckpointVersionConflict,
     DuplicateCheckpointError,
@@ -52,6 +53,7 @@ __all__ = [
     "BoundedObservation",
     "CompactWorkerResult",
     "CheckpointNotFoundError",
+    "CheckpointCorruptionError",
     "CheckpointVersionConflict",
     "DelegationTurn",
     "FinalTurn",

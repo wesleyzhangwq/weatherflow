@@ -38,13 +38,14 @@ from weatherflow.extensions import (
 )
 from weatherflow.mcp.client import ConnectedMCP, MCPRegistry, MCPTransport
 from weatherflow.memory import MemoryStore
-from weatherflow.operations import DiagnosticsService, PrivacyService
+from weatherflow.operations import DiagnosticsService, OnboardingService, PrivacyService
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
     ActionExecutionCoordinator,
     AgentDefinition,
     AgentMessage,
+    CheckpointCorruptionError,
     FinalTurn,
     LoopOutcome,
     LoopStatus,
@@ -94,6 +95,7 @@ class RuntimeContainer:
     memory: MemoryStore
     diagnostics: DiagnosticsService
     privacy: PrivacyService
+    onboarding: OnboardingService
     rhythm_snapshots: RhythmSnapshotRepository
     rhythm: RhythmService
     catalog: CapabilityCatalog
@@ -187,6 +189,7 @@ class RuntimeContainer:
             memory=memory,
             workspaces=workspaces,
         )
+        onboarding = OnboardingService(database=database, ledger=ledger)
         use_builtin_pack_resolution = catalog is None
         resolved_catalog = catalog or CapabilityCatalog(
             builtin_tool_specs(
@@ -275,7 +278,7 @@ class RuntimeContainer:
             worker_coordinator=workers,
         )
         workers.bind_loop(loop)
-        return cls(
+        container = cls(
             settings=settings,
             database=database,
             workspaces=workspaces,
@@ -294,6 +297,7 @@ class RuntimeContainer:
             memory=memory,
             diagnostics=diagnostics,
             privacy=privacy,
+            onboarding=onboarding,
             rhythm_snapshots=rhythm_snapshots,
             rhythm=rhythm,
             catalog=resolved_catalog,
@@ -305,6 +309,8 @@ class RuntimeContainer:
             use_builtin_pack_resolution=use_builtin_pack_resolution,
             mcp_connections=tuple(mcp_connections),
         )
+        await container._audit_startup_recovery()
+        return container
 
     async def submit_run(
         self,
@@ -327,6 +333,24 @@ class RuntimeContainer:
             user_intent=user_intent,
             workspace_id=workspace.id,
         )
+        unavailable = sorted(
+            tool_id
+            for tool_id in requested_tool_ids
+            if (tool := self.catalog.get(tool_id)) is not None
+            and tool.health.value == "unavailable"
+        )
+        timeline = await self.ledger.list_correlation(run.id, limit=1000)
+        if unavailable and not any(event.type == "provider.degraded" for event in timeline):
+            await self.ledger.append(
+                Event.new(
+                    type="provider.degraded",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload={"tool_ids": unavailable, "effect": "hidden_from_snapshot"},
+                )
+            )
         if run.rhythm_snapshot_id is None:
             run = await self._bind_rhythm_context(run, workspace)
         if await self.snapshots.get_by_run_id(run.id) is None:
@@ -358,7 +382,40 @@ class RuntimeContainer:
         workspace = await self.workspaces.get(run.workspace_id)
         if workspace is None:
             raise LookupError(run.workspace_id)
-        checkpoint = await self.checkpoints.get(run.id)
+        try:
+            checkpoint = await self.checkpoints.get(run.id)
+        except CheckpointCorruptionError:
+            digest = await self.checkpoints.quarantine(
+                run.id, reason="checkpoint_validation_failed"
+            )
+            current = await self.runs.get(run.id)
+            if current is None:
+                raise LookupError(run.id) from None
+            reviewed = await self.run_coordinator.transition(
+                run_id=run.id,
+                target=RunStatus.NEEDS_REVIEW,
+                expected_version=current.version,
+                error_class="CheckpointCorruption",
+                error_message="checkpoint quarantined; explicit review required",
+            )
+            await self.ledger.append(
+                Event.new(
+                    type="runtime.checkpoint_quarantined",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload={
+                        "payload_sha256": digest,
+                        "run_status": reviewed.status.value,
+                    },
+                )
+            )
+            return LoopOutcome(
+                run_id=run.id,
+                status=LoopStatus.NEEDS_REVIEW,
+                error="checkpoint quarantined; explicit review required",
+            )
         policy = checkpoint.state.get("rhythm_policy", {}) if checkpoint else {}
         skills = checkpoint.state.get("skills", {}) if checkpoint else {}
         memory_context = checkpoint.state.get("memory_context", []) if checkpoint else []
@@ -529,3 +586,22 @@ class RuntimeContainer:
             raise UnknownCapabilityPackError(sorted(unresolved)[0])
         selected.add("extensions.install")
         return frozenset(selected)
+
+    async def _audit_startup_recovery(self) -> None:
+        terminal = {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
+        for run in await self.runs.list_recent(limit=1000):
+            if run.status in terminal:
+                continue
+            await self.ledger.append(
+                Event.new(
+                    type="runtime.startup_recovery_audited",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload={
+                        "status": run.status.value,
+                        "decision": "retained_for_explicit_resume",
+                    },
+                )
+            )

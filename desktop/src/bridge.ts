@@ -1,4 +1,4 @@
-import type { Approval, Artifact, DesktopSnapshot, LedgerEvent, Run } from "./types";
+import type { Approval, Artifact, DesktopSnapshot, DiagnosticExport, LedgerEvent, ResetPreview, ResetResult, Run, SystemStatus } from "./types";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
 
@@ -44,6 +44,27 @@ export class WeatherFlowClient {
   }
   ingestSignal(signal: Record<string, unknown>): Promise<unknown> {
     return this.request("/v1/rhythm/signals", { method: "POST", body: JSON.stringify(signal) });
+  }
+  status(): Promise<SystemStatus> { return this.request("/v1/system/status"); }
+  completeOnboarding(enableMetadataSensor: boolean): Promise<unknown> {
+    return this.request("/v1/onboarding/complete", {
+      method: "POST",
+      body: JSON.stringify({
+        confirm_local_ownership: true,
+        enable_metadata_sensor: enableMetadataSensor,
+      }),
+    });
+  }
+  exportDiagnostics(): Promise<DiagnosticExport> {
+    return this.request("/v1/diagnostics/export", { method: "POST" });
+  }
+  previewReset(category: string): Promise<ResetPreview> {
+    return this.request(`/v1/privacy/reset/${category}`);
+  }
+  reset(category: string): Promise<ResetResult> {
+    return this.request(`/v1/privacy/reset/${category}`, {
+      method: "POST", body: JSON.stringify({ confirm: true }),
+    });
   }
 
   events(cursor: string | null, onEvent: (event: LedgerEvent) => void, onRefresh: () => void): WebSocket {
