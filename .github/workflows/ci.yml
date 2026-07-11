@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  core:
+    name: Python Core
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Sync locked workspace
+        run: uv sync --all-packages --all-extras --locked
+
+      - name: Lint
+        run: uv run --package weatherflow-core --extra dev ruff check core/src core/tests
+
+      - name: Check formatting
+        run: uv run --package weatherflow-core --extra dev ruff format --check core/src core/tests
+
+      - name: Test
+        run: uv run --package weatherflow-core --extra dev pytest core/tests -q
