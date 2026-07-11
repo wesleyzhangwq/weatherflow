@@ -17,12 +17,14 @@ from weatherflow.capabilities.builtin import (
     DeveloperExecutor,
     GitHubExecutor,
     GitHubProvider,
+    PersonalOperationsExecutor,
     ResearchExecutor,
     ResearchProvider,
     builtin_tool_specs,
     calendar_tool_specs,
     developer_tool_specs,
     github_tool_specs,
+    personal_tool_specs,
     research_tool_specs,
     tool_ids_for_installed_packs,
 )
@@ -190,6 +192,15 @@ class RuntimeContainer:
             developer_executor = DeveloperExecutor(workspaces, artifacts=artifact_store)
             for tool in developer_tool_specs():
                 executors.register(tool.tool_id, developer_executor)
+            personal_executor = PersonalOperationsExecutor(
+                workspaces=workspaces,
+                artifacts=artifact_store,
+                rhythm=rhythm,
+                calendar=calendar_provider,
+            )
+            for tool in personal_tool_specs():
+                if tool.tool_id == "personal.plan_day" or calendar_provider is not None:
+                    executors.register(tool.tool_id, personal_executor)
             if research_provider is not None:
                 research_executor = ResearchExecutor(
                     provider=research_provider,

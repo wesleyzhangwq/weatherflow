@@ -8,7 +8,7 @@ Installing a Pack describes what may exist; it does not grant authority.
 |---|---|---|
 | `developer` | scoped file read/write, Git status, allowlisted argv execution, GitHub release read/write | local writes and commands are sandbox decisions; GitHub writes require approval |
 | `research` | bounded source retrieval and a provenance-aware Markdown artifact | network read only; provider absence hides the tool |
-| `personal_operations` | Calendar read and event creation | reads are bounded; event creation requires approval |
+| `personal_operations` | rhythm-aware day plans, meeting prep, schedule proposals, Calendar read/write | planning outputs are local artifacts; event creation requires approval |
 
 ## Resolution
 
@@ -35,6 +35,12 @@ artifacts.
   receive a reduced environment, and have time and output bounds.
 - Research results retain title, URL, retrieval time, bounded excerpt, and a
   numbered citation. The report is an immutable content-addressed artifact.
+- Day plans reduce commitment density and add recovery space when the frozen
+  RhythmPolicy reports overload. Meeting prep and schedule proposals preserve
+  Calendar and rhythm provenance in immutable local artifacts.
+- A schedule proposal never mutates Calendar. Accepting a proposed block is a
+  separate `calendar.create_event` external Action and therefore requires
+  explicit approval.
 - `calendar.create_event` and `github.create_release` reject direct execution
   without an approved Action context and idempotency key.
 - A recovered ambiguous external mutation enters `NEEDS_REVIEW`; it is never

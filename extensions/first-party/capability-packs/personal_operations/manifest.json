@@ -5,6 +5,12 @@
   "version": "3.0.0",
   "description": "Local planning and supervised Calendar operations.",
   "files": [],
-  "tool_ids": ["calendar.list_events", "calendar.create_event"],
-  "requested_scopes": ["calendar:read", "calendar:write"]
+  "tool_ids": [
+    "personal.plan_day",
+    "personal.prepare_meeting",
+    "personal.propose_schedule",
+    "calendar.list_events",
+    "calendar.create_event"
+  ],
+  "requested_scopes": ["workspace:write", "calendar:read", "calendar:write"]
 }
