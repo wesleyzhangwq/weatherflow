@@ -1,4 +1,4 @@
-import type { Approval, DesktopSnapshot, LedgerEvent, Run } from "./types";
+import type { Approval, Artifact, DesktopSnapshot, LedgerEvent, Run } from "./types";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
 
@@ -29,6 +29,7 @@ export class WeatherFlowClient {
   snapshot(): Promise<DesktopSnapshot> { return this.request("/v1/desktop/snapshot"); }
   approvals(): Promise<Approval[]> { return this.request("/v1/approvals"); }
   timeline(runId: string): Promise<LedgerEvent[]> { return this.request(`/v1/runs/${runId}/timeline`); }
+  artifacts(runId: string): Promise<Artifact[]> { return this.request(`/v1/runs/${runId}/artifacts`); }
   createRun(userIntent: string, clientRequestId: string): Promise<Run> {
     return this.request("/v1/runs", {
       method: "POST",

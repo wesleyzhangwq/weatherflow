@@ -29,3 +29,4 @@ export interface Run {
 export interface DesktopSnapshot { rhythm: CurrentRhythm; latest_run: Run | null }
 export interface Approval { id: string; action_id: string; run_id: string; status: string; version: number }
 export interface LedgerEvent { id: string; type: string; recorded_at: string; payload: Record<string, unknown> }
+export interface Artifact { id: string; run_id: string; name: string; media_type: string; digest: string; size_bytes: number }

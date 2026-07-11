@@ -179,6 +179,17 @@ def create_app(
             )
         return artifact
 
+    @app.get("/v1/runs/{run_id}/artifacts", response_model=list[ArtifactManifest])
+    async def list_run_artifacts(run_id: str) -> list[ArtifactManifest]:
+        service = await runtime()
+        run = await service.runs.get(run_id)
+        if run is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "run_not_found", "run_id": run_id},
+            )
+        return await service.artifacts.list_run(run_id)
+
     @app.get("/v1/artifacts/{artifact_id}/content")
     async def get_artifact_content(artifact_id: str) -> Response:
         service = await runtime()

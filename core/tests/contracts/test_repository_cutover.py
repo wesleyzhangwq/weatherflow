@@ -5,7 +5,6 @@ ROOT = Path(__file__).resolve().parents[3]
 REMOVED_V2_PATHS = (
     "backend",
     "cli",
-    "desktop",
     "frontend",
     "mcp_servers",
     "scripts",
@@ -36,6 +35,7 @@ def test_clean_v3_skeleton_exists() -> None:
     expected = (
         "core/pyproject.toml",
         "core/src/weatherflow/__init__.py",
+        "desktop/package.json",
         "docs/superpowers/specs/2026-07-12-weatherflow-v3-design.md",
     )
     missing = [path for path in expected if not (ROOT / path).exists()]
