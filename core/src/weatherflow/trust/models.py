@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from ulid import ULID
 
-from weatherflow.capabilities import ToolEffect
+from weatherflow.capabilities.models import ToolEffect
 
 
 class InvalidActionTransition(ValueError):

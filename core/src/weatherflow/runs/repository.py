@@ -104,6 +104,33 @@ class RunRepository:
             raise RunNotFoundError(run_id)
         return updated
 
+    async def attach_capability_snapshot_in(
+        self,
+        connection: aiosqlite.Connection,
+        run_id: str,
+        snapshot_id: str,
+        expected_version: int,
+    ) -> Run:
+        current = await self.get_in(connection, run_id)
+        if current is None:
+            raise RunNotFoundError(run_id)
+        if current.version != expected_version or current.capability_snapshot_id is not None:
+            raise RunVersionConflict(run_id)
+        cursor = await connection.execute(
+            """
+            UPDATE runs
+            SET capability_snapshot_id = ?, version = version + 1, updated_at = ?
+            WHERE id = ? AND version = ? AND capability_snapshot_id IS NULL
+            """,
+            (snapshot_id, datetime.now(UTC).isoformat(), run_id, expected_version),
+        )
+        if cursor.rowcount != 1:
+            raise RunVersionConflict(run_id)
+        updated = await self.get_in(connection, run_id)
+        if updated is None:
+            raise RunNotFoundError(run_id)
+        return updated
+
     @staticmethod
     def _values(run: Run) -> tuple[Any, ...]:
         return (

@@ -5,6 +5,10 @@ from weatherflow.capabilities.catalog import (
     DuplicateToolError,
     UnknownToolError,
 )
+from weatherflow.capabilities.coordinator import (
+    CapabilityFreezeResult,
+    CapabilitySnapshotCoordinator,
+)
 from weatherflow.capabilities.models import (
     IdempotencyKind,
     ToolEffect,
@@ -20,8 +24,10 @@ from weatherflow.capabilities.snapshots import RunCapabilitySnapshot
 
 __all__ = [
     "CapabilityCatalog",
+    "CapabilityFreezeResult",
     "CapabilityResolver",
     "CapabilitySnapshotRepository",
+    "CapabilitySnapshotCoordinator",
     "DuplicateToolError",
     "DuplicateCapabilitySnapshot",
     "IdempotencyKind",

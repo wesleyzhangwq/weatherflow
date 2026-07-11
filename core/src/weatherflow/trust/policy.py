@@ -3,7 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
-from weatherflow.capabilities import ToolEffect, ToolHealth, ToolSpec
+from weatherflow.capabilities.models import ToolEffect, ToolHealth, ToolSpec
 from weatherflow.workspaces import Workspace
 
 

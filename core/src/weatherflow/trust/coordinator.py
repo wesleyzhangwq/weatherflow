@@ -3,7 +3,7 @@ from typing import Any
 import aiosqlite
 from pydantic import BaseModel, ConfigDict
 
-from weatherflow.capabilities import ToolSpec
+from weatherflow.capabilities.models import ToolSpec
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.storage import Database
