@@ -1,46 +1,39 @@
-# ===== Python =====
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
-.Python
 build/
 dist/
 *.egg-info/
-.eggs/
 .venv/
-venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local configuration and secrets
 .env
 .env.*
 !.env.example
-!.env.example.ollama
-# OAuth client secrets / tokens (Google Calendar setup)
 credentials.json
 *_token.json
 
-# ===== Data =====
-backend/data/
+# WeatherFlow local state
+.weatherflow/
 .wf-data/
 
-# ===== Frontend =====
-frontend/node_modules/
-frontend/.next/
-frontend/out/
-frontend/.turbo/
-frontend/dist/
+# Future desktop generated files
+node_modules/
+target/
 *.tsbuildinfo
 
-# ===== CLI dev state =====
-.weatherflow/
+# Agent tooling
 .worktrees/
+.superpowers/
 
-# ===== Tools / OS =====
+# OS and editors
 .DS_Store
 .vscode/
 .idea/
 *.log
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/

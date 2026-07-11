@@ -1,13 +1,9 @@
 [project]
 name = "weatherflow-workspace"
-version = "0.1.0"
-description = "WeatherFlow workspace metadata for uv dependency locking"
-requires-python = ">=3.10"
+version = "3.0.0a1"
+description = "WeatherFlow v3 workspace metadata"
+requires-python = ">=3.12"
 dependencies = []
 
 [tool.uv.workspace]
-members = ["backend", "cli"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-pythonpath = ["backend", "."]
+members = ["core"]
