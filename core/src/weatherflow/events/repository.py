@@ -13,6 +13,10 @@ class DuplicateEventError(ValueError):
     pass
 
 
+class UnknownEventCursor(LookupError):
+    pass
+
+
 class EventLedger:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -94,6 +98,48 @@ class EventLedger:
         limit: int = 100,
     ) -> list[Event]:
         return await self._list("correlation_id = ?", (correlation_id,), limit)
+
+    async def list_after(self, cursor: str | None, *, limit: int = 100) -> list[Event]:
+        async with self.database.connect() as connection:
+            return await self.list_after_in(connection, cursor, limit=limit)
+
+    async def list_after_in(
+        self,
+        connection: aiosqlite.Connection,
+        cursor: str | None,
+        *,
+        limit: int = 100,
+    ) -> list[Event]:
+        if limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        if cursor is None:
+            rows = await (
+                await connection.execute(
+                    "SELECT * FROM events ORDER BY recorded_at, id LIMIT ?", (limit,)
+                )
+            ).fetchall()
+            return [self._from_row(row) for row in rows]
+        cursor_row = await (
+            await connection.execute("SELECT recorded_at, id FROM events WHERE id = ?", (cursor,))
+        ).fetchone()
+        if cursor_row is None:
+            raise UnknownEventCursor(cursor)
+        rows = await (
+            await connection.execute(
+                """
+                SELECT * FROM events
+                WHERE recorded_at > ? OR (recorded_at = ? AND id > ?)
+                ORDER BY recorded_at, id LIMIT ?
+                """,
+                (
+                    cursor_row["recorded_at"],
+                    cursor_row["recorded_at"],
+                    cursor_row["id"],
+                    limit,
+                ),
+            )
+        ).fetchall()
+        return [self._from_row(row) for row in rows]
 
     async def _list(
         self,

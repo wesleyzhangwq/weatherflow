@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from weatherflow.events import Actor, Event
-from weatherflow.events.repository import DuplicateEventError, EventLedger
+from weatherflow.events.repository import DuplicateEventError, EventLedger, UnknownEventCursor
 from weatherflow.storage import Database
 
 
@@ -108,3 +108,29 @@ def test_ledger_has_no_update_or_delete_api(tmp_path: Path) -> None:
 
     assert not hasattr(ledger, "update")
     assert not hasattr(ledger, "delete")
+
+
+async def test_global_cursor_reads_committed_events_in_order(tmp_path: Path) -> None:
+    ledger = await initialized_ledger(tmp_path / "weatherflow.db")
+    events = [
+        Event.new(
+            type=f"event.{index}",
+            actor=Actor.SYSTEM,
+            stream_kind="test",
+            stream_id=str(index),
+            correlation_id=str(index),
+            payload={},
+        )
+        for index in range(3)
+    ]
+    for event in events:
+        await ledger.append(event)
+
+    assert await ledger.list_after(None) == events
+    assert await ledger.list_after(events[0].id) == events[1:]
+    assert await ledger.list_after(events[0].id, limit=1) == [events[1]]
+
+    with pytest.raises(UnknownEventCursor):
+        await ledger.list_after("missing")
+    with pytest.raises(ValueError):
+        await ledger.list_after(None, limit=0)
