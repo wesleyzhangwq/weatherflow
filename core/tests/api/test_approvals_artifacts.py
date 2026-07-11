@@ -85,6 +85,7 @@ async def test_approval_decision_resumes_run_and_artifact_is_readable(
         )
         metadata = await client.get(f"/v1/artifacts/{artifact.id}")
         content = await client.get(f"/v1/artifacts/{artifact.id}/content")
+        timeline = await client.get(f"/v1/runs/{run.id}/timeline")
 
     assert pending.status_code == 200 and len(pending.json()) == 1
     assert decided.status_code == 200
@@ -93,3 +94,9 @@ async def test_approval_decision_resumes_run_and_artifact_is_readable(
     assert executor.calls == 1
     assert metadata.json()["digest"] == artifact.digest
     assert content.content == b"shipped"
+    event_types = [event["type"] for event in timeline.json()]
+    assert "approval.requested" in event_types
+    assert "approval.decided" in event_types
+    assert "action.execution_started" in event_types
+    assert "action.execution_succeeded" in event_types
+    assert "run.result_committed" in event_types

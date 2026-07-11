@@ -53,6 +53,7 @@ core/
     storage/         SQLite connection and numbered migrations
     trust/           policy plus separate durable Action/Approval state
     workspaces/      action roots, scopes, budgets, and policy boundary
+    bootstrap.py     sole dependency composition root and restart boundary
   tests/             unit, contract, and integration tests
 docs/superpowers/    approved specifications and implementation plans
 weatherflow-architecture-v3.md

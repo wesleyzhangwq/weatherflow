@@ -22,6 +22,9 @@ visibility, checkpoint-before-dispatch, safe execution, atomic final commits,
 and idempotent approval parking. P1d2b2 resumes approved actions exactly once
 when possible; ambiguous execution failures and recovered EXECUTING actions
 enter NEEDS_REVIEW without automatic retry.
+P1d3 completes the headless core with one reconstructable RuntimeContainer,
+durable Workspaces, local Run/approval/artifact HTTP APIs, machine-readable CLI
+commands, and restart recovery from SQLite checkpoints.
 
 ## Read first
 
@@ -56,6 +59,18 @@ Expected response:
 ```json
 {"status":"ok","service":"weatherflow-core","version":"3.0.0a1"}
 ```
+
+Create and inspect a durable local Run:
+
+```bash
+weatherflow --data-dir ~/.local/share/weatherflow run "Explain this repository"
+weatherflow --data-dir ~/.local/share/weatherflow status <run_id>
+weatherflow --data-dir ~/.local/share/weatherflow timeline <run_id>
+weatherflow --data-dir ~/.local/share/weatherflow approve <approval_id>
+```
+
+Equivalent HTTP entrypoints begin at `POST /v1/runs`, `GET /v1/runs/{run_id}`,
+`GET /v1/runs/{run_id}/timeline`, and `GET /v1/approvals`.
 
 ## Current repository
 
