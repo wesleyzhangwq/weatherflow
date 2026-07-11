@@ -1,3 +1,7 @@
+mod activity;
+mod supervisor;
+
+use std::sync::Mutex;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -14,12 +18,23 @@ fn show_or_create(
         window.set_focus()?;
         return Ok(());
     }
+    let bridge = app
+        .state::<Mutex<supervisor::DaemonSupervisor>>()
+        .lock()
+        .expect("daemon state poisoned")
+        .bridge
+        .clone();
+    let initialization_script = format!(
+        "window.__WEATHERFLOW_BRIDGE__ = {};",
+        serde_json::to_string(&bridge).expect("bridge config must serialize")
+    );
     WebviewWindowBuilder::new(
         app,
         label,
         WebviewUrl::App(format!("index.html?surface={surface}").into()),
     )
     .title(format!("WeatherFlow {surface}"))
+    .initialization_script(initialization_script)
     .inner_size(width, height)
     .decorations(!transparent)
     .transparent(transparent)
@@ -50,6 +65,7 @@ fn open_cockpit(app: tauri::AppHandle) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -60,13 +76,22 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            app.global_shortcut().register("CommandOrControl+Shift+Space")?;
+            let supervisor =
+                supervisor::DaemonSupervisor::start(app.handle()).map_err(std::io::Error::other)?;
+            app.manage(Mutex::new(supervisor));
+            show_or_create(app.handle(), "companion", "companion", 190.0, 190.0, true)?;
+            supervisor::monitor(app.handle().clone());
+            app.global_shortcut()
+                .register("CommandOrControl+Shift+Space")?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             open_capsule,
             close_capsule,
-            open_cockpit
+            open_cockpit,
+            supervisor::daemon_bridge,
+            supervisor::restart_daemon,
+            activity::sample_activity_metadata
         ])
         .run(tauri::generate_context!())
         .expect("WeatherFlow desktop shell failed");

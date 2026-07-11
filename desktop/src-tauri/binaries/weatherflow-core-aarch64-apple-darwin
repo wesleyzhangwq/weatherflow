@@ -1,0 +1,3 @@
+#!/bin/sh
+# Development sidecar shim. P4 packaging replaces this with the standalone Python build.
+exec weatherflow "$@"

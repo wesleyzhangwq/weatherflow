@@ -42,6 +42,9 @@ export class WeatherFlowClient {
       body: JSON.stringify({ decision, expected_version: version, resume: true }),
     });
   }
+  ingestSignal(signal: Record<string, unknown>): Promise<unknown> {
+    return this.request("/v1/rhythm/signals", { method: "POST", body: JSON.stringify(signal) });
+  }
 
   events(cursor: string | null, onEvent: (event: LedgerEvent) => void, onRefresh: () => void): WebSocket {
     const url = new URL(this.config.baseUrl.replace(/^http/, "ws") + "/v1/events");
