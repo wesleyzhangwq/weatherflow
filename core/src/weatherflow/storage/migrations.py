@@ -136,4 +136,18 @@ MIGRATIONS = (
         );
         """,
     ),
+    Migration(
+        version=7,
+        sql="""
+        CREATE TABLE workspaces (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_workspaces_name ON workspaces(name, created_at, id);
+        """,
+    ),
 )

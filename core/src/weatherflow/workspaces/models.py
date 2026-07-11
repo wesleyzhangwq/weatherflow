@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -28,6 +29,9 @@ class Workspace(BaseModel):
     agent_definitions: tuple[str, ...] = ()
     default_budget: RunBudget = RunBudget()
     policy_profile: str = "supervised"
+    version: int = Field(default=0, ge=0)
+    created_at: datetime
+    updated_at: datetime
 
     @classmethod
     def new(
@@ -44,6 +48,7 @@ class Workspace(BaseModel):
         default_budget: RunBudget | None = None,
         policy_profile: str = "supervised",
     ) -> "Workspace":
+        now = datetime.now(UTC)
         values = {
             "id": str(ULID()),
             "name": name,
@@ -52,9 +57,11 @@ class Workspace(BaseModel):
             "artifact_root": str(Path(artifact_root).resolve()),
             "granted_scopes": frozenset(granted_scopes),
             "network_policy": network_policy,
-            "installed_packs": tuple(installed_packs),
-            "agent_definitions": tuple(agent_definitions),
+            "installed_packs": tuple(sorted(installed_packs)),
+            "agent_definitions": tuple(sorted(agent_definitions)),
             "policy_profile": policy_profile,
+            "created_at": now,
+            "updated_at": now,
         }
         if default_budget is not None:
             values["default_budget"] = default_budget
