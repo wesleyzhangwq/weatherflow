@@ -56,6 +56,7 @@ and native macOS shell gates.
 - `docs/worker-delegation.md`
 - `docs/flagship-trajectory.md`
 - `docs/extensions.md`
+- `docs/mcp.md`
 
 WeatherFlow v2 is preserved in Git history and the local tag
 `weatherflow-v2-final`; it is not a compatibility target.
@@ -114,6 +115,7 @@ weatherflow --data-dir ~/.local/share/weatherflow run "Explain this repository"
 weatherflow --data-dir ~/.local/share/weatherflow status <run_id>
 weatherflow --data-dir ~/.local/share/weatherflow timeline <run_id>
 weatherflow --data-dir ~/.local/share/weatherflow approve <approval_id>
+weatherflow --data-dir ~/.local/share/weatherflow mcp-server
 ```
 
 Equivalent HTTP entrypoints begin at `POST /v1/runs`, `GET /v1/runs/{run_id}`,

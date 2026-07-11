@@ -13,10 +13,10 @@
 
 ### P4b: MCP client and server surfaces
 
-- [ ] Implement typed MCP discovery/call transport, normalize discovered tools to canonical ToolSpecs, honor read/write/destructive annotations without granting scopes, and degrade on disconnect/schema drift.
-- [ ] Register connected MCP tools only for new Run snapshots and execute them through `SharedTurnLoop` plus Trust Plane.
-- [ ] Expose WeatherFlow Run submission, status, timeline, and approval operations through a minimal stdio MCP server that calls the sole RuntimeContainer path.
-- [ ] Test discovery, disconnect, schema drift, credential redaction, approval classification, and Run idempotency.
+- [x] Implement typed MCP discovery/call transport, normalize discovered tools to canonical ToolSpecs, honor read/write/destructive annotations without granting scopes, and degrade on disconnect/schema drift.
+- [x] Register connected MCP tools only for new Run snapshots and execute them through `SharedTurnLoop` plus Trust Plane.
+- [x] Expose WeatherFlow Run submission, status, timeline, and approval operations through a minimal stdio MCP server that calls the sole RuntimeContainer path.
+- [x] Test discovery, disconnect, schema drift, credential redaction, approval classification, and Run idempotency.
 
 ### P4c: Personal Operations and memory completion
 

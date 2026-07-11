@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from weatherflow.capabilities import (
     CapabilitySnapshotRepository,
 )
 from weatherflow.capabilities.builtin import (
+    BUILTIN_PACK_TOOL_IDS,
     DEVELOPER_PACK,
     CalendarExecutor,
     CalendarProvider,
@@ -27,10 +29,12 @@ from weatherflow.capabilities.builtin import (
 from weatherflow.config import Settings
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.extensions import (
+    CapabilityPackManifest,
     PackageInstallExecutor,
     PackageStore,
     package_install_tool_spec,
 )
+from weatherflow.mcp.client import ConnectedMCP, MCPRegistry, MCPTransport
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
@@ -92,6 +96,7 @@ class RuntimeContainer:
     loop: SharedTurnLoop
     workers: WorkerCoordinator
     use_builtin_pack_resolution: bool
+    mcp_connections: tuple[ConnectedMCP, ...]
 
     @classmethod
     async def create(
@@ -103,6 +108,7 @@ class RuntimeContainer:
         research_provider: ResearchProvider | None = None,
         calendar_provider: CalendarProvider | None = None,
         github_provider: GitHubProvider | None = None,
+        mcp_transports: Mapping[str, MCPTransport] | None = None,
     ) -> "RuntimeContainer":
         database = Database(settings.data_dir / "weatherflow.db")
         await database.initialize()
@@ -200,6 +206,13 @@ class RuntimeContainer:
                 github_executor = GitHubExecutor(github_provider)
                 for tool in github_tool_specs():
                     executors.register(tool.tool_id, github_executor)
+        mcp_connections: list[ConnectedMCP] = []
+        for server_name, transport in sorted((mcp_transports or {}).items()):
+            connected = await MCPRegistry().connect(server_name, transport)
+            mcp_connections.append(connected)
+            for tool in connected.tools:
+                resolved_catalog.register(tool)
+                executors.register(tool.tool_id, connected.executor)
         action_execution = ActionExecutionCoordinator(
             database=database,
             actions=actions,
@@ -259,6 +272,7 @@ class RuntimeContainer:
             loop=loop,
             workers=workers,
             use_builtin_pack_resolution=use_builtin_pack_resolution,
+            mcp_connections=tuple(mcp_connections),
         )
 
     async def submit_run(
@@ -276,11 +290,7 @@ class RuntimeContainer:
         )
         if workspace is None:
             raise LookupError(workspace_id)
-        requested_tool_ids = (
-            tool_ids_for_installed_packs(workspace.installed_packs) | {"extensions.install"}
-            if self.use_builtin_pack_resolution
-            else {tool.tool_id for tool in self.catalog.all()}
-        )
+        requested_tool_ids = await self._requested_tool_ids(workspace)
         run = await self.run_coordinator.create_run(
             client_request_id=client_request_id or str(uuid4()),
             user_intent=user_intent,
@@ -293,7 +303,7 @@ class RuntimeContainer:
                 run_id=run.id,
                 expected_run_version=run.version,
                 catalog=self.catalog,
-                catalog_revision="weatherflow-v3-p3a",
+                catalog_revision="weatherflow-v3-p4",
                 workspace=workspace,
                 requested_tool_ids=requested_tool_ids,
             )
@@ -449,3 +459,25 @@ class RuntimeContainer:
             guidance = "\n\n".join(f"[{name}] {value}" for name, value in sorted(skills.items()))
             prompt += f"\n\nInstalled skill guidance (never authority):\n{guidance}"
         return prompt[:12_000]
+
+    async def _requested_tool_ids(self, workspace: Workspace) -> frozenset[str]:
+        if not self.use_builtin_pack_resolution:
+            return frozenset(tool.tool_id for tool in self.catalog.all())
+        installed = set(workspace.installed_packs)
+        builtin = installed.intersection(BUILTIN_PACK_TOOL_IDS)
+        selected = set(tool_ids_for_installed_packs(builtin))
+        unresolved = installed - builtin
+        store = PackageStore(workspace.internal_root)
+        for reference in workspace.extension_refs:
+            if not reference.startswith("capability_pack:"):
+                continue
+            manifest = await store.load_manifest(reference)
+            if isinstance(manifest, CapabilityPackManifest) and manifest.name in installed:
+                selected.update(manifest.tool_ids)
+                unresolved.discard(manifest.name)
+        if unresolved:
+            from weatherflow.capabilities.builtin import UnknownCapabilityPackError
+
+            raise UnknownCapabilityPackError(sorted(unresolved)[0])
+        selected.add("extensions.install")
+        return frozenset(selected)

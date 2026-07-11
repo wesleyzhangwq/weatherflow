@@ -42,6 +42,10 @@ class PackageStore:
         )
         return manifest.to_agent_definition(prompt)
 
+    async def load_manifest(self, reference: str) -> PackageManifest:
+        manifest, _ = await asyncio.to_thread(self._load_reference, reference)
+        return manifest
+
     async def load_skill_prompt(self, reference: str) -> str:
         manifest, root = await asyncio.to_thread(self._load_reference, reference)
         if manifest.kind != "skill":

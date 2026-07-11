@@ -23,6 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=settings.port)
     serve.add_argument("--reload", action="store_true")
 
+    subparsers.add_parser("mcp-server", help="Run the WeatherFlow stdio MCP server")
+
     run = subparsers.add_parser("run", help="Create and execute a durable Run")
     run.add_argument("intent")
     run.add_argument("--client-request-id")
@@ -69,6 +71,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 async def _run_command(args: argparse.Namespace) -> int:
     container = await RuntimeContainer.create(Settings(data_dir=args.data_dir))
+    if args.command == "mcp-server":
+        from weatherflow.mcp.server import serve_stdio
+
+        await serve_stdio(container)
+        return 0
     if args.command == "run":
         run, _ = await container.submit_run(
             user_intent=args.intent,
