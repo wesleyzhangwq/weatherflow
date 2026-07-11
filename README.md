@@ -8,8 +8,10 @@ added the WAL-mode SQLite foundation and append-only Event Ledger. P1b now adds
 durable Runs, idempotent creation, optimistic concurrency, deterministic
 transitions, and atomic audit events through the sole Run Coordinator. P1c1
 adds immutable Workspace authority boundaries, canonical ToolSpec descriptions,
-and a fail-closed supervised Trust Policy. Durable approvals, capability
-snapshots, Rhythm Intelligence, the desktop shell, and Capability Packs follow.
+and a fail-closed supervised Trust Policy. P1c2a adds durable, versioned Action
+proposals and separate human Approval records with idempotency constraints.
+Approval coordination, capability snapshots, Rhythm Intelligence, the desktop
+shell, and Capability Packs follow.
 
 ## Read first
 

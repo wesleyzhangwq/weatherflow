@@ -49,7 +49,7 @@ core/
     events/          immutable Event envelope and append-only ledger
     runs/            Run model, optimistic repository, sole state coordinator
     storage/         SQLite connection and numbered migrations
-    trust/           pure authority decisions repeated before execution
+    trust/           policy plus separate durable Action/Approval state
     workspaces/      action roots, scopes, budgets, and policy boundary
   tests/             unit, contract, and integration tests
 docs/superpowers/    approved specifications and implementation plans
@@ -76,5 +76,6 @@ Run the narrow test while developing and `make check` before committing.
 - Keep domain logic out of HTTP, CLI, MCP, and Tauri adapters.
 - Keep provider and tool implementations behind typed protocols.
 - Treat ToolSpec as description only; repeat Trust Policy at execution time.
+- Persist side-effect Actions before Approval; never treat approval as execution.
 - Do not create a second agent loop, workflow engine, or policy path.
 - Do not push, publish, merge, or create releases without explicit instruction.
