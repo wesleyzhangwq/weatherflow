@@ -90,4 +90,19 @@ MIGRATIONS = (
         CREATE INDEX idx_approvals_run_status ON approvals(run_id, status, requested_at);
         """,
     ),
+    Migration(
+        version=4,
+        sql="""
+        CREATE TABLE capability_snapshots (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL UNIQUE REFERENCES runs(id),
+            catalog_revision TEXT NOT NULL,
+            tools TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_capability_snapshots_run
+            ON capability_snapshots(run_id, created_at);
+        """,
+    ),
 )
