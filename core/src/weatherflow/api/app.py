@@ -19,12 +19,23 @@ from weatherflow.api.schemas import (
     ApprovalView,
     DesktopSnapshot,
     HealthResponse,
+    ResetConfirmRequest,
     RunCreateRequest,
+    SystemStatus,
 )
 from weatherflow.artifacts import ArtifactManifest
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
 from weatherflow.events import Event, UnknownEventCursor
+from weatherflow.operations import (
+    DiagnosticExport,
+    LocalMetrics,
+    ResetCategory,
+    ResetPreview,
+    ResetResult,
+    SecurityScan,
+    SecurityScanner,
+)
 from weatherflow.rhythm import CurrentRhythm, RhythmSignal
 from weatherflow.runs import InvalidTransitionError, Run, RunStatus
 from weatherflow.trust import (
@@ -250,6 +261,76 @@ def create_app(
         rhythm = await service.rhythm.current(service.default_workspace.id)
         recent = await service.runs.list_recent(limit=1)
         return DesktopSnapshot(rhythm=rhythm, latest_run=recent[0] if recent else None)
+
+    @app.get("/v1/system/status", response_model=SystemStatus)
+    async def system_status() -> SystemStatus:
+        service = await runtime()
+        workspace = await service.workspaces.get(service.default_workspace.id)
+        if workspace is None:
+            raise HTTPException(status_code=409, detail={"code": "workspace_missing"})
+        providers: dict[str, str] = {}
+        for tool in service.catalog.all():
+            if tool.source.startswith("builtin.") and tool.source not in {
+                "builtin.developer",
+                "builtin.personal_operations",
+            }:
+                providers[tool.source] = tool.health.value
+        for connection in service.mcp_connections:
+            health = (
+                "available"
+                if any(tool.health.value == "available" for tool in connection.tools)
+                else "unavailable"
+            )
+            providers[f"mcp.{connection.client.server_name}"] = health
+        return SystemStatus(
+            workspace_id=workspace.id,
+            installed_packs=workspace.installed_packs,
+            providers=providers,
+            behavior_sensor={
+                "mode": "metadata_only",
+                "raw_content_captured": False,
+                "fallback_to_deliberate_signals": True,
+            },
+            retention={
+                "raw_behavior": "72h",
+                "aggregate_behavior": "90d",
+                "memory": "until_explicit_reset",
+            },
+        )
+
+    @app.get("/v1/diagnostics/metrics", response_model=LocalMetrics)
+    async def diagnostic_metrics() -> LocalMetrics:
+        service = await runtime()
+        return await service.diagnostics.metrics(service.default_workspace.id)
+
+    @app.post(
+        "/v1/diagnostics/export",
+        response_model=DiagnosticExport,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def export_diagnostics() -> DiagnosticExport:
+        service = await runtime()
+        return await service.diagnostics.export(service.default_workspace.id)
+
+    @app.get("/v1/privacy/reset/{category}", response_model=ResetPreview)
+    async def preview_reset(category: ResetCategory) -> ResetPreview:
+        service = await runtime()
+        return await service.privacy.preview_reset(service.default_workspace.id, category)
+
+    @app.post("/v1/privacy/reset/{category}", response_model=ResetResult)
+    async def reset(category: ResetCategory, request: ResetConfirmRequest) -> ResetResult:
+        if not request.confirm:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "explicit_confirmation_required"},
+            )
+        service = await runtime()
+        return await service.privacy.reset(service.default_workspace.id, category)
+
+    @app.get("/v1/security/scan", response_model=SecurityScan)
+    async def security_scan() -> SecurityScan:
+        service = await runtime()
+        return await SecurityScanner(service.database).scan()
 
     @app.websocket("/v1/events")
     async def events(websocket: WebSocket, cursor: str | None = None) -> None:

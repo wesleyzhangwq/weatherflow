@@ -45,3 +45,21 @@ class ApprovalView(Approval):
     tool_id: str
     effect: ToolEffect
     preview: dict
+
+
+class ResetConfirmRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    confirm: bool = False
+
+
+class SystemStatus(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    local_only: Literal[True] = True
+    telemetry_upload: Literal[False] = False
+    workspace_id: str
+    installed_packs: tuple[str, ...]
+    providers: dict[str, str]
+    behavior_sensor: dict[str, bool | str]
+    retention: dict[str, str]

@@ -38,6 +38,7 @@ from weatherflow.extensions import (
 )
 from weatherflow.mcp.client import ConnectedMCP, MCPRegistry, MCPTransport
 from weatherflow.memory import MemoryStore
+from weatherflow.operations import DiagnosticsService, PrivacyService
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
@@ -91,6 +92,8 @@ class RuntimeContainer:
     artifacts: ArtifactRepository
     artifact_store: ArtifactStore
     memory: MemoryStore
+    diagnostics: DiagnosticsService
+    privacy: PrivacyService
     rhythm_snapshots: RhythmSnapshotRepository
     rhythm: RhythmService
     catalog: CapabilityCatalog
@@ -173,6 +176,17 @@ class RuntimeContainer:
             estimator=RhythmEstimator(),
         )
         memory = MemoryStore(database=database, ledger=ledger)
+        diagnostics = DiagnosticsService(
+            database=database,
+            ledger=ledger,
+            workspaces=workspaces,
+        )
+        privacy = PrivacyService(
+            database=database,
+            ledger=ledger,
+            memory=memory,
+            workspaces=workspaces,
+        )
         use_builtin_pack_resolution = catalog is None
         resolved_catalog = catalog or CapabilityCatalog(
             builtin_tool_specs(
@@ -278,6 +292,8 @@ class RuntimeContainer:
             artifacts=artifacts,
             artifact_store=artifact_store,
             memory=memory,
+            diagnostics=diagnostics,
+            privacy=privacy,
             rhythm_snapshots=rhythm_snapshots,
             rhythm=rhythm,
             catalog=resolved_catalog,
