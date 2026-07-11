@@ -1,7 +1,17 @@
 import asyncio
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from fastapi.responses import JSONResponse
 
 from weatherflow import __version__
 from weatherflow.api.schemas import (
@@ -13,7 +23,7 @@ from weatherflow.api.schemas import (
 from weatherflow.artifacts import ArtifactManifest
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
-from weatherflow.events import Event
+from weatherflow.events import Event, UnknownEventCursor
 from weatherflow.rhythm import CurrentRhythm, RhythmSignal
 from weatherflow.runs import InvalidTransitionError, Run, RunStatus
 from weatherflow.trust import (
@@ -34,6 +44,18 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.container = container
     app.state.container_lock = asyncio.Lock()
+
+    @app.middleware("http")
+    async def authenticate_bridge(request: Request, call_next):
+        expected = resolved_settings.bridge_token
+        if expected is not None and not _valid_token(
+            request.headers.get("authorization"), expected
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": {"code": "bridge_unauthorized"}},
+            )
+        return await call_next(request)
 
     async def runtime() -> RuntimeContainer:
         if app.state.container is None:
@@ -202,6 +224,34 @@ def create_app(
         recent = await service.runs.list_recent(limit=1)
         return DesktopSnapshot(rhythm=rhythm, latest_run=recent[0] if recent else None)
 
+    @app.websocket("/v1/events")
+    async def events(websocket: WebSocket, cursor: str | None = None) -> None:
+        expected = resolved_settings.bridge_token
+        query_token = websocket.query_params.get("token")
+        if expected is not None and not (
+            _valid_token(websocket.headers.get("authorization"), expected)
+            or (query_token is not None and secrets.compare_digest(query_token, expected))
+        ):
+            await websocket.close(code=4401, reason="bridge unauthorized")
+            return
+        await websocket.accept()
+        service = await runtime()
+        current_cursor = cursor
+        try:
+            while True:
+                try:
+                    events = await service.ledger.list_after(current_cursor, limit=100)
+                except UnknownEventCursor:
+                    await websocket.close(code=4409, reason="cursor unavailable; refresh snapshot")
+                    return
+                for event in events:
+                    await websocket.send_json(event.model_dump(mode="json"))
+                    current_cursor = event.id
+                if not events:
+                    await asyncio.sleep(0.25)
+        except WebSocketDisconnect:
+            return
+
     return app
 
 
@@ -214,3 +264,9 @@ def _read_artifact(root_value: str, relative_path: str) -> bytes:
     if not path.is_relative_to(root):
         raise RuntimeError("artifact path escaped root")
     return path.read_bytes()
+
+
+def _valid_token(authorization: str | None, expected: str) -> bool:
+    if authorization is None or not authorization.startswith("Bearer "):
+        return False
+    return secrets.compare_digest(authorization.removeprefix("Bearer "), expected)

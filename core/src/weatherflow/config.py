@@ -18,3 +18,4 @@ class Settings(BaseSettings):
     port: int = Field(default=8765, ge=1, le=65535)
     data_dir: Path = Path("~/.local/share/weatherflow").expanduser()
     log_level: str = "INFO"
+    bridge_token: str | None = None
