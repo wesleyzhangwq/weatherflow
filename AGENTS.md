@@ -77,5 +77,6 @@ Run the narrow test while developing and `make check` before committing.
 - Keep provider and tool implementations behind typed protocols.
 - Treat ToolSpec as description only; repeat Trust Policy at execution time.
 - Persist side-effect Actions before Approval; never treat approval as execution.
+- Use ApprovalCoordinator to park/decide/resume; expiry cancels Action and pauses Run.
 - Do not create a second agent loop, workflow engine, or policy path.
 - Do not push, publish, merge, or create releases without explicit instruction.

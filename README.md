@@ -10,8 +10,10 @@ transitions, and atomic audit events through the sole Run Coordinator. P1c1
 adds immutable Workspace authority boundaries, canonical ToolSpec descriptions,
 and a fail-closed supervised Trust Policy. P1c2a adds durable, versioned Action
 proposals and separate human Approval records with idempotency constraints.
-Approval coordination, capability snapshots, Rhythm Intelligence, the desktop
-shell, and Capability Packs follow.
+P1c2b atomically persists side-effect proposals before parking Runs, resumes
+after approve/deny without executing implicitly, and pauses expired approvals.
+Capability snapshots, Rhythm Intelligence, the desktop shell, and Capability
+Packs follow.
 
 ## Read first
 
