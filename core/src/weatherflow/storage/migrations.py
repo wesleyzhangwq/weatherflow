@@ -31,4 +31,28 @@ MIGRATIONS = (
             ON events(correlation_id, recorded_at, id);
         """,
     ),
+    Migration(
+        version=2,
+        sql="""
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY,
+            client_request_id TEXT NOT NULL UNIQUE,
+            user_intent TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            rhythm_snapshot_id TEXT,
+            capability_snapshot_id TEXT,
+            policy_profile TEXT NOT NULL,
+            budget TEXT NOT NULL,
+            checkpoint_ref TEXT,
+            result_summary TEXT,
+            error_class TEXT,
+            error_message TEXT
+        );
+        CREATE INDEX idx_runs_status ON runs(status, updated_at);
+        """,
+    ),
 )

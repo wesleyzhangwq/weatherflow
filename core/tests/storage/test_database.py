@@ -15,7 +15,7 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
     async with aiosqlite.connect(path) as connection:
         journal_mode = await (await connection.execute("PRAGMA journal_mode")).fetchone()
         migration = await (
-            await connection.execute("SELECT version FROM schema_migrations")
+            await connection.execute("SELECT MAX(version) FROM schema_migrations")
         ).fetchone()
         event_table = await (
             await connection.execute(
@@ -24,7 +24,7 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
         ).fetchone()
 
     assert journal_mode == ("wal",)
-    assert migration == (1,)
+    assert migration == (2,)
     assert event_table == ("events",)
 
 
@@ -49,4 +49,4 @@ async def test_initialize_is_idempotent(tmp_path: Path) -> None:
             await connection.execute("SELECT COUNT(*) FROM schema_migrations")
         ).fetchone()
 
-    assert tuple(count) == (1,)
+    assert tuple(count) == (2,)
