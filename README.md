@@ -4,9 +4,10 @@ WeatherFlow is a rhythm-aware personal agent OS. v3 is a clean-slate rewrite
 with a local Python harness daemon and a macOS-first Tauri desktop shell.
 
 P0 established the clean v3 package, health API, CLI, and quality gates. P1a
-adds the WAL-mode SQLite foundation and append-only Event Ledger. Durable Runs,
-Trust, Rhythm Intelligence, the desktop shell, and Capability Packs continue in
-P1b-P4.
+added the WAL-mode SQLite foundation and append-only Event Ledger. P1b1 adds
+atomic transaction composition plus the Run schema and deterministic transition
+rules. Run persistence, coordination, Trust, Rhythm Intelligence, the desktop
+shell, and Capability Packs continue in P1b2-P4.
 
 ## Read first
 

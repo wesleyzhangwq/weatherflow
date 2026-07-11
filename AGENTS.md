@@ -46,6 +46,7 @@ core/
   src/weatherflow/
     api/             HTTP adapter
     events/          immutable Event envelope and append-only ledger
+    runs/            immutable Run model and deterministic transition rules
     storage/         SQLite connection and numbered migrations
   tests/             unit, contract, and integration tests
 docs/superpowers/    approved specifications and implementation plans
