@@ -105,4 +105,21 @@ MIGRATIONS = (
             ON capability_snapshots(run_id, created_at);
         """,
     ),
+    Migration(
+        version=5,
+        sql="""
+        CREATE TABLE artifacts (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            name TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            relative_path TEXT NOT NULL,
+            validation TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_artifacts_run ON artifacts(run_id, created_at, id);
+        """,
+    ),
 )
