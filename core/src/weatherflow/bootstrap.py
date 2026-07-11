@@ -202,7 +202,17 @@ class RuntimeContainer:
                 status=LoopStatus.SUCCEEDED,
                 result_summary=current.result_summary,
             )
-        outcome = await self.loop.run(
+        outcome = await self.resume_run(run.id)
+        return run, outcome
+
+    async def resume_run(self, run_id: str) -> LoopOutcome:
+        run = await self.runs.get(run_id)
+        if run is None:
+            raise LookupError(run_id)
+        workspace = await self.workspaces.get(run.workspace_id)
+        if workspace is None:
+            raise LookupError(run.workspace_id)
+        return await self.loop.run(
             run_id=run.id,
             workspace=workspace,
             agent=AgentDefinition(
@@ -210,4 +220,3 @@ class RuntimeContainer:
                 system_prompt="Complete the user's goal with minimum added burden.",
             ),
         )
-        return run, outcome

@@ -54,6 +54,17 @@ class ApprovalRepository:
         async with self.database.connect() as connection:
             return await self.get_by_action_id_in(connection, action_id)
 
+    async def list_all(self, *, status: ApprovalStatus | None = None) -> list[Approval]:
+        query = "SELECT * FROM approvals"
+        parameters: tuple[str, ...] = ()
+        if status is not None:
+            query += " WHERE status = ?"
+            parameters = (status.value,)
+        query += " ORDER BY requested_at, id"
+        async with self.database.connect() as connection:
+            rows = await (await connection.execute(query, parameters)).fetchall()
+        return [self._from_row(row) for row in rows]
+
     async def get_by_action_id_in(
         self, connection: aiosqlite.Connection, action_id: str
     ) -> Approval | None:
