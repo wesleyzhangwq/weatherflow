@@ -161,4 +161,46 @@ MIGRATIONS = (
         );
         """,
     ),
+    Migration(
+        version=9,
+        sql="""
+        CREATE TABLE episodic_memories (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+            summary TEXT NOT NULL,
+            source_event_ids TEXT NOT NULL,
+            tags TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_episodic_memories_workspace
+            ON episodic_memories(workspace_id, created_at, id);
+
+        CREATE TABLE profile_assertions (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+            claim TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            status TEXT NOT NULL,
+            evidence_event_ids TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            last_confirmed_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_profile_assertions_workspace_status
+            ON profile_assertions(workspace_id, status, updated_at, id);
+
+        CREATE TABLE memory_search_index (
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+            entry_kind TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            terms TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(entry_kind, entry_id)
+        );
+        CREATE INDEX idx_memory_search_index_workspace
+            ON memory_search_index(workspace_id, entry_kind, entry_id);
+        """,
+    ),
 )

@@ -22,20 +22,24 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
                 "SELECT name FROM sqlite_master "
                 "WHERE type = 'table' AND name IN "
                 "('events', 'actions', 'approvals', 'capability_snapshots', "
-                "'artifacts', 'checkpoints', 'workspaces', 'rhythm_snapshots') "
+                "'artifacts', 'checkpoints', 'workspaces', 'rhythm_snapshots', "
+                "'episodic_memories', 'profile_assertions', 'memory_search_index') "
                 "ORDER BY name"
             )
         ).fetchall()
 
     assert journal_mode == ("wal",)
-    assert migration == (8,)
+    assert migration == (9,)
     assert tables == [
         ("actions",),
         ("approvals",),
         ("artifacts",),
         ("capability_snapshots",),
         ("checkpoints",),
+        ("episodic_memories",),
         ("events",),
+        ("memory_search_index",),
+        ("profile_assertions",),
         ("rhythm_snapshots",),
         ("workspaces",),
     ]
@@ -62,4 +66,4 @@ async def test_initialize_is_idempotent(tmp_path: Path) -> None:
             await connection.execute("SELECT COUNT(*) FROM schema_migrations")
         ).fetchone()
 
-    assert tuple(count) == (8,)
+    assert tuple(count) == (9,)

@@ -20,9 +20,9 @@
 
 ### P4c: Personal Operations and memory completion
 
-- [ ] Complete deterministic local task planning, meeting preparation, and rhythm-aware schedule proposal artifacts; Calendar writes remain approved external Actions.
-- [ ] Add source-linked episodic memory and editable profile assertions, with a rebuildable derived search index and no independent truth store.
-- [ ] Feed bounded relevant memory into model context without exposing secrets or allowing memory to widen authority.
+- [x] Complete deterministic local task planning, meeting preparation, and rhythm-aware schedule proposal artifacts; Calendar writes remain approved external Actions.
+- [x] Add source-linked episodic memory and editable profile assertions, with a rebuildable derived search index and no independent truth store.
+- [x] Feed bounded relevant memory into model context without exposing secrets or allowing memory to widen authority.
 
 ### P4d: Diagnostics, privacy, reliability, and onboarding
 
