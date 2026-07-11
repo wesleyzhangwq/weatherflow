@@ -12,6 +12,12 @@ from weatherflow.trust.approval_repository import (
     ApprovalVersionConflict,
     DuplicateApprovalError,
 )
+from weatherflow.trust.coordinator import (
+    ApprovalBundle,
+    ApprovalCoordinator,
+    ApprovalPolicyError,
+    ApprovalStateError,
+)
 from weatherflow.trust.models import (
     Action,
     ActionStatus,
@@ -29,9 +35,13 @@ __all__ = [
     "ActionStatus",
     "ActionVersionConflict",
     "Approval",
+    "ApprovalBundle",
+    "ApprovalCoordinator",
     "ApprovalNotFoundError",
+    "ApprovalPolicyError",
     "ApprovalRepository",
     "ApprovalStatus",
+    "ApprovalStateError",
     "ApprovalVersionConflict",
     "DecisionKind",
     "DuplicateActionError",
