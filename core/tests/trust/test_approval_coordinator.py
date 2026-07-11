@@ -1,13 +1,15 @@
 from pathlib import Path
 
+import aiosqlite
 import pytest
 
 from weatherflow.capabilities import ToolEffect, ToolSpec
-from weatherflow.events import EventLedger
+from weatherflow.events import Event, EventLedger
 from weatherflow.runs import RunCoordinator, RunRepository, RunStatus
 from weatherflow.storage import Database
 from weatherflow.trust import (
     ActionRepository,
+    ActionStatus,
     ApprovalCoordinator,
     ApprovalPolicyError,
     ApprovalRepository,
@@ -145,3 +147,108 @@ async def test_non_approval_policy_decision_changes_nothing(
     assert stored is not None
     assert stored.status is RunStatus.RUNNING
     assert await ledger.list_correlation(run_id) == before
+
+
+async def propose_release(tmp_path: Path):
+    coordinator, ledger, runs, workspace, run_id = await setup_coordinator(tmp_path)
+    bundle = await coordinator.propose(
+        run_id=run_id,
+        expected_run_version=2,
+        tool=release_tool(),
+        workspace=workspace,
+        arguments={"tag": "v3.0.0"},
+        idempotency_key="run-1:release-v3",
+        preview={"summary": "Create release v3.0.0"},
+    )
+    return coordinator, ledger, runs, bundle
+
+
+async def test_approve_resumes_run_without_executing_action(tmp_path: Path) -> None:
+    coordinator, _, _, proposed = await propose_release(tmp_path)
+
+    decided = await coordinator.decide(
+        approval_id=proposed.approval.id,
+        expected_version=0,
+        approved=True,
+        decided_by="user",
+        rationale="Ship it",
+    )
+
+    assert decided.approval.status is ApprovalStatus.APPROVED
+    assert decided.action.status is ActionStatus.APPROVED
+    assert decided.run.status is RunStatus.RUNNING
+    assert decided.action.status is not ActionStatus.EXECUTING
+
+    repeated = await coordinator.decide(
+        approval_id=proposed.approval.id,
+        expected_version=0,
+        approved=True,
+        decided_by="user",
+        rationale="retry",
+    )
+    assert repeated == decided
+
+
+async def test_deny_resumes_run_with_terminal_action(tmp_path: Path) -> None:
+    coordinator, _, _, proposed = await propose_release(tmp_path)
+
+    decided = await coordinator.decide(
+        approval_id=proposed.approval.id,
+        expected_version=0,
+        approved=False,
+        decided_by="user",
+        rationale="Not now",
+    )
+
+    assert decided.approval.status is ApprovalStatus.DENIED
+    assert decided.action.status is ActionStatus.DENIED
+    assert decided.run.status is RunStatus.RUNNING
+
+
+async def test_expiry_cancels_action_and_suspends_run(tmp_path: Path) -> None:
+    coordinator, _, _, proposed = await propose_release(tmp_path)
+
+    expired = await coordinator.expire(
+        approval_id=proposed.approval.id,
+        expected_version=0,
+    )
+
+    assert expired.approval.status is ApprovalStatus.EXPIRED
+    assert expired.action.status is ActionStatus.CANCELLED
+    assert expired.run.status is RunStatus.PAUSED
+
+
+class FailingLedger(EventLedger):
+    async def append_in(self, connection: aiosqlite.Connection, event: Event) -> None:
+        raise RuntimeError("ledger failed")
+
+
+async def test_decision_audit_failure_rolls_back_every_record(tmp_path: Path) -> None:
+    coordinator, ledger, runs, proposed = await propose_release(tmp_path)
+    failing_ledger = FailingLedger(coordinator.database)
+    failing = ApprovalCoordinator(
+        database=coordinator.database,
+        actions=coordinator.actions,
+        approvals=coordinator.approvals,
+        runs=runs,
+        run_coordinator=RunCoordinator(coordinator.database, runs, failing_ledger),
+        ledger=failing_ledger,
+        policy=coordinator.policy,
+    )
+    before = await ledger.list_correlation(proposed.run.id)
+
+    with pytest.raises(RuntimeError, match="ledger failed"):
+        await failing.decide(
+            approval_id=proposed.approval.id,
+            expected_version=0,
+            approved=True,
+            decided_by="user",
+        )
+
+    action = await coordinator.actions.get(proposed.action.id)
+    approval = await coordinator.approvals.get(proposed.approval.id)
+    run = await runs.get(proposed.run.id)
+    assert action == proposed.action
+    assert approval == proposed.approval
+    assert run == proposed.run
+    assert await ledger.list_correlation(proposed.run.id) == before

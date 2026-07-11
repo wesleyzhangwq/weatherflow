@@ -13,6 +13,7 @@ from weatherflow.trust.approval_repository import (
     DuplicateApprovalError,
 )
 from weatherflow.trust.coordinator import (
+    ApprovalAlreadyDecided,
     ApprovalBundle,
     ApprovalCoordinator,
     ApprovalPolicyError,
@@ -35,6 +36,7 @@ __all__ = [
     "ActionStatus",
     "ActionVersionConflict",
     "Approval",
+    "ApprovalAlreadyDecided",
     "ApprovalBundle",
     "ApprovalCoordinator",
     "ApprovalNotFoundError",
