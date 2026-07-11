@@ -1,9 +1,16 @@
 from pathlib import Path
 
 from weatherflow.bootstrap import RuntimeContainer
+from weatherflow.capabilities import CapabilityCatalog, ToolEffect, ToolSpec
 from weatherflow.config import Settings
 from weatherflow.runs import RunStatus
-from weatherflow.runtime import LoopStatus
+from weatherflow.runtime import (
+    FinalTurn,
+    LoopStatus,
+    ToolCallTurn,
+    ToolExecutionResult,
+)
+from weatherflow.workspaces import Workspace
 
 
 async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Path) -> None:
@@ -47,3 +54,79 @@ async def test_submit_run_is_idempotent(tmp_path: Path) -> None:
 
     assert repeated == first
     assert outcome is None
+
+
+class OneTurnModel:
+    def __init__(self, turn):
+        self.turn = turn
+        self.calls = 0
+
+    async def complete(self, request):
+        self.calls += 1
+        return self.turn
+
+
+class CountingExecutor:
+    def __init__(self):
+        self.calls = 0
+
+    async def execute(self, tool, arguments, context):
+        self.calls += 1
+        return ToolExecutionResult(output={"status": "shipped"})
+
+
+async def test_restart_preserves_pending_turn_and_resumes_after_approval(
+    tmp_path: Path,
+) -> None:
+    tool = ToolSpec(
+        tool_id="github.create_release",
+        description="Create release",
+        input_schema={},
+        output_schema={},
+        effect=ToolEffect.EXTERNAL_WRITE,
+        required_scopes=frozenset({"github:write"}),
+        source="test",
+        source_version="1",
+    )
+    first_model = OneTurnModel(
+        ToolCallTurn(call_id="release-v3", tool_id=tool.tool_id, arguments={})
+    )
+    first = await RuntimeContainer.create(
+        Settings(data_dir=tmp_path),
+        model=first_model,
+        catalog=CapabilityCatalog([tool]),
+    )
+    workspace = Workspace.new(
+        name="Release",
+        action_roots=[tmp_path / "project"],
+        internal_root=tmp_path / "release-internal",
+        artifact_root=tmp_path / "release-artifacts",
+        granted_scopes={"github:write"},
+    )
+    await first.workspaces.create(workspace)
+    run, waiting = await first.submit_run(
+        user_intent="Ship release",
+        workspace_id=workspace.id,
+    )
+    assert waiting is not None and waiting.approval_id is not None
+
+    second_model = OneTurnModel(FinalTurn(content="Release shipped"))
+    rebuilt = await RuntimeContainer.create(
+        Settings(data_dir=tmp_path),
+        model=second_model,
+        catalog=CapabilityCatalog([tool]),
+    )
+    executor = CountingExecutor()
+    rebuilt.executors.register(tool.tool_id, executor)
+    await rebuilt.approval_coordinator.decide(
+        approval_id=waiting.approval_id,
+        expected_version=0,
+        approved=True,
+        decided_by="user",
+    )
+    outcome = await rebuilt.resume_run(run.id)
+
+    assert outcome.status is LoopStatus.SUCCEEDED
+    assert first_model.calls == 1
+    assert second_model.calls == 1
+    assert executor.calls == 1

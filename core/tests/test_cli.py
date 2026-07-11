@@ -1,3 +1,5 @@
+import json
+
 from weatherflow import __version__
 from weatherflow.cli import build_parser, main
 
@@ -38,3 +40,37 @@ def test_parser_requires_a_command_without_version() -> None:
     assert args.command == "serve"
     assert args.port == 9000
     assert args.reload is True
+
+
+def test_run_and_status_commands_use_durable_data_dir(tmp_path, capsys) -> None:
+    exit_code = main(
+        [
+            "--data-dir",
+            str(tmp_path),
+            "run",
+            "Explain WeatherFlow",
+            "--client-request-id",
+            "request-1",
+        ]
+    )
+    created = json.loads(capsys.readouterr().out)
+
+    status_code = main(["--data-dir", str(tmp_path), "status", created["id"]])
+    stored = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert status_code == 0
+    assert stored["status"] == "succeeded"
+    assert stored["result_summary"] == "Echo: Explain WeatherFlow"
+
+
+def test_timeline_command_outputs_ordered_events(tmp_path, capsys) -> None:
+    main(["--data-dir", str(tmp_path), "run", "Hello"])
+    run = json.loads(capsys.readouterr().out)
+
+    exit_code = main(["--data-dir", str(tmp_path), "timeline", run["id"]])
+    timeline = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert timeline[0]["type"] == "run.created"
+    assert timeline[-1]["type"] == "run.status_changed"
