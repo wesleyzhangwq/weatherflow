@@ -1,0 +1,18 @@
+[package]
+name = "weatherflow-desktop"
+version = "3.0.0-alpha.1"
+description = "WeatherFlow rhythm-aware desktop shell"
+edition = "2021"
+
+[lib]
+name = "weatherflow_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
