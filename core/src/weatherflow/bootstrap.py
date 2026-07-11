@@ -8,6 +8,22 @@ from weatherflow.capabilities import (
     CapabilitySnapshotCoordinator,
     CapabilitySnapshotRepository,
 )
+from weatherflow.capabilities.builtin import (
+    DEVELOPER_PACK,
+    CalendarExecutor,
+    CalendarProvider,
+    DeveloperExecutor,
+    GitHubExecutor,
+    GitHubProvider,
+    ResearchExecutor,
+    ResearchProvider,
+    builtin_tool_specs,
+    calendar_tool_specs,
+    developer_tool_specs,
+    github_tool_specs,
+    research_tool_specs,
+    tool_ids_for_installed_packs,
+)
 from weatherflow.config import Settings
 from weatherflow.events import EventLedger
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
@@ -64,6 +80,7 @@ class RuntimeContainer:
     executors: ToolExecutorRegistry
     action_execution: ActionExecutionCoordinator
     loop: SharedTurnLoop
+    use_builtin_pack_resolution: bool
 
     @classmethod
     async def create(
@@ -72,6 +89,9 @@ class RuntimeContainer:
         *,
         model: ModelAdapter | None = None,
         catalog: CapabilityCatalog | None = None,
+        research_provider: ResearchProvider | None = None,
+        calendar_provider: CalendarProvider | None = None,
+        github_provider: GitHubProvider | None = None,
     ) -> "RuntimeContainer":
         database = Database(settings.data_dir / "weatherflow.db")
         await database.initialize()
@@ -85,7 +105,12 @@ class RuntimeContainer:
                 action_roots=[settings.data_dir / "workspace"],
                 internal_root=settings.data_dir / "internal",
                 artifact_root=settings.data_dir / "artifacts",
-                granted_scopes={"workspace:write"},
+                granted_scopes={
+                    "workspace:read",
+                    "workspace:write",
+                    "workspace:execute",
+                },
+                installed_packs={DEVELOPER_PACK},
             )
             await workspaces.create(default_workspace)
 
@@ -126,9 +151,36 @@ class RuntimeContainer:
             snapshots=rhythm_snapshots,
             estimator=RhythmEstimator(),
         )
-        resolved_catalog = catalog or CapabilityCatalog()
+        use_builtin_pack_resolution = catalog is None
+        resolved_catalog = catalog or CapabilityCatalog(
+            builtin_tool_specs(
+                research_available=research_provider is not None,
+                calendar_available=calendar_provider is not None,
+                github_available=github_provider is not None,
+            )
+        )
         resolved_model = model or EchoModelAdapter()
         executors = ToolExecutorRegistry()
+        if use_builtin_pack_resolution:
+            developer_executor = DeveloperExecutor(workspaces)
+            for tool in developer_tool_specs():
+                executors.register(tool.tool_id, developer_executor)
+            if research_provider is not None:
+                research_executor = ResearchExecutor(
+                    provider=research_provider,
+                    workspaces=workspaces,
+                    artifacts=artifact_store,
+                )
+                for tool in research_tool_specs():
+                    executors.register(tool.tool_id, research_executor)
+            if calendar_provider is not None:
+                calendar_executor = CalendarExecutor(calendar_provider)
+                for tool in calendar_tool_specs():
+                    executors.register(tool.tool_id, calendar_executor)
+            if github_provider is not None:
+                github_executor = GitHubExecutor(github_provider)
+                for tool in github_tool_specs():
+                    executors.register(tool.tool_id, github_executor)
         action_execution = ActionExecutionCoordinator(
             database=database,
             actions=actions,
@@ -173,6 +225,7 @@ class RuntimeContainer:
             executors=executors,
             action_execution=action_execution,
             loop=loop,
+            use_builtin_pack_resolution=use_builtin_pack_resolution,
         )
 
     async def submit_run(
@@ -190,6 +243,11 @@ class RuntimeContainer:
         )
         if workspace is None:
             raise LookupError(workspace_id)
+        requested_tool_ids = (
+            tool_ids_for_installed_packs(workspace.installed_packs)
+            if self.use_builtin_pack_resolution
+            else {tool.tool_id for tool in self.catalog.all()}
+        )
         run = await self.run_coordinator.create_run(
             client_request_id=client_request_id or str(uuid4()),
             user_intent=user_intent,
@@ -200,9 +258,9 @@ class RuntimeContainer:
                 run_id=run.id,
                 expected_run_version=run.version,
                 catalog=self.catalog,
-                catalog_revision="runtime-v1",
+                catalog_revision="weatherflow-v3-p3a",
                 workspace=workspace,
-                requested_tool_ids={tool.tool_id for tool in self.catalog.all()},
+                requested_tool_ids=requested_tool_ids,
             )
             run = frozen.run
         if not execute:

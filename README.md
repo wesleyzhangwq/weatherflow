@@ -35,11 +35,17 @@ fresh desktop snapshot instead of silently losing state.
 P2c/P2d add the tested Companion, pure-input Capsule, explicit Cockpit, thin
 Tauri window shell, authenticated sidecar supervision, bounded daemon recovery,
 reduced-motion UI, and privacy-safe macOS activity aggregation.
+P3a adds first-party Developer, Research, Calendar, and GitHub release
+capabilities. Workspace-installed Packs and granted scopes define the smallest
+per-Run frozen tool surface; unavailable providers are hidden, local mutations
+remain root-bounded, and external mutations execute only through durable
+approval Actions.
 
 ## Read first
 
 - `weatherflow-architecture-v3.md`
 - `docs/superpowers/specs/2026-07-12-weatherflow-v3-design.md`
+- `docs/first-party-capabilities.md`
 
 WeatherFlow v2 is preserved in Git history and the local tag
 `weatherflow-v2-final`; it is not a compatibility target.

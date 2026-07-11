@@ -1,7 +1,13 @@
 from pathlib import Path
 
+import pytest
+
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.capabilities import CapabilityCatalog, ToolEffect, ToolSpec
+from weatherflow.capabilities.builtin import (
+    ResearchSource,
+    UnknownCapabilityPackError,
+)
 from weatherflow.config import Settings
 from weatherflow.runs import RunStatus
 from weatherflow.runtime import (
@@ -34,7 +40,13 @@ async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Pat
 
     assert stored_workspace == workspace
     assert stored_run is not None and stored_run.status is RunStatus.SUCCEEDED
-    assert snapshot is not None and snapshot.tools == ()
+    assert snapshot is not None
+    assert {tool.tool_id for tool in snapshot.tools} == {
+        "developer.git_status",
+        "developer.read_file",
+        "developer.run_command",
+        "developer.write_file",
+    }
     assert checkpoint is not None and checkpoint.state == {"result_committed": True}
 
 
@@ -130,3 +142,83 @@ async def test_restart_preserves_pending_turn_and_resumes_after_approval(
     assert first_model.calls == 1
     assert second_model.calls == 1
     assert executor.calls == 1
+
+
+class EmptyResearchProvider:
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int,
+    ) -> tuple[ResearchSource, ...]:
+        return ()
+
+
+async def test_installed_packs_define_the_frozen_tool_surface(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(
+        Settings(data_dir=tmp_path),
+        research_provider=EmptyResearchProvider(),
+    )
+    workspace = Workspace.new(
+        name="Research only",
+        action_roots=[tmp_path / "research-project"],
+        internal_root=tmp_path / "research-internal",
+        artifact_root=tmp_path / "research-artifacts",
+        granted_scopes={"network:read"},
+        installed_packs={"research"},
+    )
+    await container.workspaces.create(workspace)
+
+    run, _ = await container.submit_run(
+        user_intent="Research release requirements",
+        workspace_id=workspace.id,
+        execute=False,
+    )
+    snapshot = await container.snapshots.get_by_run_id(run.id)
+
+    assert snapshot is not None
+    assert [tool.tool_id for tool in snapshot.tools] == ["research.gather"]
+    assert container.executors.get("research.gather") is not None
+
+
+async def test_unavailable_pack_provider_is_hidden_fail_closed(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    workspace = Workspace.new(
+        name="Unavailable research",
+        action_roots=[tmp_path / "research-project"],
+        internal_root=tmp_path / "research-internal",
+        artifact_root=tmp_path / "research-artifacts",
+        granted_scopes={"network:read"},
+        installed_packs={"research"},
+    )
+    await container.workspaces.create(workspace)
+
+    run, _ = await container.submit_run(
+        user_intent="Research release requirements",
+        workspace_id=workspace.id,
+        execute=False,
+    )
+    snapshot = await container.snapshots.get_by_run_id(run.id)
+
+    assert snapshot is not None and snapshot.tools == ()
+
+
+async def test_unknown_pack_fails_before_run_creation(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    workspace = Workspace.new(
+        name="Unknown pack",
+        action_roots=[tmp_path / "project"],
+        internal_root=tmp_path / "internal",
+        artifact_root=tmp_path / "artifacts",
+        installed_packs={"untrusted-pack"},
+    )
+    await container.workspaces.create(workspace)
+
+    with pytest.raises(UnknownCapabilityPackError, match="untrusted-pack"):
+        await container.submit_run(
+            user_intent="Use the unknown pack",
+            workspace_id=workspace.id,
+            execute=False,
+        )
+
+    assert await container.runs.list_recent() == []

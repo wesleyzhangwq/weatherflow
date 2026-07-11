@@ -46,7 +46,7 @@ core/
   src/weatherflow/
     api/             HTTP adapter
     artifacts/       content-addressed blobs and immutable provenance
-    capabilities/    ToolSpec catalog, resolver, immutable Run snapshots
+    capabilities/    ToolSpec catalog, Pack executors, immutable Run snapshots
     events/          immutable Event envelope and append-only ledger
     runs/            Run model, optimistic repository, sole state coordinator
     rhythm/          signal facts, six-dimensional state, policy, weather
