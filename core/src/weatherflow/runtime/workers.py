@@ -48,6 +48,7 @@ def builtin_worker_definitions() -> dict[str, AgentDefinition]:
                 {
                     "developer.git_status",
                     "developer.read_file",
+                    "developer.write_artifact",
                     "developer.write_file",
                 }
             ),
@@ -62,6 +63,7 @@ def builtin_worker_definitions() -> dict[str, AgentDefinition]:
                     "developer.git_status",
                     "developer.read_file",
                     "developer.run_command",
+                    "developer.write_artifact",
                 }
             ),
             max_steps=12,

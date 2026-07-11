@@ -45,6 +45,7 @@ async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Pat
         "developer.git_status",
         "developer.read_file",
         "developer.run_command",
+        "developer.write_artifact",
         "developer.write_file",
     }
     assert checkpoint is not None and checkpoint.state["result_committed"] is True

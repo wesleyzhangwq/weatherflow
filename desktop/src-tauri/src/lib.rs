@@ -5,6 +5,27 @@ use std::sync::Mutex;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+const STARTUP_SURFACE: &str = "companion";
+const SHORTCUT_SURFACE: &str = "capsule";
+
+#[derive(Debug, PartialEq, Eq)]
+struct SurfacePolicy {
+    always_on_top: bool,
+    resizable: bool,
+    skip_taskbar: bool,
+}
+
+impl SurfacePolicy {
+    fn for_surface(surface: &str) -> Self {
+        let ambient = surface != "cockpit";
+        Self {
+            always_on_top: ambient,
+            resizable: !ambient,
+            skip_taskbar: ambient,
+        }
+    }
+}
+
 fn show_or_create(
     app: &tauri::AppHandle,
     label: &str,
@@ -24,6 +45,7 @@ fn show_or_create(
         .expect("daemon state poisoned")
         .bridge
         .clone();
+    let policy = SurfacePolicy::for_surface(surface);
     let initialization_script = format!(
         "window.__WEATHERFLOW_BRIDGE__ = {};",
         serde_json::to_string(&bridge).expect("bridge config must serialize")
@@ -38,9 +60,9 @@ fn show_or_create(
     .inner_size(width, height)
     .decorations(!transparent)
     .transparent(transparent)
-    .always_on_top(surface != "cockpit")
-    .resizable(surface == "cockpit")
-    .skip_taskbar(surface != "cockpit")
+    .always_on_top(policy.always_on_top)
+    .resizable(policy.resizable)
+    .skip_taskbar(policy.skip_taskbar)
     .build()?;
     Ok(())
 }
@@ -70,7 +92,14 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        let _ = show_or_create(app, "capsule", "capsule", 560.0, 82.0, true);
+                        let _ = show_or_create(
+                            app,
+                            SHORTCUT_SURFACE,
+                            SHORTCUT_SURFACE,
+                            560.0,
+                            82.0,
+                            true,
+                        );
                     }
                 })
                 .build(),
@@ -79,7 +108,14 @@ pub fn run() {
             let supervisor =
                 supervisor::DaemonSupervisor::start(app.handle()).map_err(std::io::Error::other)?;
             app.manage(Mutex::new(supervisor));
-            show_or_create(app.handle(), "companion", "companion", 190.0, 190.0, true)?;
+            show_or_create(
+                app.handle(),
+                STARTUP_SURFACE,
+                STARTUP_SURFACE,
+                190.0,
+                190.0,
+                true,
+            )?;
             supervisor::monitor(app.handle().clone());
             app.global_shortcut()
                 .register("CommandOrControl+Shift+Space")?;
@@ -95,4 +131,37 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("WeatherFlow desktop shell failed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SurfacePolicy, SHORTCUT_SURFACE, STARTUP_SURFACE};
+
+    #[test]
+    fn startup_and_shortcut_never_auto_open_cockpit() {
+        assert_eq!(STARTUP_SURFACE, "companion");
+        assert_eq!(SHORTCUT_SURFACE, "capsule");
+        assert_ne!(STARTUP_SURFACE, "cockpit");
+        assert_ne!(SHORTCUT_SURFACE, "cockpit");
+    }
+
+    #[test]
+    fn cockpit_is_explicit_resizable_and_not_ambient() {
+        assert_eq!(
+            SurfacePolicy::for_surface("cockpit"),
+            SurfacePolicy {
+                always_on_top: false,
+                resizable: true,
+                skip_taskbar: false,
+            }
+        );
+        assert_eq!(
+            SurfacePolicy::for_surface("companion"),
+            SurfacePolicy {
+                always_on_top: true,
+                resizable: false,
+                skip_taskbar: true,
+            }
+        );
+    }
 }

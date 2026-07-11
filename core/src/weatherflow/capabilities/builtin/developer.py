@@ -1,11 +1,13 @@
 import asyncio
 import difflib
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from weatherflow.artifacts import ArtifactManifest, ArtifactStore
 from weatherflow.capabilities.models import (
     IdempotencyKind,
     ToolEffect,
@@ -42,6 +44,19 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
             **common,
         ),
         ToolSpec(
+            tool_id="developer.write_artifact",
+            description="Commit a validated content-addressed Run artifact",
+            input_schema={
+                "type": "object",
+                "required": ["name", "media_type", "content"],
+            },
+            output_schema={"type": "object"},
+            effect=ToolEffect.WORKSPACE_WRITE,
+            required_scopes=frozenset({"workspace:write"}),
+            idempotency=IdempotencyKind.KEY,
+            **common,
+        ),
+        ToolSpec(
             tool_id="developer.git_status",
             description="Read porcelain Git status for an authorized Workspace root",
             input_schema={"type": "object"},
@@ -64,8 +79,14 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
 
 
 class DeveloperExecutor:
-    def __init__(self, workspaces: WorkspaceRepository) -> None:
+    def __init__(
+        self,
+        workspaces: WorkspaceRepository,
+        *,
+        artifacts: ArtifactStore | None = None,
+    ) -> None:
         self.workspaces = workspaces
+        self.artifacts = artifacts
 
     async def execute(
         self,
@@ -98,7 +119,55 @@ class DeveloperExecutor:
             cwd_value = str(arguments.get("cwd", workspace.action_roots[0]))
             cwd = await asyncio.to_thread(_resolve_path, workspace, cwd_value)
             return await self._run(argv, cwd, tool.timeout_seconds)
+        if tool.tool_id == "developer.write_artifact":
+            return await self._write_artifact(arguments, context, workspace)
         raise LookupError(tool.tool_id)
+
+    async def _write_artifact(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+        workspace: Workspace,
+    ) -> ToolExecutionResult:
+        if self.artifacts is None:
+            raise RuntimeError("Artifact Store is not configured")
+        name = arguments.get("name")
+        media_type = arguments.get("media_type")
+        content = arguments.get("content")
+        validation = arguments.get("validation", {})
+        if not isinstance(name, str) or not name or len(name) > 255:
+            raise ValueError("name must be a bounded string")
+        if not isinstance(media_type, str) or not media_type or len(media_type) > 200:
+            raise ValueError("media_type must be a bounded string")
+        if not isinstance(content, str):
+            raise ValueError("content must be a string")
+        encoded = content.encode()
+        if len(encoded) > MAX_FILE_BYTES:
+            raise ValueError("artifact exceeds size limit")
+        if not isinstance(validation, dict):
+            raise ValueError("validation must be an object")
+        if len(json.dumps(validation, ensure_ascii=False)) > MAX_OUTPUT_CHARS:
+            raise ValueError("validation exceeds size limit")
+        digest = hashlib.sha256(encoded).hexdigest()
+        existing = next(
+            (
+                manifest
+                for manifest in await self.artifacts.repository.list_run(context.run_id)
+                if manifest.name == name
+                and manifest.digest == digest
+                and manifest.validation == validation
+            ),
+            None,
+        )
+        manifest = existing or await self.artifacts.put_bytes(
+            run_id=context.run_id,
+            workspace=workspace,
+            name=name,
+            media_type=media_type,
+            data=encoded,
+            validation=validation,
+        )
+        return _artifact_result(manifest)
 
     async def _run(self, argv: list[str], cwd: Path, timeout_seconds: int) -> ToolExecutionResult:
         if argv[0] not in ALLOWED_COMMANDS:
@@ -182,3 +251,17 @@ def _write_text(path: Path, content: str) -> dict[str, Any]:
         "diff": diff[:MAX_OUTPUT_CHARS],
         "recovery": {"previous_content_available": before is not None},
     }
+
+
+def _artifact_result(manifest: ArtifactManifest) -> ToolExecutionResult:
+    return ToolExecutionResult(
+        output={
+            "artifact_id": manifest.id,
+            "name": manifest.name,
+            "media_type": manifest.media_type,
+            "digest": manifest.digest,
+            "size_bytes": manifest.size_bytes,
+            "validation": manifest.validation,
+        },
+        artifact_ids=(manifest.id,),
+    )

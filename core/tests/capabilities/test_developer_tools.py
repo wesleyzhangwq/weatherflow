@@ -2,7 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from weatherflow.artifacts import ArtifactRepository, ArtifactStore
 from weatherflow.capabilities.builtin import DeveloperExecutor, developer_tool_specs
+from weatherflow.events import EventLedger
+from weatherflow.runs import Run, RunRepository
 from weatherflow.runtime import ToolExecutionContext
 from weatherflow.storage import Database
 from weatherflow.workspaces import Workspace, WorkspaceRepository
@@ -92,3 +95,51 @@ async def test_command_execution_is_allowlisted_and_bounded(tmp_path: Path) -> N
         await executor.execute(
             spec("developer.run_command"), {"argv": ["sh", "-c", "echo unsafe"]}, context
         )
+
+
+async def test_release_artifact_is_content_addressed_with_validation(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "artifact.db")
+    await database.initialize()
+    workspace = Workspace.new(
+        name="Artifact",
+        action_roots=[tmp_path / "project"],
+        internal_root=tmp_path / "internal",
+        artifact_root=tmp_path / "artifacts",
+        granted_scopes={"workspace:write"},
+    )
+    workspaces = WorkspaceRepository(database)
+    await workspaces.create(workspace)
+    run = Run.new(
+        client_request_id="artifact-request",
+        user_intent="prepare release",
+        workspace_id=workspace.id,
+    )
+    async with database.transaction() as connection:
+        await RunRepository(database).create_in(connection, run)
+    repository = ArtifactRepository(database)
+    executor = DeveloperExecutor(
+        workspaces,
+        artifacts=ArtifactStore(
+            database=database,
+            repository=repository,
+            ledger=EventLedger(database),
+        ),
+    )
+
+    result = await executor.execute(
+        spec("developer.write_artifact"),
+        {
+            "name": "release-checklist.md",
+            "media_type": "text/markdown",
+            "content": "# Release checklist\n- tests pass\n",
+            "validation": {"status": "passed", "checks": 1},
+        },
+        ToolExecutionContext(run_id=run.id, workspace_id=workspace.id),
+    )
+
+    manifest = await repository.get(result.artifact_ids[0])
+    assert manifest is not None
+    assert manifest.validation == {"status": "passed", "checks": 1}
+    assert manifest.digest == result.output["digest"]

@@ -46,7 +46,11 @@ export function Cockpit({ client, snapshot, offline }: CockpitProps) {
           {approvals.filter((item) => item.status === "pending").length === 0 && <p>Nothing needs your attention.</p>}
           {approvals.filter((item) => item.status === "pending").map((approval) => (
             <article className="approval-row" key={approval.id}>
-              <div><strong>Action waiting</strong><small>{approval.action_id}</small></div>
+              <div className="approval-preview">
+                <strong>{approval.tool_id}</strong>
+                <small>{approval.effect} · {approval.action_id}</small>
+                <pre>{JSON.stringify(approval.preview, null, 2)}</pre>
+              </div>
               <div><button onClick={() => void decide(approval, "deny")}>Deny</button><button className="primary" onClick={() => void decide(approval, "approve")}>Approve</button></div>
             </article>
           ))}

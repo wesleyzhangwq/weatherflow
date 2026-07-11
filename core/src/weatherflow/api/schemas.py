@@ -2,8 +2,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from weatherflow.capabilities import ToolEffect
 from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import Run
+from weatherflow.trust import Approval
 
 
 class HealthResponse(BaseModel):
@@ -37,3 +39,9 @@ class DesktopSnapshot(BaseModel):
 
     rhythm: CurrentRhythm
     latest_run: Run | None = None
+
+
+class ApprovalView(Approval):
+    tool_id: str
+    effect: ToolEffect
+    preview: dict

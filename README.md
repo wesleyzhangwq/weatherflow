@@ -44,6 +44,9 @@ P3b adds durable leaf Worker delegation through the same shared turn loop.
 Worker child Runs inherit only a filtered subset of the parent's frozen
 capabilities, high-risk approval effects are excluded, concurrency is capped at
 three, and the parent receives only a compact result plus Artifact references.
+P3c binds immutable Rhythm strategy to Runs and validates the complete
+overloaded-release story with deterministic trajectory, integrated desktop,
+and native macOS shell gates.
 
 ## Read first
 
@@ -51,6 +54,7 @@ three, and the parent receives only a compact result plus Artifact references.
 - `docs/superpowers/specs/2026-07-12-weatherflow-v3-design.md`
 - `docs/first-party-capabilities.md`
 - `docs/worker-delegation.md`
+- `docs/flagship-trajectory.md`
 
 WeatherFlow v2 is preserved in Git history and the local tag
 `weatherflow-v2-final`; it is not a compatibility target.
@@ -66,6 +70,7 @@ WeatherFlow v2 is preserved in Git history and the local tag
 cp .env.example .env
 make install
 make check
+make eval
 make dev
 ```
 

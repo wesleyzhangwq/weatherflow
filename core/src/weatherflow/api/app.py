@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from weatherflow import __version__
 from weatherflow.api.schemas import (
     ApprovalDecisionRequest,
+    ApprovalView,
     DesktopSnapshot,
     HealthResponse,
     RunCreateRequest,
@@ -27,7 +28,6 @@ from weatherflow.events import Event, UnknownEventCursor
 from weatherflow.rhythm import CurrentRhythm, RhythmSignal
 from weatherflow.runs import InvalidTransitionError, Run, RunStatus
 from weatherflow.trust import (
-    Approval,
     ApprovalAlreadyDecided,
     ApprovalBundle,
     ApprovalStatus,
@@ -131,12 +131,28 @@ def create_app(
             )
         return await service.ledger.list_correlation(run_id, limit=1000)
 
-    @app.get("/v1/approvals", response_model=list[Approval])
+    @app.get("/v1/approvals", response_model=list[ApprovalView])
     async def list_approvals(
         approval_status: ApprovalStatus | None = None,
-    ) -> list[Approval]:
+    ) -> list[ApprovalView]:
         service = await runtime()
-        return await service.approvals.list_all(status=approval_status)
+        approvals = await service.approvals.list_all(status=approval_status)
+        views: list[ApprovalView] = []
+        for approval in approvals:
+            action = await service.actions.get(approval.action_id)
+            if action is None:
+                raise RuntimeError(f"approval {approval.id} has no Action")
+            views.append(
+                ApprovalView.model_validate(
+                    {
+                        **approval.model_dump(mode="json"),
+                        "tool_id": action.tool_id,
+                        "effect": action.effect,
+                        "preview": action.preview,
+                    }
+                )
+            )
+        return views
 
     @app.post("/v1/approvals/{approval_id}/decision", response_model=ApprovalBundle)
     async def decide_approval(approval_id: str, request: ApprovalDecisionRequest) -> ApprovalBundle:
@@ -188,7 +204,7 @@ def create_app(
                 status_code=404,
                 detail={"code": "run_not_found", "run_id": run_id},
             )
-        return await service.artifacts.list_run(run_id)
+        return await service.run_artifacts(run_id)
 
     @app.get("/v1/artifacts/{artifact_id}/content")
     async def get_artifact_content(artifact_id: str) -> Response:

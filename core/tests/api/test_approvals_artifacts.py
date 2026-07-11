@@ -88,6 +88,12 @@ async def test_approval_decision_resumes_run_and_artifact_is_readable(
         timeline = await client.get(f"/v1/runs/{run.id}/timeline")
 
     assert pending.status_code == 200 and len(pending.json()) == 1
+    assert pending.json()[0]["tool_id"] == "github.create_release"
+    assert pending.json()[0]["effect"] == "external_write"
+    assert pending.json()[0]["preview"] == {
+        "tool_id": "github.create_release",
+        "arguments": {"tag": "v3.0.0"},
+    }
     assert decided.status_code == 200
     assert decided.json()["action"]["status"] == "succeeded"
     assert decided.json()["run"]["status"] == "succeeded"

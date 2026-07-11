@@ -12,18 +12,18 @@
 
 ### Task 2: Deterministic trajectory evaluator
 
-- [ ] Rebuild `core/eval` with recorded model turns and fixture providers for the flagship story.
-- [ ] Execute repository inspection/research/validation Workers, local release preparation, immutable Artifact creation, and a GitHub release Action that parks for approval.
-- [ ] Approve and resume, prove exactly-once external mutation and checkpoint reuse, then evaluate deterministic invariants for authority, leaf Workers, provenance, no false success, and terminal evidence.
+- [x] Rebuild `core/eval` with recorded model turns and fixture providers for the flagship story.
+- [x] Execute repository inspection/research/validation Workers, local release preparation, immutable Artifact creation, and a GitHub release Action that parks for approval.
+- [x] Approve and resume, prove exactly-once external mutation and checkpoint reuse, then evaluate deterministic invariants for authority, leaf Workers, provenance, no false success, and terminal evidence.
 
 ### Task 3: macOS desktop story contract
 
-- [ ] Add an integrated desktop test for storm weather, pure-input submission and immediate Capsule close, separate task ring, silent amber approval, explicit Cockpit opening, structured approval, timeline, and artifacts.
-- [ ] Add Rust/macOS shell assertions for explicit Cockpit opening, global shortcut Capsule activation, thin-shell state separation, and reduced-motion/sensor fallback where feasible without signing credentials.
+- [x] Add an integrated desktop test for storm weather, pure-input submission and immediate Capsule close, separate task ring, silent amber approval, explicit Cockpit opening, structured approval, timeline, and artifacts.
+- [x] Add Rust/macOS shell assertions for explicit Cockpit opening, global shortcut Capsule activation, thin-shell state separation, and reduced-motion/sensor fallback where feasible without signing credentials.
 
 ### Task 4: P3 acceptance audit
 
-- [ ] Document and run the flagship evaluator from the root gate, update phase status, and perform a requirement-by-requirement P3 audit.
-- [ ] Commit `test: validate WeatherFlow flagship release trajectory`.
+- [x] Document and run the flagship evaluator from the root gate, update phase status, and perform a requirement-by-requirement P3 audit.
+- [x] Commit `test: validate WeatherFlow flagship release trajectory`.
 
 P3c ends P3. P4 generalizes packaging, Skills, Agent Definitions, MCP, Personal Operations, diagnostics, retention, onboarding, signing, and release validation.

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from uuid import uuid4
 
-from weatherflow.artifacts import ArtifactRepository, ArtifactStore
+from weatherflow.artifacts import ArtifactManifest, ArtifactRepository, ArtifactStore
 from weatherflow.capabilities import (
     CapabilityCatalog,
     CapabilityResolver,
@@ -168,7 +168,7 @@ class RuntimeContainer:
         resolved_model = model or EchoModelAdapter()
         executors = ToolExecutorRegistry()
         if use_builtin_pack_resolution:
-            developer_executor = DeveloperExecutor(workspaces)
+            developer_executor = DeveloperExecutor(workspaces, artifacts=artifact_store)
             for tool in developer_tool_specs():
                 executors.register(tool.tool_id, developer_executor)
             if research_provider is not None:
@@ -333,6 +333,24 @@ class RuntimeContainer:
                 step_count=final_checkpoint.step_index,
             )
         return outcome
+
+    async def run_artifacts(self, run_id: str) -> list[ArtifactManifest]:
+        run = await self.runs.get(run_id)
+        if run is None:
+            raise LookupError(run_id)
+        timeline = await self.ledger.list_correlation(run_id, limit=1000)
+        worker_run_ids = tuple(
+            dict.fromkeys(
+                str(event.payload["worker_run_id"])
+                for event in timeline
+                if event.type == "worker.completed"
+            )
+        )
+        return [
+            artifact
+            for related_run_id in (run_id, *worker_run_ids)
+            for artifact in await self.artifacts.list_run(related_run_id)
+        ]
 
     async def _bind_rhythm_context(self, run: Run, workspace: Workspace) -> Run:
         current = await self.rhythm.current(workspace.id)
