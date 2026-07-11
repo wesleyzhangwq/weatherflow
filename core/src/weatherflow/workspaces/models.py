@@ -1,0 +1,71 @@
+from collections.abc import Iterable
+from enum import StrEnum
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+from ulid import ULID
+
+from weatherflow.runs import RunBudget
+
+
+class NetworkPolicy(StrEnum):
+    OFFLINE = "offline"
+    DECLARED = "declared"
+    OPEN = "open"
+
+
+class Workspace(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str = Field(min_length=1)
+    action_roots: tuple[str, ...]
+    internal_root: str
+    artifact_root: str
+    granted_scopes: frozenset[str] = frozenset()
+    network_policy: NetworkPolicy = NetworkPolicy.DECLARED
+    installed_packs: tuple[str, ...] = ()
+    agent_definitions: tuple[str, ...] = ()
+    default_budget: RunBudget = RunBudget()
+    policy_profile: str = "supervised"
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        name: str,
+        action_roots: Iterable[Path | str],
+        internal_root: Path | str,
+        artifact_root: Path | str,
+        granted_scopes: Iterable[str] = (),
+        network_policy: NetworkPolicy = NetworkPolicy.DECLARED,
+        installed_packs: Iterable[str] = (),
+        agent_definitions: Iterable[str] = (),
+        default_budget: RunBudget | None = None,
+        policy_profile: str = "supervised",
+    ) -> "Workspace":
+        values = {
+            "id": str(ULID()),
+            "name": name,
+            "action_roots": tuple(str(Path(path).resolve()) for path in action_roots),
+            "internal_root": str(Path(internal_root).resolve()),
+            "artifact_root": str(Path(artifact_root).resolve()),
+            "granted_scopes": frozenset(granted_scopes),
+            "network_policy": network_policy,
+            "installed_packs": tuple(installed_packs),
+            "agent_definitions": tuple(agent_definitions),
+            "policy_profile": policy_profile,
+        }
+        if default_budget is not None:
+            values["default_budget"] = default_budget
+        return cls.model_validate(values)
+
+    def allows_action_path(self, path: Path | str) -> bool:
+        candidate = Path(path).resolve()
+        internal_root = Path(self.internal_root)
+        if candidate == internal_root or candidate.is_relative_to(internal_root):
+            return False
+        return any(
+            candidate == Path(root) or candidate.is_relative_to(Path(root))
+            for root in self.action_roots
+        )
