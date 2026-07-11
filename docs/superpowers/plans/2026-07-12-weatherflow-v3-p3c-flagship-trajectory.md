@@ -6,9 +6,9 @@
 
 ### Task 1: Bind Rhythm strategy to each Run
 
-- [ ] Attach the current immutable HumanStateSnapshot ID and serialized RhythmPolicy to Run creation without allowing policy to alter the explicit user goal.
-- [ ] Include compact strategy guidance in Orchestrator context and append terminal task behavior as new Rhythm evidence.
-- [ ] Test the high-load policy path, stale fallback, goal preservation, and append-only evidence.
+- [x] Attach the current immutable HumanStateSnapshot ID and serialized RhythmPolicy to Run creation without allowing policy to alter the explicit user goal.
+- [x] Include compact strategy guidance in Orchestrator context and append terminal task behavior as new Rhythm evidence.
+- [x] Test the high-load policy path, stale fallback, goal preservation, and append-only evidence.
 
 ### Task 2: Deterministic trajectory evaluator
 

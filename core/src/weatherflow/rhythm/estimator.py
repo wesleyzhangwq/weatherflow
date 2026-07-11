@@ -10,6 +10,7 @@ from weatherflow.rhythm.models import (
     Freshness,
     HumanStateSnapshot,
     RhythmSignal,
+    TaskBehaviorSignal,
     Trend,
 )
 
@@ -54,6 +55,9 @@ class RhythmEstimator:
             elif isinstance(signal, CheckInSignal):
                 self._apply_text(values, signal.text, correction=False)
                 confidence = max(confidence, 0.82)
+            elif isinstance(signal, TaskBehaviorSignal):
+                self._apply_task_behavior(values, signal)
+                confidence = max(confidence, 0.45)
 
         latest = max(observed_times, default=observed_now)
         age = observed_now - latest
@@ -131,6 +135,18 @@ class RhythmEstimator:
         if any(word in lowered for word in ("exhausted", "tired", "疲惫")):
             values[DimensionName.ENERGY] = 0.25
             values[DimensionName.RECOVERY_NEED] = 0.85
+
+    @staticmethod
+    def _apply_task_behavior(
+        values: dict[DimensionName, float], signal: TaskBehaviorSignal
+    ) -> None:
+        if signal.outcome == "succeeded":
+            values[DimensionName.MOMENTUM] += 0.05
+            values[DimensionName.FRICTION] -= 0.05
+        elif signal.outcome == "failed":
+            values[DimensionName.FRICTION] += 0.08
+        else:
+            values[DimensionName.FRICTION] += 0.04
 
     @staticmethod
     def _summary(

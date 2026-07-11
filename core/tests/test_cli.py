@@ -73,4 +73,11 @@ def test_timeline_command_outputs_ordered_events(tmp_path, capsys) -> None:
 
     assert exit_code == 0
     assert timeline[0]["type"] == "run.created"
-    assert timeline[-1]["type"] == "run.status_changed"
+    assert any(
+        event["type"] == "run.status_changed" and event["payload"].get("to") == "succeeded"
+        for event in timeline
+    )
+    assert [event["type"] for event in timeline[-2:]] == [
+        "rhythm.signal.task_behavior",
+        "rhythm.snapshot_derived",
+    ]

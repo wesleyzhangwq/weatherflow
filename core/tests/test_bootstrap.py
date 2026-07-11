@@ -47,7 +47,8 @@ async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Pat
         "developer.run_command",
         "developer.write_file",
     }
-    assert checkpoint is not None and checkpoint.state == {"result_committed": True}
+    assert checkpoint is not None and checkpoint.state["result_committed"] is True
+    assert checkpoint.state["rhythm_policy"]["proactivity"] == "silent"
     assert set(rebuilt.workers.definitions) == {
         "release-preparer",
         "release-validator",

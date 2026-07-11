@@ -25,17 +25,20 @@ from weatherflow.capabilities.builtin import (
     tool_ids_for_installed_packs,
 )
 from weatherflow.config import Settings
-from weatherflow.events import EventLedger
+from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
     ActionExecutionCoordinator,
     AgentDefinition,
+    AgentMessage,
     FinalTurn,
     LoopOutcome,
     LoopStatus,
+    MessageRole,
     ModelAdapter,
     ModelRequest,
+    RunCheckpoint,
     RunCheckpointRepository,
     SharedTurnLoop,
     ToolExecutorRegistry,
@@ -269,6 +272,8 @@ class RuntimeContainer:
             user_intent=user_intent,
             workspace_id=workspace.id,
         )
+        if run.rhythm_snapshot_id is None:
+            run = await self._bind_rhythm_context(run, workspace)
         if await self.snapshots.get_by_run_id(run.id) is None:
             frozen = await self.capability_coordinator.freeze_for_run(
                 run_id=run.id,
@@ -298,11 +303,94 @@ class RuntimeContainer:
         workspace = await self.workspaces.get(run.workspace_id)
         if workspace is None:
             raise LookupError(run.workspace_id)
-        return await self.loop.run(
+        checkpoint = await self.checkpoints.get(run.id)
+        policy = checkpoint.state.get("rhythm_policy", {}) if checkpoint else {}
+        outcome = await self.loop.run(
             run_id=run.id,
             workspace=workspace,
             agent=AgentDefinition(
                 agent_id="orchestrator",
-                system_prompt="Complete the user's goal with minimum added burden.",
+                system_prompt=self._orchestrator_prompt(policy),
             ),
+        )
+        if outcome.status in {
+            LoopStatus.SUCCEEDED,
+            LoopStatus.FAILED,
+            LoopStatus.NEEDS_REVIEW,
+        }:
+            terminal = await self.runs.get(run.id)
+            final_checkpoint = await self.checkpoints.get(run.id)
+            if terminal is None or final_checkpoint is None:
+                raise RuntimeError(run.id)
+            await self.rhythm.record_task_behavior(
+                workspace_id=workspace.id,
+                run_id=run.id,
+                outcome=terminal.status.value,
+                observed_at=terminal.updated_at,
+                duration_seconds=max(
+                    0.0, (terminal.updated_at - terminal.created_at).total_seconds()
+                ),
+                step_count=final_checkpoint.step_index,
+            )
+        return outcome
+
+    async def _bind_rhythm_context(self, run: Run, workspace: Workspace) -> Run:
+        current = await self.rhythm.current(workspace.id)
+        state = {
+            "rhythm_snapshot": current.snapshot.model_dump(mode="json"),
+            "rhythm_policy": current.policy.model_dump(mode="json"),
+            "weather": current.weather.model_dump(mode="json"),
+        }
+        async with self.database.transaction() as connection:
+            stored = await self.runs.get_in(connection, run.id)
+            if stored is None:
+                raise LookupError(run.id)
+            if stored.rhythm_snapshot_id is not None:
+                return stored
+            updated = await self.runs.attach_rhythm_snapshot_in(
+                connection,
+                run.id,
+                current.snapshot.id,
+                stored.version,
+            )
+            checkpoint = await self.checkpoints.get_in(connection, run.id)
+            if checkpoint is None:
+                await self.checkpoints.create_in(
+                    connection,
+                    RunCheckpoint.new(
+                        run_id=run.id,
+                        transcript=(
+                            AgentMessage(
+                                role=MessageRole.USER,
+                                content=run.user_intent,
+                            ),
+                        ),
+                        state=state,
+                    ),
+                )
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="run.rhythm_policy_bound",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload=state,
+                ),
+            )
+        return updated
+
+    @staticmethod
+    def _orchestrator_prompt(policy: dict) -> str:
+        return (
+            "Complete the user's explicit goal with minimum added burden. "
+            "RhythmPolicy changes interaction strategy but never changes the explicit "
+            "user goal or bypasses Trust decisions. "
+            f"interaction_budget={policy.get('interaction_budget', 'normal')}; "
+            f"response_density={policy.get('response_density', 'normal')}; "
+            f"delegation_bias={policy.get('delegation_bias', 'neutral')}; "
+            f"scope_pressure={policy.get('scope_pressure', 'hold')}; "
+            f"work_mode={policy.get('work_mode', 'normal')}; "
+            f"proactivity={policy.get('proactivity', 'silent')}."
         )

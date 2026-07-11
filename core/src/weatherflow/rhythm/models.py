@@ -66,8 +66,19 @@ class ActivityMetadata(BaseModel):
     category_seconds: dict[AppCategory, int]
 
 
+class TaskBehaviorSignal(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["task_behavior"] = "task_behavior"
+    observed_at: datetime
+    run_id: str = Field(min_length=1)
+    outcome: Literal["succeeded", "failed", "needs_review"]
+    duration_seconds: float = Field(ge=0)
+    step_count: int = Field(ge=0)
+
+
 RhythmSignal = Annotated[
-    CheckInSignal | CorrectionSignal | ActivityMetadata,
+    CheckInSignal | CorrectionSignal | ActivityMetadata | TaskBehaviorSignal,
     Field(discriminator="kind"),
 ]
 
