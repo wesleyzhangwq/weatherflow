@@ -1,5 +1,11 @@
 """Provider-neutral durable agent runtime."""
 
+from weatherflow.runtime.action_execution import (
+    ActionExecutionCoordinator,
+    ActionExecutionOutcome,
+    ActionExecutionStatus,
+    DefinitiveToolError,
+)
 from weatherflow.runtime.checkpoints import RunCheckpoint
 from weatherflow.runtime.loop import SharedTurnLoop
 from weatherflow.runtime.models import (
@@ -34,6 +40,9 @@ from weatherflow.runtime.tools import (
 __all__ = [
     "AgentDefinition",
     "AgentMessage",
+    "ActionExecutionCoordinator",
+    "ActionExecutionOutcome",
+    "ActionExecutionStatus",
     "BoundedObservation",
     "CompactWorkerResult",
     "CheckpointNotFoundError",
@@ -42,6 +51,7 @@ __all__ = [
     "FinalTurn",
     "DuplicateCheckpointError",
     "DuplicateToolExecutor",
+    "DefinitiveToolError",
     "LeafDelegationError",
     "LoopOutcome",
     "LoopStatus",
