@@ -16,6 +16,7 @@ from weatherflow.runtime.models import (
     ToolExecutionContext,
     ToolExecutionResult,
 )
+from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopStatus
 from weatherflow.runtime.protocols import ModelAdapter, ToolExecutor
 from weatherflow.runtime.repository import (
     CheckpointNotFoundError,
@@ -23,17 +24,26 @@ from weatherflow.runtime.repository import (
     DuplicateCheckpointError,
     RunCheckpointRepository,
 )
+from weatherflow.runtime.tools import (
+    DuplicateToolExecutor,
+    ToolExecutorNotFound,
+    ToolExecutorRegistry,
+)
 
 __all__ = [
     "AgentDefinition",
     "AgentMessage",
+    "BoundedObservation",
     "CompactWorkerResult",
     "CheckpointNotFoundError",
     "CheckpointVersionConflict",
     "DelegationTurn",
     "FinalTurn",
     "DuplicateCheckpointError",
+    "DuplicateToolExecutor",
     "LeafDelegationError",
+    "LoopOutcome",
+    "LoopStatus",
     "MessageRole",
     "ModelAdapter",
     "ModelRequest",
@@ -45,4 +55,6 @@ __all__ = [
     "ToolExecutionContext",
     "ToolExecutionResult",
     "ToolExecutor",
+    "ToolExecutorNotFound",
+    "ToolExecutorRegistry",
 ]
