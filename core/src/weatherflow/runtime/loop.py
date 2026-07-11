@@ -23,7 +23,7 @@ from weatherflow.runtime.protocols import ModelAdapter
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.runtime.tools import ToolExecutorNotFound, ToolExecutorRegistry
 from weatherflow.storage import Database
-from weatherflow.trust import DecisionKind, SupervisedPolicy
+from weatherflow.trust import ApprovalCoordinator, DecisionKind, SupervisedPolicy
 from weatherflow.workspaces import Workspace
 
 
@@ -40,6 +40,7 @@ class SharedTurnLoop:
         model: ModelAdapter,
         executors: ToolExecutorRegistry,
         policy: SupervisedPolicy,
+        approval_coordinator: ApprovalCoordinator | None = None,
     ) -> None:
         self.database = database
         self.runs = runs
@@ -50,6 +51,7 @@ class SharedTurnLoop:
         self.model = model
         self.executors = executors
         self.policy = policy
+        self.approval_coordinator = approval_coordinator
 
     async def run(
         self,
@@ -58,8 +60,13 @@ class SharedTurnLoop:
         workspace: Workspace,
         agent: AgentDefinition,
     ) -> LoopOutcome:
+        initial = await self.runs.get(run_id)
+        if initial is None:
+            raise LookupError(run_id)
+        checkpoint = await self._ensure_checkpoint(initial)
+        if initial.status is RunStatus.WAITING_APPROVAL:
+            return await self._waiting_outcome(initial, checkpoint)
         run = await self._ensure_running(run_id)
-        checkpoint = await self._ensure_checkpoint(run)
         snapshot = await self.snapshots.get_by_run_id(run_id)
         if snapshot is None:
             return await self._fail(run, checkpoint, "capability snapshot is missing")
@@ -107,12 +114,7 @@ class SharedTurnLoop:
                     )
                     continue
                 if decision.kind is DecisionKind.APPROVE:
-                    checkpoint = await self._record_observation(
-                        checkpoint,
-                        turn,
-                        {"error": "approval dispatch is not configured"},
-                    )
-                    continue
+                    return await self._park_approval(run, checkpoint, turn, tool, workspace)
                 checkpoint = await self._execute_safe_tool(run, checkpoint, turn, tool)
                 continue
             if isinstance(turn, DelegationTurn):
@@ -211,6 +213,69 @@ class SharedTurnLoop:
         except Exception as error:
             output = {"error": type(error).__name__, "message": str(error)}
         return await self._record_observation(checkpoint, turn, output)
+
+    async def _park_approval(
+        self,
+        run: Run,
+        checkpoint: RunCheckpoint,
+        turn: ToolCallTurn,
+        tool: ToolSpec,
+        workspace: Workspace,
+    ) -> LoopOutcome:
+        if self.approval_coordinator is None:
+            raise RuntimeError("approval coordinator is not configured")
+        current_run = await self.runs.get(run.id)
+        if current_run is None:
+            raise LookupError(run.id)
+        call_key = turn.call_id or f"step-{checkpoint.step_index}-{tool.tool_id}"
+        bundle = await self.approval_coordinator.propose(
+            run_id=run.id,
+            expected_run_version=current_run.version,
+            tool=tool,
+            workspace=workspace,
+            arguments=turn.arguments,
+            idempotency_key=f"{run.id}:{call_key}",
+            preview={"tool_id": tool.tool_id, "arguments": turn.arguments},
+        )
+        desired = checkpoint.model_copy(update={"pending_action_id": bundle.action.id})
+        async with self.database.transaction() as connection:
+            await self.checkpoints.save_in(connection, desired, expected_version=checkpoint.version)
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="runtime.approval_parked",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload={
+                        "action_id": bundle.action.id,
+                        "approval_id": bundle.approval.id,
+                    },
+                ),
+            )
+        return LoopOutcome(
+            run_id=run.id,
+            status=LoopStatus.WAITING_APPROVAL,
+            action_id=bundle.action.id,
+            approval_id=bundle.approval.id,
+        )
+
+    async def _waiting_outcome(self, run: Run, checkpoint: RunCheckpoint) -> LoopOutcome:
+        if self.approval_coordinator is None or checkpoint.pending_action_id is None:
+            raise RuntimeError(f"run {run.id} is waiting without a pending action")
+        action = await self.approval_coordinator.actions.get(checkpoint.pending_action_id)
+        if action is None:
+            raise RuntimeError(checkpoint.pending_action_id)
+        approval = await self.approval_coordinator.approvals.get_by_action_id(action.id)
+        if approval is None:
+            raise RuntimeError(action.id)
+        return LoopOutcome(
+            run_id=run.id,
+            status=LoopStatus.WAITING_APPROVAL,
+            action_id=action.id,
+            approval_id=approval.id,
+        )
 
     async def _record_observation(
         self,

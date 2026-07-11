@@ -21,7 +21,12 @@ from weatherflow.runtime import (
     ToolExecutorRegistry,
 )
 from weatherflow.storage import Database
-from weatherflow.trust import SupervisedPolicy
+from weatherflow.trust import (
+    ActionRepository,
+    ApprovalCoordinator,
+    ApprovalRepository,
+    SupervisedPolicy,
+)
 from weatherflow.workspaces import Workspace
 
 
@@ -73,6 +78,7 @@ async def setup_loop(tmp_path: Path, model, *, tools=None, max_steps=5):
         action_roots=[tmp_path / "project"],
         internal_root=tmp_path / ".weatherflow",
         artifact_root=tmp_path / "artifacts",
+        granted_scopes={scope for item in tools for scope in item.required_scopes},
     )
     snapshots = CapabilitySnapshotRepository(database)
     frozen = await CapabilitySnapshotCoordinator(
@@ -90,6 +96,15 @@ async def setup_loop(tmp_path: Path, model, *, tools=None, max_steps=5):
         requested_tool_ids={item.tool_id for item in tools},
     )
     executors = ToolExecutorRegistry()
+    approval_coordinator = ApprovalCoordinator(
+        database=database,
+        actions=ActionRepository(database),
+        approvals=ApprovalRepository(database),
+        runs=runs,
+        run_coordinator=run_coordinator,
+        ledger=ledger,
+        policy=SupervisedPolicy(),
+    )
     loop = SharedTurnLoop(
         database=database,
         runs=runs,
@@ -100,6 +115,7 @@ async def setup_loop(tmp_path: Path, model, *, tools=None, max_steps=5):
         model=model,
         executors=executors,
         policy=SupervisedPolicy(),
+        approval_coordinator=approval_coordinator,
     )
     agent = AgentDefinition(
         agent_id="orchestrator",
@@ -168,3 +184,45 @@ async def test_step_budget_exhaustion_fails_run(tmp_path: Path) -> None:
     assert outcome.status is LoopStatus.FAILED
     stored = await runs.get(run.id)
     assert stored is not None and stored.status is RunStatus.FAILED
+
+
+async def test_external_write_parks_once_without_executor_call(tmp_path: Path) -> None:
+    external = ToolSpec(
+        tool_id="github.create_release",
+        description="Create release",
+        input_schema={},
+        output_schema={},
+        effect=ToolEffect.EXTERNAL_WRITE,
+        required_scopes=frozenset({"github:write"}),
+        source="test",
+        source_version="1",
+    )
+    model = ScriptedModel(
+        [
+            ToolCallTurn(
+                call_id="release-v3",
+                tool_id="github.create_release",
+                arguments={"tag": "v3.0.0"},
+            )
+        ]
+    )
+    loop, executors, runs, checkpoints, workspace, agent, run = await setup_loop(
+        tmp_path, model, tools=(external,)
+    )
+    workspace = workspace.model_copy(update={"granted_scopes": frozenset({"github:write"})})
+    executor = RecordingExecutor()
+    executors.register("github.create_release", executor)
+
+    first = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+    before = await loop.ledger.list_correlation(run.id)
+    repeated = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert first.status is LoopStatus.WAITING_APPROVAL
+    assert repeated == first
+    assert executor.calls == []
+    assert len(model.requests) == 1
+    stored = await runs.get(run.id)
+    checkpoint = await checkpoints.get(run.id)
+    assert stored is not None and stored.status is RunStatus.WAITING_APPROVAL
+    assert checkpoint is not None and checkpoint.pending_action_id == first.action_id
+    assert await loop.ledger.list_correlation(run.id) == before
