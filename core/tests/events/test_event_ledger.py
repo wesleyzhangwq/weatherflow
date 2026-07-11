@@ -83,6 +83,26 @@ async def test_stream_and_correlation_reads_are_ordered(tmp_path: Path) -> None:
     assert await ledger.list_correlation("run-1") == [first, second]
 
 
+async def test_list_stream_in_reads_uncommitted_event(tmp_path: Path) -> None:
+    database = Database(tmp_path / "weatherflow.db")
+    await database.initialize()
+    ledger = EventLedger(database)
+    event = Event.new(
+        type="run.created",
+        actor=Actor.SYSTEM,
+        stream_kind="run",
+        stream_id="run-1",
+        correlation_id="run-1",
+        payload={},
+    )
+
+    async with database.transaction() as connection:
+        await ledger.append_in(connection, event)
+        events = await ledger.list_stream_in(connection, "run", "run-1")
+
+    assert events == [event]
+
+
 def test_ledger_has_no_update_or_delete_api(tmp_path: Path) -> None:
     ledger = EventLedger(Database(tmp_path / "weatherflow.db"))
 

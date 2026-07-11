@@ -72,6 +72,21 @@ class EventLedger:
             limit,
         )
 
+    async def list_stream_in(
+        self,
+        connection: aiosqlite.Connection,
+        stream_kind: str,
+        stream_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[Event]:
+        return await self._list_in(
+            connection,
+            "stream_kind = ? AND stream_id = ?",
+            (stream_kind, stream_id),
+            limit,
+        )
+
     async def list_correlation(
         self,
         correlation_id: str,
@@ -86,11 +101,20 @@ class EventLedger:
         parameters: Sequence[Any],
         limit: int,
     ) -> list[Event]:
+        async with self.database.connect() as connection:
+            return await self._list_in(connection, where, parameters, limit)
+
+    async def _list_in(
+        self,
+        connection: aiosqlite.Connection,
+        where: str,
+        parameters: Sequence[Any],
+        limit: int,
+    ) -> list[Event]:
         if limit < 1 or limit > 1000:
             raise ValueError("limit must be between 1 and 1000")
         query = f"SELECT * FROM events WHERE {where} ORDER BY recorded_at, id LIMIT ?"
-        async with self.database.connect() as connection:
-            rows = await (await connection.execute(query, (*parameters, limit))).fetchall()
+        rows = await (await connection.execute(query, (*parameters, limit))).fetchall()
         return [self._from_row(row) for row in rows]
 
     @staticmethod
