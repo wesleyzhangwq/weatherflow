@@ -1,3 +1,5 @@
+import aiosqlite
+
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs.models import Run, RunStatus
 from weatherflow.runs.repository import RunNotFoundError, RunRepository
@@ -65,33 +67,54 @@ class RunCoordinator:
         error_message: str | None = None,
     ) -> Run:
         async with self.database.transaction() as connection:
-            current = await self.repository.get_in(connection, run_id)
-            if current is None:
-                raise RunNotFoundError(run_id)
-            prior = await self.ledger.list_stream_in(connection, "run", run_id)
-            updated = await self.repository.transition_in(
+            return await self.transition_in(
                 connection,
-                run_id,
-                target,
-                expected_version,
+                run_id=run_id,
+                target=target,
+                expected_version=expected_version,
                 result_summary=result_summary,
                 error_class=error_class,
                 error_message=error_message,
             )
-            await self.ledger.append_in(
-                connection,
-                Event.new(
-                    type="run.status_changed",
-                    actor=Actor.SYSTEM,
-                    stream_kind="run",
-                    stream_id=run_id,
-                    correlation_id=run_id,
-                    causation_id=prior[-1].id if prior else None,
-                    payload={
-                        "from": current.status.value,
-                        "to": target.value,
-                        "version": updated.version,
-                    },
-                ),
-            )
+
+    async def transition_in(
+        self,
+        connection: aiosqlite.Connection,
+        *,
+        run_id: str,
+        target: RunStatus,
+        expected_version: int,
+        result_summary: str | None = None,
+        error_class: str | None = None,
+        error_message: str | None = None,
+    ) -> Run:
+        current = await self.repository.get_in(connection, run_id)
+        if current is None:
+            raise RunNotFoundError(run_id)
+        prior = await self.ledger.list_stream_in(connection, "run", run_id)
+        updated = await self.repository.transition_in(
+            connection,
+            run_id,
+            target,
+            expected_version,
+            result_summary=result_summary,
+            error_class=error_class,
+            error_message=error_message,
+        )
+        await self.ledger.append_in(
+            connection,
+            Event.new(
+                type="run.status_changed",
+                actor=Actor.SYSTEM,
+                stream_kind="run",
+                stream_id=run_id,
+                correlation_id=run_id,
+                causation_id=prior[-1].id if prior else None,
+                payload={
+                    "from": current.status.value,
+                    "to": target.value,
+                    "version": updated.version,
+                },
+            ),
+        )
         return updated

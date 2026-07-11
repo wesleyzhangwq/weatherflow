@@ -120,3 +120,25 @@ async def test_event_failure_rolls_back_transition(tmp_path: Path) -> None:
     stored = await repository.get(run.id)
     assert stored == run
     assert [event.type for event in await ledger.list_stream("run", run.id)] == ["run.created"]
+
+
+async def test_transition_in_composes_with_caller_transaction(tmp_path: Path) -> None:
+    database, repository, ledger, coordinator = await make_coordinator(tmp_path)
+    run = await coordinator.create_run(
+        client_request_id="request-1",
+        user_intent="ship release",
+        workspace_id="workspace-1",
+    )
+
+    async with database.transaction() as connection:
+        updated = await coordinator.transition_in(
+            connection,
+            run_id=run.id,
+            target=RunStatus.PLANNING,
+            expected_version=0,
+        )
+        stored = await repository.get_in(connection, run.id)
+        events = await ledger.list_stream_in(connection, "run", run.id)
+
+    assert stored == updated
+    assert [event.type for event in events] == ["run.created", "run.status_changed"]

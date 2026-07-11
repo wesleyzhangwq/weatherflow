@@ -24,6 +24,7 @@ class ActionStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     NEEDS_REVIEW = "needs_review"
+    CANCELLED = "cancelled"
 
     def can_transition_to(self, target: "ActionStatus") -> bool:
         return target in ACTION_TRANSITIONS[self]
@@ -34,7 +35,9 @@ class ActionStatus(StrEnum):
 
 
 ACTION_TRANSITIONS: dict[ActionStatus, frozenset[ActionStatus]] = {
-    ActionStatus.PROPOSED: frozenset({ActionStatus.APPROVED, ActionStatus.DENIED}),
+    ActionStatus.PROPOSED: frozenset(
+        {ActionStatus.APPROVED, ActionStatus.DENIED, ActionStatus.CANCELLED}
+    ),
     ActionStatus.APPROVED: frozenset({ActionStatus.EXECUTING}),
     ActionStatus.DENIED: frozenset(),
     ActionStatus.EXECUTING: frozenset(
@@ -43,6 +46,7 @@ ACTION_TRANSITIONS: dict[ActionStatus, frozenset[ActionStatus]] = {
     ActionStatus.SUCCEEDED: frozenset(),
     ActionStatus.FAILED: frozenset(),
     ActionStatus.NEEDS_REVIEW: frozenset(),
+    ActionStatus.CANCELLED: frozenset(),
 }
 
 

@@ -48,6 +48,7 @@ def test_approval_for_action_is_pending() -> None:
 
 def test_action_transitions_are_deterministic() -> None:
     assert ActionStatus.PROPOSED.can_transition_to(ActionStatus.APPROVED)
+    assert ActionStatus.PROPOSED.can_transition_to(ActionStatus.CANCELLED)
     assert ActionStatus.APPROVED.can_transition_to(ActionStatus.EXECUTING)
     assert ActionStatus.EXECUTING.can_transition_to(ActionStatus.NEEDS_REVIEW)
 

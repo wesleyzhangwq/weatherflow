@@ -23,3 +23,7 @@ def test_queued_run_allows_declared_transitions(target: RunStatus) -> None:
 def test_terminal_run_rejects_transition() -> None:
     with pytest.raises(InvalidTransitionError):
         RunStatus.SUCCEEDED.require_transition(RunStatus.RUNNING)
+
+
+def test_waiting_approval_can_suspend_on_timeout() -> None:
+    assert RunStatus.WAITING_APPROVAL.can_transition_to(RunStatus.PAUSED)

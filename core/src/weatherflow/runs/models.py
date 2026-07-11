@@ -51,7 +51,9 @@ TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
             RunStatus.CANCELLED,
         }
     ),
-    RunStatus.WAITING_APPROVAL: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED}),
+    RunStatus.WAITING_APPROVAL: frozenset(
+        {RunStatus.RUNNING, RunStatus.PAUSED, RunStatus.CANCELLED}
+    ),
     RunStatus.WAITING_USER: frozenset({RunStatus.PLANNING, RunStatus.RUNNING, RunStatus.CANCELLED}),
     RunStatus.PAUSED: frozenset(
         {RunStatus.PLANNING, RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}
