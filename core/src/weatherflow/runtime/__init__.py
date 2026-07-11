@@ -1,6 +1,7 @@
 """Provider-neutral durable agent runtime."""
 
 from weatherflow.runtime.checkpoints import RunCheckpoint
+from weatherflow.runtime.loop import SharedTurnLoop
 from weatherflow.runtime.models import (
     AgentDefinition,
     AgentMessage,
@@ -51,6 +52,7 @@ __all__ = [
     "ModelUsage",
     "RunCheckpoint",
     "RunCheckpointRepository",
+    "SharedTurnLoop",
     "ToolCallTurn",
     "ToolExecutionContext",
     "ToolExecutionResult",
