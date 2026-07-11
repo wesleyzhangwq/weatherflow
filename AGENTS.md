@@ -45,9 +45,12 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 core/
   src/weatherflow/
     api/             HTTP adapter
+    capabilities/    canonical descriptive ToolSpec contracts
     events/          immutable Event envelope and append-only ledger
     runs/            Run model, optimistic repository, sole state coordinator
     storage/         SQLite connection and numbered migrations
+    trust/           pure authority decisions repeated before execution
+    workspaces/      action roots, scopes, budgets, and policy boundary
   tests/             unit, contract, and integration tests
 docs/superpowers/    approved specifications and implementation plans
 weatherflow-architecture-v3.md
@@ -72,5 +75,6 @@ Run the narrow test while developing and `make check` before committing.
 - Update architecture and tests in the same commit for contract changes.
 - Keep domain logic out of HTTP, CLI, MCP, and Tauri adapters.
 - Keep provider and tool implementations behind typed protocols.
+- Treat ToolSpec as description only; repeat Trust Policy at execution time.
 - Do not create a second agent loop, workflow engine, or policy path.
 - Do not push, publish, merge, or create releases without explicit instruction.

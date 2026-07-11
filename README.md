@@ -6,8 +6,10 @@ with a local Python harness daemon and a macOS-first Tauri desktop shell.
 P0 established the clean v3 package, health API, CLI, and quality gates. P1a
 added the WAL-mode SQLite foundation and append-only Event Ledger. P1b now adds
 durable Runs, idempotent creation, optimistic concurrency, deterministic
-transitions, and atomic audit events through the sole Run Coordinator. Trust,
-Rhythm Intelligence, the desktop shell, and Capability Packs continue in P1c-P4.
+transitions, and atomic audit events through the sole Run Coordinator. P1c1
+adds immutable Workspace authority boundaries, canonical ToolSpec descriptions,
+and a fail-closed supervised Trust Policy. Durable approvals, capability
+snapshots, Rhythm Intelligence, the desktop shell, and Capability Packs follow.
 
 ## Read first
 
