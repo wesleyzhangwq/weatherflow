@@ -6,6 +6,12 @@ from weatherflow.trust.action_repository import (
     ActionVersionConflict,
     DuplicateActionError,
 )
+from weatherflow.trust.approval_repository import (
+    ApprovalNotFoundError,
+    ApprovalRepository,
+    ApprovalVersionConflict,
+    DuplicateApprovalError,
+)
 from weatherflow.trust.models import (
     Action,
     ActionStatus,
@@ -23,9 +29,13 @@ __all__ = [
     "ActionStatus",
     "ActionVersionConflict",
     "Approval",
+    "ApprovalNotFoundError",
+    "ApprovalRepository",
     "ApprovalStatus",
+    "ApprovalVersionConflict",
     "DecisionKind",
     "DuplicateActionError",
+    "DuplicateApprovalError",
     "InvalidActionTransition",
     "InvalidApprovalTransition",
     "PolicyDecision",
