@@ -3,6 +3,8 @@ import sqlite3
 from collections.abc import Sequence
 from typing import Any
 
+import aiosqlite
+
 from weatherflow.events.models import Event
 from weatherflow.storage import Database
 
@@ -16,7 +18,27 @@ class EventLedger:
         self.database = database
 
     async def append(self, event: Event) -> None:
-        values = (
+        async with self.database.transaction() as connection:
+            await self.append_in(connection, event)
+
+    async def append_in(self, connection: aiosqlite.Connection, event: Event) -> None:
+        try:
+            await connection.execute(
+                """
+                INSERT INTO events(
+                    id, type, recorded_at, actor, stream_kind, stream_id,
+                    correlation_id, causation_id, payload, sensitivity,
+                    retention_class
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._values(event),
+            )
+        except sqlite3.IntegrityError as error:
+            raise DuplicateEventError(event.id) from error
+
+    @staticmethod
+    def _values(event: Event) -> tuple[Any, ...]:
+        return (
             event.id,
             event.type,
             event.recorded_at.isoformat(),
@@ -29,21 +51,6 @@ class EventLedger:
             event.sensitivity.value,
             event.retention_class.value,
         )
-        try:
-            async with self.database.connect() as connection:
-                await connection.execute(
-                    """
-                    INSERT INTO events(
-                        id, type, recorded_at, actor, stream_kind, stream_id,
-                        correlation_id, causation_id, payload, sensitivity,
-                        retention_class
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    values,
-                )
-                await connection.commit()
-        except sqlite3.IntegrityError as error:
-            raise DuplicateEventError(event.id) from error
 
     async def get(self, event_id: str) -> Event | None:
         async with self.database.connect() as connection:
