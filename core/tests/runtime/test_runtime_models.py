@@ -5,6 +5,7 @@ from weatherflow.capabilities import ToolEffect, ToolSpec
 from weatherflow.runtime import (
     AgentDefinition,
     AgentMessage,
+    CompactWorkerResult,
     DelegationTurn,
     FinalTurn,
     LeafDelegationError,
@@ -76,3 +77,15 @@ def test_leaf_agent_cannot_delegate() -> None:
 
     with pytest.raises(LeafDelegationError):
         leaf.validate_turn(DelegationTurn(agent_id="another", task="nested work"))
+
+
+def test_delegation_and_compact_results_are_size_bounded() -> None:
+    with pytest.raises(ValidationError):
+        DelegationTurn(agent_id="worker", task="x" * 4_001)
+
+    with pytest.raises(ValidationError):
+        CompactWorkerResult(
+            agent_id="worker",
+            summary="x" * 2_001,
+            status="failed",
+        )

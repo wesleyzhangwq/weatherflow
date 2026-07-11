@@ -36,6 +36,12 @@ from weatherflow.runtime.tools import (
     ToolExecutorNotFound,
     ToolExecutorRegistry,
 )
+from weatherflow.runtime.workers import (
+    WorkerCoordinator,
+    WorkerDefinitionError,
+    WorkerLoopNotBoundError,
+    builtin_worker_definitions,
+)
 
 __all__ = [
     "AgentDefinition",
@@ -69,4 +75,8 @@ __all__ = [
     "ToolExecutor",
     "ToolExecutorNotFound",
     "ToolExecutorRegistry",
+    "WorkerCoordinator",
+    "WorkerDefinitionError",
+    "WorkerLoopNotBoundError",
+    "builtin_worker_definitions",
 ]

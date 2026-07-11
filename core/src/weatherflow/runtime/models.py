@@ -56,8 +56,8 @@ class DelegationTurn(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["delegation"] = "delegation"
-    agent_id: str
-    task: str
+    agent_id: str = Field(min_length=1, max_length=100)
+    task: str = Field(min_length=1, max_length=4_000)
     usage: ModelUsage = ModelUsage()
 
 
@@ -95,8 +95,8 @@ class ModelRequest(BaseModel):
 class CompactWorkerResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    agent_id: str
-    summary: str
+    agent_id: str = Field(min_length=1, max_length=100)
+    summary: str = Field(max_length=2_000)
     artifact_ids: tuple[str, ...] = ()
     status: Literal["succeeded", "failed"]
 

@@ -39,6 +39,8 @@ from weatherflow.runtime import (
     RunCheckpointRepository,
     SharedTurnLoop,
     ToolExecutorRegistry,
+    WorkerCoordinator,
+    builtin_worker_definitions,
 )
 from weatherflow.storage import Database
 from weatherflow.trust import (
@@ -80,6 +82,7 @@ class RuntimeContainer:
     executors: ToolExecutorRegistry
     action_execution: ActionExecutionCoordinator
     loop: SharedTurnLoop
+    workers: WorkerCoordinator
     use_builtin_pack_resolution: bool
 
     @classmethod
@@ -189,6 +192,16 @@ class RuntimeContainer:
             ledger=ledger,
             policy=policy,
         )
+        workers = WorkerCoordinator(
+            database=database,
+            runs=runs,
+            run_coordinator=run_coordinator,
+            snapshots=snapshots,
+            capability_coordinator=capability_coordinator,
+            ledger=ledger,
+            artifacts=artifacts,
+            definitions=builtin_worker_definitions(),
+        )
         loop = SharedTurnLoop(
             database=database,
             runs=runs,
@@ -201,7 +214,9 @@ class RuntimeContainer:
             policy=policy,
             approval_coordinator=approval_coordinator,
             action_execution=action_execution,
+            worker_coordinator=workers,
         )
+        workers.bind_loop(loop)
         return cls(
             settings=settings,
             database=database,
@@ -225,6 +240,7 @@ class RuntimeContainer:
             executors=executors,
             action_execution=action_execution,
             loop=loop,
+            workers=workers,
             use_builtin_pack_resolution=use_builtin_pack_resolution,
         )
 

@@ -16,6 +16,7 @@ from weatherflow.runtime.models import (
     AgentMessage,
     DelegationTurn,
     FinalTurn,
+    LeafDelegationError,
     MessageRole,
     ModelRequest,
     ModelTurn,
@@ -26,6 +27,7 @@ from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopSt
 from weatherflow.runtime.protocols import ModelAdapter
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.runtime.tools import ToolExecutorNotFound, ToolExecutorRegistry
+from weatherflow.runtime.workers import WorkerCoordinator, WorkerDefinitionError
 from weatherflow.storage import Database
 from weatherflow.trust import (
     ActionStatus,
@@ -51,6 +53,7 @@ class SharedTurnLoop:
         policy: SupervisedPolicy,
         approval_coordinator: ApprovalCoordinator | None = None,
         action_execution: ActionExecutionCoordinator | None = None,
+        worker_coordinator: WorkerCoordinator | None = None,
     ) -> None:
         self.database = database
         self.runs = runs
@@ -63,6 +66,7 @@ class SharedTurnLoop:
         self.policy = policy
         self.approval_coordinator = approval_coordinator
         self.action_execution = action_execution
+        self.worker_coordinator = worker_coordinator
 
     async def run(
         self,
@@ -100,7 +104,14 @@ class SharedTurnLoop:
                     messages=checkpoint.transcript,
                     tools=tools,
                 )
-                turn = agent.validate_turn(await self.model.complete(request))
+                try:
+                    turn = agent.validate_turn(await self.model.complete(request))
+                except LeafDelegationError:
+                    return await self._fail(
+                        run,
+                        checkpoint,
+                        f"leaf Worker {agent.agent_id} attempted nested delegation",
+                    )
                 checkpoint = await self._record_turn(checkpoint, turn)
             else:
                 turn = TypeAdapter(ModelTurn).validate_python(pending)
@@ -135,10 +146,24 @@ class SharedTurnLoop:
                 checkpoint = await self._execute_safe_tool(run, checkpoint, turn, tool)
                 continue
             if isinstance(turn, DelegationTurn):
+                if self.worker_coordinator is None:
+                    output = {"error": "delegation runtime is not installed"}
+                else:
+                    try:
+                        result = await self.worker_coordinator.delegate(
+                            parent_run_id=run.id,
+                            delegation_id=f"step-{checkpoint.step_index}",
+                            workspace=workspace,
+                            agent_id=turn.agent_id,
+                            task=turn.task,
+                        )
+                        output = result.model_dump(mode="json")
+                    except (WorkerDefinitionError, ValueError) as error:
+                        output = {"error": str(error)}
                 checkpoint = await self._record_observation(
                     checkpoint,
                     turn,
-                    {"error": "delegation runtime is not installed"},
+                    output,
                 )
 
     async def _ensure_running(self, run_id: str) -> Run:
@@ -365,10 +390,13 @@ class SharedTurnLoop:
             saved = await self.checkpoints.save_in(
                 connection, desired, expected_version=checkpoint.version
             )
+            event_type = (
+                "tool.executed" if isinstance(turn, ToolCallTurn) else "worker.result_observed"
+            )
             await self.ledger.append_in(
                 connection,
                 Event.new(
-                    type="tool.executed",
+                    type=event_type,
                     actor=Actor.SYSTEM,
                     stream_kind="run",
                     stream_id=checkpoint.run_id,

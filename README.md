@@ -40,12 +40,17 @@ capabilities. Workspace-installed Packs and granted scopes define the smallest
 per-Run frozen tool surface; unavailable providers are hidden, local mutations
 remain root-bounded, and external mutations execute only through durable
 approval Actions.
+P3b adds durable leaf Worker delegation through the same shared turn loop.
+Worker child Runs inherit only a filtered subset of the parent's frozen
+capabilities, high-risk approval effects are excluded, concurrency is capped at
+three, and the parent receives only a compact result plus Artifact references.
 
 ## Read first
 
 - `weatherflow-architecture-v3.md`
 - `docs/superpowers/specs/2026-07-12-weatherflow-v3-design.md`
 - `docs/first-party-capabilities.md`
+- `docs/worker-delegation.md`
 
 WeatherFlow v2 is preserved in Git history and the local tag
 `weatherflow-v2-final`; it is not a compatibility target.
