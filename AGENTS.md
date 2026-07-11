@@ -87,6 +87,8 @@ Run the narrow test while developing and `make check` before committing.
 - Never retry a recovered EXECUTING side effect; route Action and Run to NEEDS_REVIEW.
 - Keep state-to-weather projection in Python; desktop consumes presentation tokens only.
 - Ambient activity schemas must never admit raw screen, title, key, clipboard, or audio content.
+- When `WF_BRIDGE_TOKEN` is set, every HTTP/WebSocket bridge request must authenticate.
+- Desktop event reconnects use Event Ledger cursors; invalid cursors refresh snapshots.
 - Persist side-effect Actions before Approval; never treat approval as execution.
 - Use ApprovalCoordinator to park/decide/resume; expiry cancels Action and pauses Run.
 - Do not create a second agent loop, workflow engine, or policy path.

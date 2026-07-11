@@ -29,6 +29,9 @@ P2a adds append-only deliberate/activity signals, six evidence-aware human-state
 dimensions, silent RhythmPolicy, and backend-only weather projection. Ambient
 metadata is limited to active/idle duration, switch counts, and coarse category
 totals; raw screen, title, keystroke, clipboard, and audio content are rejected.
+P2b adds optional per-launch bearer authentication (`WF_BRIDGE_TOKEN`) and an
+ordered `WS /v1/events?cursor=` stream. Invalid cursors explicitly require a
+fresh desktop snapshot instead of silently losing state.
 
 ## Read first
 
