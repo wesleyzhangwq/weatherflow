@@ -82,6 +82,7 @@ Run the narrow test while developing and `make check` before committing.
 - Derive artifact paths from verified digests; logical names never control paths.
 - Checkpoints contain serializable domain data only, never clients or live tools.
 - SharedTurnLoop is the sole model loop; checkpoint every turn before dispatch.
+- Never retry a recovered EXECUTING side effect; route Action and Run to NEEDS_REVIEW.
 - Persist side-effect Actions before Approval; never treat approval as execution.
 - Use ApprovalCoordinator to park/decide/resume; expiry cancels Action and pauses Run.
 - Do not create a second agent loop, workflow engine, or policy path.

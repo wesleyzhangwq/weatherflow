@@ -19,7 +19,9 @@ provenance events, physical deduplication, and rollback cleanup. The shared turn
 loop begins with P1d2a provider-neutral model/tool protocols and optimistic,
 durable Run checkpoints. P1d2b1 adds the sole shared loop: frozen-schema tool
 visibility, checkpoint-before-dispatch, safe execution, atomic final commits,
-and idempotent approval parking. Approved execution and recovery follow next.
+and idempotent approval parking. P1d2b2 resumes approved actions exactly once
+when possible; ambiguous execution failures and recovered EXECUTING actions
+enter NEEDS_REVIEW without automatic retry.
 
 ## Read first
 
