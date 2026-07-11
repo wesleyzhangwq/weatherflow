@@ -34,3 +34,37 @@ jobs:
 
       - name: Test
         run: uv run --package weatherflow-core --extra dev pytest core/tests -q
+
+  desktop:
+    name: Desktop Frontend and Tauri
+    runs-on: macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Frontend gates
+        working-directory: desktop
+        run: npm run lint && npm run typecheck && npm test && npm run build
+
+      - name: Rust format
+        working-directory: desktop/src-tauri
+        run: cargo fmt --check
+
+      - name: Rust tests and check
+        working-directory: desktop/src-tauri
+        run: cargo test --lib && cargo check

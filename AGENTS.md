@@ -56,6 +56,9 @@ core/
     workspaces/      action roots, scopes, budgets, and policy boundary
     bootstrap.py     sole dependency composition root and restart boundary
   tests/             unit, contract, and integration tests
+desktop/
+  src/               Companion, Capsule, Cockpit, typed bridge, metadata aggregation
+  src-tauri/         thin window shell, sidecar supervisor, native metadata sampling
 docs/superpowers/    approved specifications and implementation plans
 weatherflow-architecture-v3.md
 ```
@@ -68,6 +71,8 @@ Add new top-level areas only when the approved phase plan calls for them.
 make lint
 make format-check
 make test
+make desktop-check
+make rust-check
 make check
 ```
 

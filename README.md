@@ -32,6 +32,9 @@ totals; raw screen, title, keystroke, clipboard, and audio content are rejected.
 P2b adds optional per-launch bearer authentication (`WF_BRIDGE_TOKEN`) and an
 ordered `WS /v1/events?cursor=` stream. Invalid cursors explicitly require a
 fresh desktop snapshot instead of silently losing state.
+P2c/P2d add the tested Companion, pure-input Capsule, explicit Cockpit, thin
+Tauri window shell, authenticated sidecar supervision, bounded daemon recovery,
+reduced-motion UI, and privacy-safe macOS activity aggregation.
 
 ## Read first
 
@@ -54,6 +57,26 @@ make install
 make check
 make dev
 ```
+
+Desktop development uses the same root gate:
+
+```bash
+cd desktop && npm ci
+make check
+cd desktop && npx tauri dev
+```
+
+The development sidecar shim expects the `weatherflow` CLI on `PATH`; P4
+packaging replaces it with a standalone Python sidecar binary.
+
+P2 native acceptance also runs successfully with:
+
+```bash
+cd desktop
+npx tauri build --debug --no-bundle
+```
+
+Release `.app`/`.dmg` assembly, signing, and notarization remain P4 concerns.
 
 The daemon listens on `127.0.0.1:8765` by default.
 

@@ -1,9 +1,10 @@
-.PHONY: install lint format-check test check dev clean
+.PHONY: install lint format-check test desktop-check rust-check check dev clean
 
 PY := uv run --package weatherflow-core --extra dev
 
 install:
 	uv sync --all-packages --all-extras
+	cd desktop && npm ci
 
 lint:
 	$(PY) ruff check core/src core/tests
@@ -14,7 +15,13 @@ format-check:
 test:
 	$(PY) pytest core/tests -q
 
-check: lint format-check test
+desktop-check:
+	cd desktop && npm run lint && npm run typecheck && npm test && npm run build
+
+rust-check:
+	cd desktop/src-tauri && TOOLCHAIN_BIN=$$(dirname "$$(rustup which cargo)") && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo fmt --check && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo test --lib && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo check
+
+check: lint format-check test desktop-check rust-check
 
 dev:
 	uv run --package weatherflow-core weatherflow serve --reload
