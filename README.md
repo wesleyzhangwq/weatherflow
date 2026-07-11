@@ -25,6 +25,10 @@ enter NEEDS_REVIEW without automatic retry.
 P1d3 completes the headless core with one reconstructable RuntimeContainer,
 durable Workspaces, local Run/approval/artifact HTTP APIs, machine-readable CLI
 commands, and restart recovery from SQLite checkpoints.
+P2a adds append-only deliberate/activity signals, six evidence-aware human-state
+dimensions, silent RhythmPolicy, and backend-only weather projection. Ambient
+metadata is limited to active/idle duration, switch counts, and coarse category
+totals; raw screen, title, keystroke, clipboard, and audio content are rejected.
 
 ## Read first
 
