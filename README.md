@@ -12,8 +12,9 @@ and a fail-closed supervised Trust Policy. P1c2a adds durable, versioned Action
 proposals and separate human Approval records with idempotency constraints.
 P1c2b atomically persists side-effect proposals before parking Runs, resumes
 after approve/deny without executing implicitly, and pauses expired approvals.
-Capability snapshots, Rhythm Intelligence, the desktop shell, and Capability
-Packs follow.
+P1c3 resolves the smallest authorized tool surface and freezes canonical,
+digest-addressed ToolSpecs per Run; catalog changes affect only new Runs.
+Artifacts, the shared turn loop, Rhythm Intelligence, desktop, and Packs follow.
 
 ## Read first
 

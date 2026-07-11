@@ -45,7 +45,7 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 core/
   src/weatherflow/
     api/             HTTP adapter
-    capabilities/    canonical descriptive ToolSpec contracts
+    capabilities/    ToolSpec catalog, resolver, immutable Run snapshots
     events/          immutable Event envelope and append-only ledger
     runs/            Run model, optimistic repository, sole state coordinator
     storage/         SQLite connection and numbered migrations
@@ -76,6 +76,7 @@ Run the narrow test while developing and `make check` before committing.
 - Keep domain logic out of HTTP, CLI, MCP, and Tauri adapters.
 - Keep provider and tool implementations behind typed protocols.
 - Treat ToolSpec as description only; repeat Trust Policy at execution time.
+- Never hot-switch schemas for an existing Run; use its frozen capability snapshot.
 - Persist side-effect Actions before Approval; never treat approval as execution.
 - Use ApprovalCoordinator to park/decide/resume; expiry cancels Action and pauses Run.
 - Do not create a second agent loop, workflow engine, or policy path.
