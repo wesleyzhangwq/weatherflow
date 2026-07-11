@@ -6,6 +6,10 @@ from pydantic import TypeAdapter
 from weatherflow.capabilities import CapabilitySnapshotRepository, ToolSpec
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
+from weatherflow.runtime.action_execution import (
+    ActionExecutionCoordinator,
+    ActionExecutionStatus,
+)
 from weatherflow.runtime.checkpoints import RunCheckpoint
 from weatherflow.runtime.models import (
     AgentDefinition,
@@ -23,7 +27,12 @@ from weatherflow.runtime.protocols import ModelAdapter
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.runtime.tools import ToolExecutorNotFound, ToolExecutorRegistry
 from weatherflow.storage import Database
-from weatherflow.trust import ApprovalCoordinator, DecisionKind, SupervisedPolicy
+from weatherflow.trust import (
+    ActionStatus,
+    ApprovalCoordinator,
+    DecisionKind,
+    SupervisedPolicy,
+)
 from weatherflow.workspaces import Workspace
 
 
@@ -41,6 +50,7 @@ class SharedTurnLoop:
         executors: ToolExecutorRegistry,
         policy: SupervisedPolicy,
         approval_coordinator: ApprovalCoordinator | None = None,
+        action_execution: ActionExecutionCoordinator | None = None,
     ) -> None:
         self.database = database
         self.runs = runs
@@ -52,6 +62,7 @@ class SharedTurnLoop:
         self.executors = executors
         self.policy = policy
         self.approval_coordinator = approval_coordinator
+        self.action_execution = action_execution
 
     async def run(
         self,
@@ -114,7 +125,13 @@ class SharedTurnLoop:
                     )
                     continue
                 if decision.kind is DecisionKind.APPROVE:
-                    return await self._park_approval(run, checkpoint, turn, tool, workspace)
+                    dispatched = await self._dispatch_approval(
+                        run, checkpoint, turn, tool, workspace
+                    )
+                    if isinstance(dispatched, LoopOutcome):
+                        return dispatched
+                    checkpoint = dispatched
+                    continue
                 checkpoint = await self._execute_safe_tool(run, checkpoint, turn, tool)
                 continue
             if isinstance(turn, DelegationTurn):
@@ -214,14 +231,14 @@ class SharedTurnLoop:
             output = {"error": type(error).__name__, "message": str(error)}
         return await self._record_observation(checkpoint, turn, output)
 
-    async def _park_approval(
+    async def _dispatch_approval(
         self,
         run: Run,
         checkpoint: RunCheckpoint,
         turn: ToolCallTurn,
         tool: ToolSpec,
         workspace: Workspace,
-    ) -> LoopOutcome:
+    ) -> LoopOutcome | RunCheckpoint:
         if self.approval_coordinator is None:
             raise RuntimeError("approval coordinator is not configured")
         current_run = await self.runs.get(run.id)
@@ -237,6 +254,44 @@ class SharedTurnLoop:
             idempotency_key=f"{run.id}:{call_key}",
             preview={"tool_id": tool.tool_id, "arguments": turn.arguments},
         )
+        if bundle.action.status in {ActionStatus.APPROVED, ActionStatus.EXECUTING}:
+            if self.action_execution is None:
+                raise RuntimeError("action execution coordinator is not configured")
+            try:
+                executor = self.executors.require(tool.tool_id)
+            except ToolExecutorNotFound:
+                return await self._record_observation(
+                    checkpoint, turn, {"error": f"no executor registered for {tool.tool_id}"}
+                )
+            executed = await self.action_execution.execute(
+                action_id=bundle.action.id,
+                tool=tool,
+                workspace=workspace,
+                executor=executor,
+            )
+            if executed.status is ActionExecutionStatus.NEEDS_REVIEW:
+                return LoopOutcome(
+                    run_id=run.id,
+                    status=LoopStatus.NEEDS_REVIEW,
+                    action_id=executed.action.id,
+                    error=executed.error,
+                )
+            output = (
+                executed.result.output
+                if executed.result is not None
+                else {"error": executed.error or "action failed"}
+            )
+            return await self._record_observation(checkpoint, turn, output)
+        if bundle.action.status in {
+            ActionStatus.DENIED,
+            ActionStatus.CANCELLED,
+            ActionStatus.FAILED,
+        }:
+            return await self._record_observation(
+                checkpoint,
+                turn,
+                {"error": f"action {bundle.action.status.value}"},
+            )
         desired = checkpoint.model_copy(update={"pending_action_id": bundle.action.id})
         async with self.database.transaction() as connection:
             await self.checkpoints.save_in(connection, desired, expected_version=checkpoint.version)
@@ -303,6 +358,7 @@ class SharedTurnLoop:
                     ),
                 ),
                 "state": state,
+                "pending_action_id": None,
             }
         )
         async with self.database.transaction() as connection:

@@ -11,6 +11,7 @@ from weatherflow.capabilities import (
 from weatherflow.events import EventLedger
 from weatherflow.runs import RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
+    ActionExecutionCoordinator,
     AgentDefinition,
     FinalTurn,
     LoopStatus,
@@ -23,6 +24,7 @@ from weatherflow.runtime import (
 from weatherflow.storage import Database
 from weatherflow.trust import (
     ActionRepository,
+    ActionStatus,
     ApprovalCoordinator,
     ApprovalRepository,
     SupervisedPolicy,
@@ -105,6 +107,14 @@ async def setup_loop(tmp_path: Path, model, *, tools=None, max_steps=5):
         ledger=ledger,
         policy=SupervisedPolicy(),
     )
+    action_execution = ActionExecutionCoordinator(
+        database=database,
+        actions=approval_coordinator.actions,
+        runs=runs,
+        run_coordinator=run_coordinator,
+        ledger=ledger,
+        policy=SupervisedPolicy(),
+    )
     loop = SharedTurnLoop(
         database=database,
         runs=runs,
@@ -116,6 +126,7 @@ async def setup_loop(tmp_path: Path, model, *, tools=None, max_steps=5):
         executors=executors,
         policy=SupervisedPolicy(),
         approval_coordinator=approval_coordinator,
+        action_execution=action_execution,
     )
     agent = AgentDefinition(
         agent_id="orchestrator",
@@ -226,3 +237,121 @@ async def test_external_write_parks_once_without_executor_call(tmp_path: Path) -
     assert stored is not None and stored.status is RunStatus.WAITING_APPROVAL
     assert checkpoint is not None and checkpoint.pending_action_id == first.action_id
     assert await loop.ledger.list_correlation(run.id) == before
+
+
+async def test_approved_action_executes_once_then_loop_finishes(tmp_path: Path) -> None:
+    external = ToolSpec(
+        tool_id="github.create_release",
+        description="Create release",
+        input_schema={},
+        output_schema={},
+        effect=ToolEffect.EXTERNAL_WRITE,
+        required_scopes=frozenset({"github:write"}),
+        source="test",
+        source_version="1",
+    )
+    model = ScriptedModel(
+        [
+            ToolCallTurn(
+                call_id="release-v3",
+                tool_id="github.create_release",
+                arguments={"tag": "v3.0.0"},
+            ),
+            FinalTurn(content="Release shipped"),
+        ]
+    )
+    loop, executors, _, checkpoints, workspace, agent, run = await setup_loop(
+        tmp_path, model, tools=(external,)
+    )
+    executor = RecordingExecutor()
+    executors.register("github.create_release", executor)
+    waiting = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+    assert loop.approval_coordinator is not None
+    await loop.approval_coordinator.decide(
+        approval_id=waiting.approval_id,
+        expected_version=0,
+        approved=True,
+        decided_by="user",
+    )
+
+    completed = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert completed.status is LoopStatus.SUCCEEDED
+    assert len(executor.calls) == 1
+    checkpoint = await checkpoints.get(run.id)
+    assert checkpoint is not None and checkpoint.pending_action_id is None
+
+
+async def test_denied_action_becomes_observation_without_execution(tmp_path: Path) -> None:
+    external = ToolSpec(
+        tool_id="github.create_release",
+        description="Create release",
+        input_schema={},
+        output_schema={},
+        effect=ToolEffect.EXTERNAL_WRITE,
+        source="test",
+        source_version="1",
+    )
+    model = ScriptedModel(
+        [
+            ToolCallTurn(tool_id=external.tool_id, arguments={}),
+            FinalTurn(content="Continued without release"),
+        ]
+    )
+    loop, executors, _, _, workspace, agent, run = await setup_loop(
+        tmp_path, model, tools=(external,)
+    )
+    executor = RecordingExecutor()
+    executors.register(external.tool_id, executor)
+    waiting = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+    assert loop.approval_coordinator is not None
+    await loop.approval_coordinator.decide(
+        approval_id=waiting.approval_id,
+        expected_version=0,
+        approved=False,
+        decided_by="user",
+    )
+
+    completed = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert completed.status is LoopStatus.SUCCEEDED
+    assert executor.calls == []
+    assert "action denied" in model.requests[-1].messages[-1].content
+
+
+async def test_executing_recovery_needs_review_without_model_retry(tmp_path: Path) -> None:
+    external = ToolSpec(
+        tool_id="github.create_release",
+        description="Create release",
+        input_schema={},
+        output_schema={},
+        effect=ToolEffect.EXTERNAL_WRITE,
+        source="test",
+        source_version="1",
+    )
+    model = ScriptedModel([ToolCallTurn(tool_id=external.tool_id, arguments={})])
+    loop, executors, _, _, workspace, agent, run = await setup_loop(
+        tmp_path, model, tools=(external,)
+    )
+    executor = RecordingExecutor()
+    executors.register(external.tool_id, executor)
+    waiting = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+    assert loop.approval_coordinator is not None
+    await loop.approval_coordinator.decide(
+        approval_id=waiting.approval_id,
+        expected_version=0,
+        approved=True,
+        decided_by="user",
+    )
+    action = await loop.approval_coordinator.actions.get(waiting.action_id)
+    assert action is not None
+    async with loop.database.transaction() as connection:
+        await loop.approval_coordinator.actions.transition_in(
+            connection, action.id, ActionStatus.EXECUTING, action.version
+        )
+
+    outcome = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert outcome.status is LoopStatus.NEEDS_REVIEW
+    assert len(model.requests) == 1
+    assert executor.calls == []

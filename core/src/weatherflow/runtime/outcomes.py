@@ -9,6 +9,7 @@ class LoopStatus(StrEnum):
     SUCCEEDED = "succeeded"
     WAITING_APPROVAL = "waiting_approval"
     FAILED = "failed"
+    NEEDS_REVIEW = "needs_review"
 
 
 class LoopOutcome(BaseModel):
