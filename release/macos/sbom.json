@@ -4348,6 +4348,11 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "cffi",
+      "version": "2.1.0"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "click",
       "version": "8.4.2"
     },
@@ -4355,6 +4360,11 @@
       "ecosystem": "pypi",
       "name": "colorama",
       "version": "0.4.6"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "cryptography",
+      "version": "49.0.0"
     },
     {
       "ecosystem": "pypi",
@@ -4393,8 +4403,38 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "jaraco-classes",
+      "version": "3.4.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "jaraco-context",
+      "version": "6.1.2"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "jaraco-functools",
+      "version": "4.5.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "jeepney",
+      "version": "0.9.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "keyring",
+      "version": "25.7.0"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "macholib",
       "version": "1.16.4"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "more-itertools",
+      "version": "11.1.0"
     },
     {
       "ecosystem": "pypi",
@@ -4410,6 +4450,11 @@
       "ecosystem": "pypi",
       "name": "pluggy",
       "version": "1.6.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pycparser",
+      "version": "3.0"
     },
     {
       "ecosystem": "pypi",
@@ -4475,6 +4520,11 @@
       "ecosystem": "pypi",
       "name": "ruff",
       "version": "0.15.21"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "secretstorage",
+      "version": "3.5.0"
     },
     {
       "ecosystem": "pypi",

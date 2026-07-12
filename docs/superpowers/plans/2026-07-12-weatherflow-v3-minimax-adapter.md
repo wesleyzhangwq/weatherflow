@@ -19,8 +19,8 @@
 ## Desktop and release
 
 - [x] Surface model configuration/health in the local status API and Cockpit without exposing secret material.
-- [ ] Rebuild the standalone sidecar and local ad-hoc `.app`/`.dmg` after all adapter tests and full gates pass.
-- [ ] Document first-time MiniMax configuration for both `api.minimaxi.com` and `api.minimax.io` accounts.
+- [x] Rebuild the standalone sidecar and local ad-hoc `.app`/`.dmg` after all adapter tests and full gates pass.
+- [x] Document first-time MiniMax configuration for both `api.minimaxi.com` and `api.minimax.io` accounts.
 
 Implementation follows observed RED → code → focused tests → `make check` →
 sidecar/release rebuild → atomic commits. No model response may bypass the

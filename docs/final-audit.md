@@ -10,12 +10,13 @@
 | Privacy is local and resettable | metadata-only schema, retention/reset APIs, redacted explicit diagnostics, durable-store scan | pass |
 | Recovery is conservative | bounded model retry/pause, checkpoint quarantine, startup audit, provider degradation | pass |
 | Desktop remains calm | silent companion, pure-input capsule, explicit Cockpit and approval controls | pass |
+| Model credentials stay local | MiniMax key validated before activation and stored only in macOS Keychain | pass |
 | Distribution is self-contained | arm64 PyInstaller sidecar, supervised app smoke, app/DMG checksums and SBOM | pass |
 | Public trust claim | Developer ID signing and Apple notarization | blocked only by user-held credentials |
 
 Final unsigned/ad-hoc validation on 2026-07-12:
 
-- core: 213 regular tests plus 1 dedicated eval;
+- core: 228 regular tests plus 1 dedicated eval;
 - desktop: 10 tests, lint, typecheck, and production build;
 - Rust: 5 tests, format check, and compile check;
 - standalone daemon: authenticated health in a minimal environment;
