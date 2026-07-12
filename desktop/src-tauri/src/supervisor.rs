@@ -130,7 +130,6 @@ fn development_daemon_args(port: u16) -> Vec<String> {
         "127.0.0.1",
         "--port",
         &port.to_string(),
-        "--reload",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -226,7 +225,6 @@ mod tests {
                 "127.0.0.1",
                 "--port",
                 "8765",
-                "--reload",
             ]
         );
     }

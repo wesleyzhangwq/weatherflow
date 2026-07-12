@@ -9,19 +9,31 @@ export function useDesktopSnapshot(client: WeatherFlowClient, workspaceId?: stri
   useEffect(() => {
     let alive = true;
     let cursor: string | null = null;
+    let refreshTimer: number | null = null;
     const refresh = async () => {
       try {
         const next = await client.snapshot(workspaceId);
         if (alive) { setSnapshot(next); setOffline(false); }
       } catch { if (alive) setOffline(true); }
     };
+    const scheduleRefresh = () => {
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        void refresh();
+      }, 75);
+    };
     void refresh();
     const socket = client.events(
       cursor,
-      (event) => { cursor = event.id; void refresh(); },
-      () => { cursor = null; void refresh(); },
+      (event) => { cursor = event.id; scheduleRefresh(); },
+      () => { cursor = null; scheduleRefresh(); },
     );
-    return () => { alive = false; socket?.close(); };
+    return () => {
+      alive = false;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      socket?.close();
+    };
   }, [client, workspaceId]);
 
   return { snapshot, offline };

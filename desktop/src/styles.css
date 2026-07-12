@@ -2,6 +2,7 @@
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
 button, input, select { font: inherit; }
+.bridge-boot { width: 100%; height: 100%; display: grid; place-items: center; color: #aebbd3; background: #0b1220; font-size: 12px; }
 .companion-shell { width: 100%; height: 100%; display: grid; place-items: center; position: relative; --weather: #91a7ff; --ring: transparent; }
 .companion-character { width: 152px; height: 152px; border: 0; padding: 0; border-radius: 50%; background: transparent; position: relative; cursor: pointer; -webkit-app-region: drag; }
 .character-body { position: absolute; inset: 31px; border-radius: 45% 45% 48% 48%; background: linear-gradient(150deg, #fff 0%, #dbe6ff 55%, #a9bbeb 100%); box-shadow: inset -9px -12px 24px #8799c655, 0 18px 45px #08132980; }

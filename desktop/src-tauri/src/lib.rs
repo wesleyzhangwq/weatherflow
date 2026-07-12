@@ -144,8 +144,11 @@ pub fn run() {
                 true,
             )?;
             supervisor::monitor(app.handle().clone());
-            app.global_shortcut()
-                .register("CommandOrControl+Shift+Space")?;
+            // A previously installed WeatherFlow build may still own the shortcut.
+            // The desktop must remain usable through the Companion in that case.
+            let _ = app
+                .global_shortcut()
+                .register("CommandOrControl+Shift+Space");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

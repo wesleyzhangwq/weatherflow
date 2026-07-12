@@ -1,4 +1,5 @@
 import type { Approval, Artifact, DesktopSnapshot, DiagnosticExport, LedgerEvent, ResetPreview, ResetResult, Run, SystemStatus, Workspace } from "./types";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
 
@@ -8,6 +9,14 @@ declare global {
 
 export function bridgeConfig(): BridgeConfig {
   return window.__WEATHERFLOW_BRIDGE__ ?? { baseUrl: "http://127.0.0.1:8765" };
+}
+
+export async function resolveBridgeConfig(): Promise<BridgeConfig> {
+  if (window.__WEATHERFLOW_BRIDGE__) return window.__WEATHERFLOW_BRIDGE__;
+  if ("__TAURI_INTERNALS__" in window) {
+    return invoke<BridgeConfig>("daemon_bridge");
+  }
+  return bridgeConfig();
 }
 
 export class WeatherFlowClient {

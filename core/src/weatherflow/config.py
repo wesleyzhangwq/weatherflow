@@ -9,7 +9,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="WF_",
-        env_file=".env",
         extra="ignore",
         frozen=True,
     )

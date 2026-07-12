@@ -34,13 +34,13 @@ def test_configured_bridge_token_gates_http_and_websocket(tmp_path: Path) -> Non
     preflight = client.options(
         "/v1/desktop/snapshot",
         headers={
-            "Origin": "http://localhost:1420",
+            "Origin": "http://localhost:1421",
             "Access-Control-Request-Method": "GET",
             "Access-Control-Request-Headers": "authorization,content-type",
         },
     )
     assert preflight.status_code == 200
-    assert preflight.headers["access-control-allow-origin"] == "http://localhost:1420"
+    assert preflight.headers["access-control-allow-origin"] == "http://localhost:1421"
     assert "authorization" in preflight.headers["access-control-allow-headers"].lower()
 
     with client.websocket_connect("/v1/events?token=launch-secret") as websocket:

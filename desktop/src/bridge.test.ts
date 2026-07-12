@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WeatherFlowClient } from "./bridge";
+import { bridgeConfig, WeatherFlowClient } from "./bridge";
 
 describe("WeatherFlowClient", () => {
   beforeEach(() => vi.restoreAllMocks());
@@ -21,5 +21,9 @@ describe("WeatherFlowClient", () => {
     );
     const body = JSON.parse((fetchMock.mock.calls[0][1]?.body as string));
     expect(body).toEqual({ user_intent: "Ship release", client_request_id: "request-1", workspace_id: "workspace-1" });
+  });
+
+  it("keeps the browser fallback explicit for non-Tauri development", () => {
+    expect(bridgeConfig()).toEqual({ baseUrl: "http://127.0.0.1:8765" });
   });
 });

@@ -29,7 +29,20 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
         ToolSpec(
             tool_id="developer.read_file",
             description="Read a UTF-8 file inside an authorized Workspace root",
-            input_schema={"type": "object", "required": ["path"]},
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "File path relative to the authorized Workspace root, "
+                            "or an absolute path inside that root"
+                        ),
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
             output_schema={"type": "object"},
             effect=ToolEffect.OBSERVE,
             required_scopes=frozenset({"workspace:read"}),
@@ -38,7 +51,21 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
         ToolSpec(
             tool_id="developer.write_file",
             description="Atomically write a UTF-8 file with diff and recovery metadata",
-            input_schema={"type": "object", "required": ["path", "content"]},
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Destination path inside the Workspace root",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Complete UTF-8 file content to write",
+                    },
+                },
+                "required": ["path", "content"],
+                "additionalProperties": False,
+            },
             output_schema={"type": "object"},
             effect=ToolEffect.WORKSPACE_WRITE,
             required_scopes=frozenset({"workspace:write"}),
@@ -50,7 +77,14 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
             description="Commit a validated content-addressed Run artifact",
             input_schema={
                 "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "media_type": {"type": "string"},
+                    "content": {"type": "string"},
+                    "validation": {"type": "object"},
+                },
                 "required": ["name", "media_type", "content"],
+                "additionalProperties": False,
             },
             output_schema={"type": "object"},
             effect=ToolEffect.WORKSPACE_WRITE,
@@ -61,7 +95,11 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
         ToolSpec(
             tool_id="developer.git_status",
             description="Read porcelain Git status for an authorized Workspace root",
-            input_schema={"type": "object"},
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
             output_schema={"type": "object"},
             effect=ToolEffect.EXECUTE,
             required_scopes=frozenset({"workspace:execute"}),
@@ -70,7 +108,23 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
         ToolSpec(
             tool_id="developer.run_command",
             description="Run an allowlisted argv command without a shell",
-            input_schema={"type": "object", "required": ["argv"]},
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "argv": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": "Command and arguments as an argv array; no shell",
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory inside the Workspace",
+                    },
+                },
+                "required": ["argv"],
+                "additionalProperties": False,
+            },
             output_schema={"type": "object"},
             effect=ToolEffect.EXECUTE,
             required_scopes=frozenset({"workspace:execute"}),

@@ -164,7 +164,9 @@ class MiniMaxAdapter:
                 "role": "system",
                 "content": (
                     f"{request.agent.system_prompt}\n\n"
-                    "Call at most one tool per turn. Never invent a tool name."
+                    "Call at most one tool per turn. Never invent a tool name. "
+                    "Every tool call must include every field listed in the function's "
+                    "JSON Schema required array."
                 ),
             }
         ]

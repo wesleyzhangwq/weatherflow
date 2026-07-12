@@ -130,6 +130,24 @@ class SharedTurnLoop:
                         {"error": f"{turn.tool_id} is not in frozen capability snapshot"},
                     )
                     continue
+                missing_arguments = sorted(
+                    set(tool.input_schema.get("required", ())) - set(turn.arguments)
+                )
+                if missing_arguments:
+                    checkpoint = await self._record_observation(
+                        checkpoint,
+                        turn,
+                        {
+                            "error": "invalid_tool_arguments",
+                            "message": (
+                                "Retry the tool call with all required JSON fields. "
+                                f"Missing: {', '.join(missing_arguments)}"
+                            ),
+                            "required": tool.input_schema.get("required", []),
+                            "schema": tool.input_schema,
+                        },
+                    )
+                    continue
                 decision = self.policy.evaluate(tool, workspace)
                 if decision.kind in {DecisionKind.DENY, DecisionKind.HIDE}:
                     checkpoint = await self._record_observation(

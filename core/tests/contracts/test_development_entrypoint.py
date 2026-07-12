@@ -11,7 +11,9 @@ def test_root_package_exposes_pnpm_live_desktop_entrypoint() -> None:
     assert package["scripts"]["dev:app"] == "python3 tools/dev/run_app.py"
     launcher = (ROOT / "tools" / "dev" / "run_app.py").read_text()
     assert '"rustup", "which", "cargo"' in launcher
-    assert '"--filter", "weatherflow-desktop", "exec", "tauri", "dev"' in launcher
+    assert '"productName": "WeatherFlow Dev"' in launcher
+    assert '"identifier": "ai.weatherflow.desktop.dev"' in launcher
+    assert '"devUrl": "http://localhost:1421"' in launcher
 
 
 def test_tauri_development_hooks_use_pnpm() -> None:
@@ -20,5 +22,5 @@ def test_tauri_development_hooks_use_pnpm() -> None:
     assert configuration["build"]["beforeDevCommand"] == "pnpm dev"
     assert configuration["build"]["beforeBuildCommand"] == "pnpm build"
     vite_configuration = (ROOT / "desktop" / "vite.config.ts").read_text()
-    assert "port: 1420" in vite_configuration
+    assert "port: 1421" in vite_configuration
     assert "strictPort: true" in vite_configuration

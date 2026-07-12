@@ -32,6 +32,21 @@ def spec(tool_id: str):
     return next(item for item in developer_tool_specs() if item.tool_id == tool_id)
 
 
+def test_developer_tool_schemas_describe_every_required_argument() -> None:
+    for tool in developer_tool_specs():
+        required = set(tool.input_schema.get("required", ()))
+        properties = set(tool.input_schema.get("properties", {}))
+        assert required <= properties, tool.tool_id
+
+    assert spec("developer.read_file").input_schema["properties"]["path"] == {
+        "type": "string",
+        "description": (
+            "File path relative to the authorized Workspace root, "
+            "or an absolute path inside that root"
+        ),
+    }
+
+
 async def test_read_and_write_stay_inside_workspace(tmp_path: Path) -> None:
     project, workspace, executor = await setup(tmp_path)
     context = ToolExecutionContext(run_id="run-1", workspace_id=workspace.id)

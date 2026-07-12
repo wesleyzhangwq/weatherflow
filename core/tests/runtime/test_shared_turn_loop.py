@@ -185,6 +185,41 @@ async def test_tool_outside_snapshot_becomes_observation(tmp_path: Path) -> None
     assert "not in frozen capability snapshot" in model.requests[-1].messages[-1].content
 
 
+async def test_missing_required_tool_arguments_are_rejected_before_execution(
+    tmp_path: Path,
+) -> None:
+    read_tool = ToolSpec(
+        tool_id="files.read",
+        description="Read file",
+        input_schema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+        output_schema={},
+        effect=ToolEffect.OBSERVE,
+        source="test",
+        source_version="1",
+    )
+    model = ScriptedModel(
+        [
+            ToolCallTurn(tool_id="files.read", arguments={}),
+            FinalTurn(content="Recovered after validation"),
+        ]
+    )
+    loop, executors, _, _, workspace, agent, run = await setup_loop(
+        tmp_path, model, tools=(read_tool,)
+    )
+    executor = RecordingExecutor()
+    executors.register("files.read", executor)
+
+    outcome = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert outcome.status is LoopStatus.SUCCEEDED
+    assert executor.calls == []
+    assert "Missing: path" in model.requests[-1].messages[-1].content
+
+
 async def test_step_budget_exhaustion_fails_run(tmp_path: Path) -> None:
     model = ScriptedModel([ToolCallTurn(tool_id="files.read", arguments={})])
     loop, executors, runs, _, workspace, agent, run = await setup_loop(tmp_path, model, max_steps=1)
