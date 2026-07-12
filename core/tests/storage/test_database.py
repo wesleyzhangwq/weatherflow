@@ -24,13 +24,14 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
                 "('events', 'actions', 'approvals', 'capability_snapshots', "
                 "'artifacts', 'checkpoints', 'workspaces', 'rhythm_snapshots', "
                 "'episodic_memories', 'profile_assertions', 'memory_search_index', "
-                "'checkpoint_quarantine', 'onboarding_preferences') "
+                "'checkpoint_quarantine', 'onboarding_preferences', "
+                "'model_configurations') "
                 "ORDER BY name"
             )
         ).fetchall()
 
     assert journal_mode == ("wal",)
-    assert migration == (11,)
+    assert migration == (12,)
     assert tables == [
         ("actions",),
         ("approvals",),
@@ -41,6 +42,7 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
         ("episodic_memories",),
         ("events",),
         ("memory_search_index",),
+        ("model_configurations",),
         ("onboarding_preferences",),
         ("profile_assertions",),
         ("rhythm_snapshots",),
@@ -69,4 +71,4 @@ async def test_initialize_is_idempotent(tmp_path: Path) -> None:
             await connection.execute("SELECT COUNT(*) FROM schema_migrations")
         ).fetchone()
 
-    assert tuple(count) == (11,)
+    assert tuple(count) == (12,)

@@ -42,6 +42,45 @@ def test_parser_requires_a_command_without_version() -> None:
     assert args.reload is True
 
 
+def test_minimax_configuration_parser_uses_current_safe_defaults() -> None:
+    args = build_parser().parse_args(["configure-minimax", "--api-key-stdin"])
+
+    assert args.command == "configure-minimax"
+    assert args.model == "MiniMax-M2.7"
+    assert args.base_url == "https://api.minimax.io/v1"
+    assert args.api_key_stdin is True
+
+
+def test_minimax_configuration_uses_hidden_prompt_and_redacted_output(monkeypatch, capsys) -> None:
+    captured: dict[str, str] = {}
+
+    class Configuration:
+        def model_dump_json(self, **kwargs) -> str:
+            assert kwargs == {"exclude": {"credential_ref"}}
+            return '{"provider":"minimax","model":"MiniMax-M2.7"}'
+
+    class Container:
+        async def configure_minimax(self, **kwargs):
+            captured.update(kwargs)
+            return Configuration()
+
+    async def create(settings):
+        return Container()
+
+    monkeypatch.setattr("weatherflow.cli.RuntimeContainer.create", create)
+    monkeypatch.setattr("weatherflow.cli.getpass.getpass", lambda prompt: "hidden-key")
+
+    exit_code = main(["configure-minimax"])
+
+    assert exit_code == 0
+    assert captured == {
+        "api_key": "hidden-key",
+        "model": "MiniMax-M2.7",
+        "base_url": "https://api.minimax.io/v1",
+    }
+    assert "hidden-key" not in capsys.readouterr().out
+
+
 def test_run_and_status_commands_use_durable_data_dir(tmp_path, capsys) -> None:
     exit_code = main(
         [

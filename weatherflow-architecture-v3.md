@@ -59,6 +59,8 @@ The daemon is also usable through CLI and MCP. No client owns business state.
 13. User deletion and retention policy outrank append-only audit storage.
 14. Cockpit and system notifications never open from state changes alone.
 15. No alternate execution path may bypass the Run Coordinator or Trust Plane.
+16. Model adapters translate provider wire formats only; they cannot add tools,
+    scopes, approvals, or durable provider-specific reasoning state.
 
 ## 4. v3.0 scope
 
@@ -84,3 +86,9 @@ messaging catalogs, and all v2 compatibility.
 
 - 2026-07-12: Approved clean-slate v3 rewrite with Python core, Tauri shell,
   macOS-first delivery, no v2 compatibility, and a rhythm-aware general harness.
+- 2026-07-12: Approved MiniMax as the first production ModelAdapter. Per-Workspace
+  configuration stores model/base URL plus a credential reference in SQLite;
+  the API key lives only in macOS Keychain and enters requests at the transport
+  boundary. Provider-safe function aliases map back to the frozen ToolSpec IDs.
+  Hidden reasoning is intentionally not persisted; Echo remains only as a
+  visibly unconfigured smoke fallback.

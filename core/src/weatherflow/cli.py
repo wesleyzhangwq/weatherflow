@@ -1,6 +1,8 @@
 import argparse
 import asyncio
+import getpass
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -24,6 +26,15 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--reload", action="store_true")
 
     subparsers.add_parser("mcp-server", help="Run the WeatherFlow stdio MCP server")
+
+    configure_minimax = subparsers.add_parser(
+        "configure-minimax",
+        help="Validate and store a MiniMax API key in the macOS Keychain",
+    )
+    configure_minimax.add_argument("--model", default="MiniMax-M2.7")
+    configure_minimax.add_argument("--base-url", default="https://api.minimax.io/v1")
+    configure_minimax.add_argument("--api-key-stdin", action="store_true")
+    subparsers.add_parser("model-status", help="Show non-secret model configuration status")
 
     run = subparsers.add_parser("run", help="Create and execute a durable Run")
     run.add_argument("intent")
@@ -71,6 +82,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 async def _run_command(args: argparse.Namespace) -> int:
     container = await RuntimeContainer.create(Settings(data_dir=args.data_dir))
+    if args.command == "configure-minimax":
+        api_key = (
+            sys.stdin.readline().strip()
+            if args.api_key_stdin
+            else getpass.getpass("MiniMax API key (stored in macOS Keychain): ").strip()
+        )
+        if not api_key:
+            return 2
+        configuration = await container.configure_minimax(
+            api_key=api_key,
+            model=args.model,
+            base_url=args.base_url,
+        )
+        print(configuration.model_dump_json(exclude={"credential_ref"}))
+        return 0
+    if args.command == "model-status":
+        status = await container.model_configurations.status(container.default_workspace.id)
+        print(status.model_dump_json())
+        return 0
     if args.command == "mcp-server":
         from weatherflow.mcp.server import serve_stdio
 

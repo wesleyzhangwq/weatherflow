@@ -25,6 +25,10 @@ class CredentialStore(Protocol):
     def resolve(self, reference: CredentialRef) -> str | None: ...
 
 
+class WritableCredentialStore(CredentialStore, Protocol):
+    def set(self, reference: CredentialRef, secret: str) -> None: ...
+
+
 class MappingCredentialStore:
     def __init__(self, values: Mapping[str, str]) -> None:
         self._values = dict(values)
@@ -34,6 +38,44 @@ class MappingCredentialStore:
 
     def __repr__(self) -> str:
         return f"MappingCredentialStore(keys={sorted(self._values)})"
+
+
+class KeyringBackend(Protocol):
+    def get_password(self, service: str, username: str) -> str | None: ...
+
+    def set_password(self, service: str, username: str, password: str) -> None: ...
+
+
+class KeyringCredentialStore:
+    def __init__(
+        self,
+        *,
+        backend: KeyringBackend | None = None,
+        service_prefix: str = "ai.weatherflow",
+    ) -> None:
+        if backend is None:
+            import keyring
+
+            backend = keyring
+        self._backend = backend
+        self._service_prefix = service_prefix
+
+    def resolve(self, reference: CredentialRef) -> str | None:
+        return self._backend.get_password(
+            f"{self._service_prefix}.{reference.provider}", reference.name
+        )
+
+    def set(self, reference: CredentialRef, secret: str) -> None:
+        if not secret or len(secret) > 10_000:
+            raise ValueError("credential must be a bounded non-empty value")
+        self._backend.set_password(
+            f"{self._service_prefix}.{reference.provider}",
+            reference.name,
+            secret,
+        )
+
+    def __repr__(self) -> str:
+        return f"KeyringCredentialStore(prefix={self._service_prefix!r}, backend=<redacted>)"
 
 
 class CredentialBroker:

@@ -285,6 +285,7 @@ def create_app(
             )
             providers[f"mcp.{connection.client.server_name}"] = health
         onboarding = await service.onboarding.get(workspace.id)
+        model_status = await service.model_configurations.status(workspace.id)
         return SystemStatus(
             workspace_id=workspace.id,
             onboarding_completed=onboarding.completed,
@@ -300,6 +301,7 @@ def create_app(
                 "aggregate_behavior": "90d",
                 "memory": "until_explicit_reset",
             },
+            model=model_status,
         )
 
     @app.get("/v1/onboarding", response_model=OnboardingState)

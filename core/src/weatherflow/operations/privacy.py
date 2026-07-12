@@ -147,6 +147,11 @@ class PrivacyService:
                     (workspace_id,),
                 )
                 deleted += cursor.rowcount
+                cursor = await connection.execute(
+                    "DELETE FROM model_configurations WHERE workspace_id = ?",
+                    (workspace_id,),
+                )
+                deleted += cursor.rowcount
             await self.ledger.append_in(
                 connection,
                 Event.new(
@@ -218,9 +223,16 @@ class PrivacyService:
                       (SELECT COUNT(*) FROM runs WHERE workspace_id = ?) +
                       (SELECT COUNT(*) FROM events WHERE stream_id = ? OR correlation_id = ?) +
                       (SELECT COUNT(*) FROM onboarding_preferences WHERE workspace_id = ?)
+                      + (SELECT COUNT(*) FROM model_configurations WHERE workspace_id = ?)
                       AS count
                     """,
-                    (workspace_id, workspace_id, workspace_id, workspace_id),
+                    (
+                        workspace_id,
+                        workspace_id,
+                        workspace_id,
+                        workspace_id,
+                        workspace_id,
+                    ),
                 )
             ).fetchone()
             return content_count + int(operational["count"])

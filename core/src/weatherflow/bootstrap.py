@@ -2,6 +2,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import uuid4
 
+import httpx
+
 from weatherflow.artifacts import ArtifactManifest, ArtifactRepository, ArtifactStore
 from weatherflow.capabilities import (
     CapabilityCatalog,
@@ -32,12 +34,19 @@ from weatherflow.config import Settings
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.extensions import (
     CapabilityPackManifest,
+    KeyringCredentialStore,
     PackageInstallExecutor,
     PackageStore,
+    WritableCredentialStore,
     package_install_tool_spec,
 )
 from weatherflow.mcp.client import ConnectedMCP, MCPRegistry, MCPTransport
 from weatherflow.memory import MemoryStore
+from weatherflow.models import (
+    ModelConfiguration,
+    ModelConfigurationRepository,
+    ModelConfigurationService,
+)
 from weatherflow.operations import DiagnosticsService, OnboardingService, PrivacyService
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
@@ -106,6 +115,9 @@ class RuntimeContainer:
     workers: WorkerCoordinator
     use_builtin_pack_resolution: bool
     mcp_connections: tuple[ConnectedMCP, ...]
+    model_configurations: ModelConfigurationService
+    model_configuration: ModelConfiguration | None
+    credential_store: WritableCredentialStore
 
     @classmethod
     async def create(
@@ -118,6 +130,8 @@ class RuntimeContainer:
         calendar_provider: CalendarProvider | None = None,
         github_provider: GitHubProvider | None = None,
         mcp_transports: Mapping[str, MCPTransport] | None = None,
+        credential_store: WritableCredentialStore | None = None,
+        model_http_client: httpx.AsyncClient | None = None,
     ) -> "RuntimeContainer":
         database = Database(settings.data_dir / "weatherflow.db")
         await database.initialize()
@@ -190,6 +204,16 @@ class RuntimeContainer:
             workspaces=workspaces,
         )
         onboarding = OnboardingService(database=database, ledger=ledger)
+        resolved_credential_store = credential_store or KeyringCredentialStore()
+        model_configuration_repository = ModelConfigurationRepository(database)
+        model_configurations = ModelConfigurationService(
+            database=database,
+            repository=model_configuration_repository,
+            ledger=ledger,
+            credential_store=resolved_credential_store,
+            client=model_http_client,
+        )
+        model_configuration = await model_configuration_repository.get(default_workspace.id)
         use_builtin_pack_resolution = catalog is None
         resolved_catalog = catalog or CapabilityCatalog(
             builtin_tool_specs(
@@ -200,7 +224,11 @@ class RuntimeContainer:
         )
         if use_builtin_pack_resolution:
             resolved_catalog.register(package_install_tool_spec())
-        resolved_model = model or EchoModelAdapter()
+        resolved_model = model or (
+            model_configurations.adapter(model_configuration)
+            if model_configuration is not None
+            else EchoModelAdapter()
+        )
         executors = ToolExecutorRegistry()
         if use_builtin_pack_resolution:
             install_executor = PackageInstallExecutor(
@@ -308,9 +336,31 @@ class RuntimeContainer:
             workers=workers,
             use_builtin_pack_resolution=use_builtin_pack_resolution,
             mcp_connections=tuple(mcp_connections),
+            model_configurations=model_configurations,
+            model_configuration=model_configuration,
+            credential_store=resolved_credential_store,
         )
         await container._audit_startup_recovery()
         return container
+
+    async def configure_minimax(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str,
+    ) -> ModelConfiguration:
+        configuration = await self.model_configurations.configure_minimax(
+            workspace_id=self.default_workspace.id,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
+        adapter = self.model_configurations.adapter(configuration)
+        self.model_configuration = configuration
+        self.model = adapter
+        self.loop.model = adapter
+        return configuration
 
     async def submit_run(
         self,

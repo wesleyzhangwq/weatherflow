@@ -47,6 +47,11 @@ three, and the parent receives only a compact result plus Artifact references.
 P3c binds immutable Rhythm strategy to Runs and validates the complete
 overloaded-release story with deterministic trajectory, integrated desktop,
 and native macOS shell gates.
+P4 completes verified extension packages, supervised MCP client/server
+surfaces, Personal Operations, source-linked local memory, diagnostics,
+retention/reset, recovery, onboarding, and a standalone arm64 macOS release.
+The MiniMax production adapter adds OpenAI-compatible M2.7/M2.5 text and tool
+calling while keeping API keys in macOS Keychain.
 
 ## Read first
 
@@ -57,6 +62,7 @@ and native macOS shell gates.
 - `docs/flagship-trajectory.md`
 - `docs/extensions.md`
 - `docs/mcp.md`
+- `docs/minimax.md`
 
 WeatherFlow v2 is preserved in Git history and the local tag
 `weatherflow-v2-final`; it is not a compatibility target.
@@ -84,8 +90,8 @@ make check
 cd desktop && npx tauri dev
 ```
 
-The development sidecar shim expects the `weatherflow` CLI on `PATH`; P4
-packaging replaces it with a standalone Python sidecar binary.
+The release desktop bundles a standalone arm64 Python sidecar. Development may
+still run the daemon directly through the `weatherflow` CLI.
 
 P2 native acceptance also runs successfully with:
 
@@ -94,7 +100,8 @@ cd desktop
 npx tauri build --debug --no-bundle
 ```
 
-Release `.app`/`.dmg` assembly, signing, and notarization remain P4 concerns.
+Release assembly and local ad-hoc validation are documented in
+`docs/release-checklist.md`.
 
 The daemon listens on `127.0.0.1:8765` by default.
 
@@ -116,6 +123,8 @@ weatherflow --data-dir ~/.local/share/weatherflow status <run_id>
 weatherflow --data-dir ~/.local/share/weatherflow timeline <run_id>
 weatherflow --data-dir ~/.local/share/weatherflow approve <approval_id>
 weatherflow --data-dir ~/.local/share/weatherflow mcp-server
+weatherflow --data-dir ~/.local/share/weatherflow configure-minimax
+weatherflow --data-dir ~/.local/share/weatherflow model-status
 ```
 
 Equivalent HTTP entrypoints begin at `POST /v1/runs`, `GET /v1/runs/{run_id}`,

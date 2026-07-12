@@ -39,6 +39,8 @@ def main() -> int:
         str(ROOT / "core" / "src"),
         "--collect-submodules",
         "uvicorn",
+        "--collect-submodules",
+        "keyring",
         "--hidden-import",
         "weatherflow.api.app",
         "--distpath",

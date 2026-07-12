@@ -227,4 +227,18 @@ MIGRATIONS = (
         );
         """,
     ),
+    Migration(
+        version=12,
+        sql="""
+        CREATE TABLE model_configurations (
+            workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            credential_ref TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 )

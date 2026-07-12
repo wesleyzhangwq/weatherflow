@@ -34,6 +34,13 @@ async def test_status_metrics_export_and_reset_require_explicit_requests(
     assert status.json()["local_only"] is True
     assert status.json()["telemetry_upload"] is False
     assert status.json()["behavior_sensor"]["raw_content_captured"] is False
+    assert status.json()["model"] == {
+        "configured": False,
+        "provider": "echo",
+        "model": None,
+        "base_url": None,
+        "credential_available": False,
+    }
     assert metrics.status_code == 200
     assert export.status_code == 201
     assert Path(export.json()["path"]).is_relative_to(

@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from weatherflow.capabilities import ToolEffect
+from weatherflow.models import ModelStatus
 from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import Run
 from weatherflow.trust import Approval
@@ -71,3 +72,4 @@ class SystemStatus(BaseModel):
     providers: dict[str, str]
     behavior_sensor: dict[str, bool | str]
     retention: dict[str, str]
+    model: ModelStatus

@@ -292,6 +292,25 @@ Orchestrator and Workers use the same turn loop:
 The loop must support provider adapters without embedding provider-specific
 message structures into domain data.
 
+#### 6.3.1 Production model adapter
+
+MiniMax's OpenAI-compatible Chat Completions API is the first production model
+provider. `MiniMaxAdapter` translates domain messages, frozen `ToolSpec`
+schemas, usage, final text, tool calls, and bounded leaf delegation at the
+provider boundary. Canonical dotted tool IDs receive deterministic provider-
+safe aliases and map back before the runtime sees a `ModelTurn`; an unknown
+alias fails closed.
+
+Per-Workspace SQLite configuration owns only provider, model, HTTPS base URL,
+version, and `credential_ref`. The MiniMax API key lives in macOS Keychain and
+is resolved by `CredentialBroker` only inside the HTTP transport callback.
+Echo is a visible unconfigured smoke fallback, not a production model path.
+
+MiniMax reasoning fields and `<think>` blocks are not persisted in domain
+messages, checkpoints, events, or memory. WeatherFlow preserves action/tool
+continuity rather than hidden chain-of-thought. Provider errors are redacted
+and enter the existing bounded retry/pause semantics.
+
 ### 6.4 Agent hierarchy
 
 - One Orchestrator owns the user goal, decomposition, delegation, and final
@@ -902,6 +921,8 @@ execution path to bypass the Run Coordinator.
 14. Uncertain side effects enter `NEEDS_REVIEW`, not automatic retry.
 15. User deletion and retention policy outrank append-only storage.
 16. No v2 compatibility path exists in v3.
+17. Model providers cannot widen frozen capabilities or persist hidden
+    reasoning; credentials resolve only at their transport boundary.
 
 ## 18. Design completion criteria
 

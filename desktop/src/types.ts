@@ -48,6 +48,7 @@ export interface SystemStatus {
   providers: Record<string, string>;
   behavior_sensor: { mode: string; raw_content_captured: false; fallback_to_deliberate_signals: true };
   retention: Record<string, string>;
+  model: { configured: boolean; provider: string; model: string | null; base_url: string | null; credential_available: boolean };
 }
 export interface ResetPreview { category: string; count: number }
 export interface ResetResult { category: string; deleted_count: number }

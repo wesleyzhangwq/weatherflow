@@ -23,6 +23,10 @@ class SecurityScanner:
             "workspaces": ("id", ("config",)),
             "artifacts": ("id", ("validation",)),
             "checkpoint_quarantine": ("run_id", ("raw_payload",)),
+            "model_configurations": (
+                "workspace_id",
+                ("provider", "model", "base_url", "credential_ref"),
+            ),
         }
         findings: list[SecurityFinding] = []
         async with self.database.connect() as connection:
