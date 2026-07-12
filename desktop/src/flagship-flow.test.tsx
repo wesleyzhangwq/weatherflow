@@ -32,7 +32,7 @@ function FlagshipDesktopStory({ client }: { client: WeatherFlowClient }) {
   if (surface === "cockpit") {
     return <Cockpit client={client} snapshot={snapshot(status)} offline={false} />;
   }
-  return <Companion snapshot={snapshot(status)} onOpenCapsule={() => setSurface("capsule")} onOpenCockpit={() => setSurface("cockpit")} />;
+  return <Companion snapshot={snapshot(status)} onStartDrag={() => undefined} onOpenCapsule={() => setSurface("capsule")} onOpenCockpit={() => setSurface("cockpit")} />;
 }
 
 describe("flagship macOS desktop story", () => {
@@ -62,17 +62,17 @@ describe("flagship macOS desktop story", () => {
     expect(container.querySelector(".companion-shell")).toHaveAttribute("data-weather", "storm");
     expect(container.querySelector(".speech-bubble")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByLabelText("打开指令输入框"));
+    fireEvent.click(screen.getByLabelText("当前天气：风暴"));
     const input = screen.getByLabelText("告诉 WeatherFlow 要做什么");
     fireEvent.change(input, { target: { value: "Ship with least burden" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(client.createRun).toHaveBeenCalledOnce());
-    await waitFor(() => expect(container.querySelector(".companion-shell")).toHaveAttribute("data-ring", "active"));
+    await waitFor(() => expect(container.querySelector(".companion-shell")).toHaveAttribute("data-agent-state", "active"));
 
     act(() => advanceToApproval());
     expect(await screen.findByLabelText("等待批准")).toBeInTheDocument();
     expect(screen.queryByText("今日控制台")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("打开控制台"));
+    fireEvent.click(screen.getByLabelText("等待批准"));
 
     expect(await screen.findByText("github.create_release")).toBeInTheDocument();
     expect(screen.getByText(/v3.0.0/)).toBeInTheDocument();

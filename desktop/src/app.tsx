@@ -35,5 +35,5 @@ function ConnectedApp({ client }: { client: WeatherFlowClient }) {
   const sensorAvailable = useActivityMetadata(client, surface === "companion" && snapshot?.metadata_sensor_enabled === true, workspace.selectedId);
   if (surface === "capsule") return <Capsule client={client} workspaceId={workspace.selectedId} onAccepted={nativeWindows.closeCapsule} onCancel={nativeWindows.closeCapsule} />;
   if (surface === "cockpit") return <Cockpit client={client} snapshot={snapshot} offline={offline} workspaces={workspace.workspaces} selectedWorkspaceId={workspace.selectedId} onSelectWorkspace={workspace.select} onAuthorizeWorkspace={workspace.authorize} />;
-  return <Companion snapshot={snapshot} offline={offline} sensorAvailable={sensorAvailable} onOpenCapsule={nativeWindows.openCapsule} onOpenCockpit={nativeWindows.openCockpit} />;
+  return <Companion snapshot={snapshot} offline={offline} sensorAvailable={sensorAvailable} onStartDrag={nativeWindows.startCompanionDrag} onOpenCapsule={nativeWindows.openCapsule} onOpenCockpit={nativeWindows.openCockpit} />;
 }

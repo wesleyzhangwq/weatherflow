@@ -26,6 +26,14 @@ The combined image compares the full left navigation, conversation body, and bot
 
 ## Comparison history
 
+### Companion and Capsule simplification
+
+- Companion contract: the ambient surface is now a 72×72 transparent native window containing one 56px weather button and a 44px Phosphor weather symbol. Mascot art, orbital rings, particles, speech UI, and decorative containers are absent.
+- State separation: human weather remains the only primary visual; agent state is limited to one optional 11px status dot, and sensor degradation to one optional 7px dot.
+- Drag behavior: a primary-button movement of at least 5px calls Tauri's native `startDragging()` API. The originating click is suppressed, while a stationary click still opens Capsule.
+- Capsule contract: the native surface is 460×58 and contains only a 48px input capsule plus its close control. Submit, Escape, close, frontend blur, and native `Focused(false)` all dismiss it.
+- Verification evidence: React interaction tests cover click-versus-drag and browser blur. Rust tests cover the native dimensions; the desktop contract test checks the focus-loss handler, Tauri drag permission, and adapter call.
+
 ### Pass 1
 
 - Evidence: `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/cockpit-pass1.png`

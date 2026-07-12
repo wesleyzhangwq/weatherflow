@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useEffect, useState, type DragEvent, type FormEvent } from "react";
 import { X } from "@phosphor-icons/react";
 import { WeatherFlowClient } from "../bridge";
 
@@ -8,6 +8,11 @@ export function Capsule({ client, workspaceId, onAccepted, onCancel }: CapsulePr
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    window.addEventListener("blur", onCancel);
+    return () => window.removeEventListener("blur", onCancel);
+  }, [onCancel]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -37,7 +42,6 @@ export function Capsule({ client, workspaceId, onAccepted, onCancel }: CapsulePr
   return (
     <main className="capsule-shell">
       <form className="command-capsule" onSubmit={submit}>
-        <span className="capsule-mark" aria-hidden="true" />
         <input
           autoFocus
           aria-label="告诉 WeatherFlow 要做什么"
@@ -49,7 +53,6 @@ export function Capsule({ client, workspaceId, onAccepted, onCancel }: CapsulePr
           onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
           disabled={submitting}
         />
-        <kbd>回车</kbd>
         <button type="button" className="capsule-close" aria-label="关闭输入框" onClick={onCancel}><X /></button>
       </form>
       {error && <p role="alert">{error}</p>}

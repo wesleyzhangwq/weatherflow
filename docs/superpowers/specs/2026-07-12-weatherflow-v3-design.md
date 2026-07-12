@@ -23,8 +23,8 @@ The product has three defining properties:
 1. **Human state is a runtime input.** Rhythm intelligence affects planning,
    interaction density, delegation, and scope recommendations. It is not only a
    label or desktop animation.
-2. **The desktop companion is the primary habit surface.** A quiet floating
-   companion communicates human state through micro-weather and accepts commands
+2. **The desktop weather glyph is the primary habit surface.** A quiet floating
+   icon communicates human state through a stable weather symbol and accepts commands
    through a Spotlight-style input capsule. It never opens the full application
    without an explicit user action.
 3. **A small Python harness is the sole business core.** It owns durable runs,
@@ -53,17 +53,20 @@ The following decisions are binding for v3.0.
 ### 2.2 Desktop interaction
 
 - Use a **dual-surface model**:
-  - a floating companion for ambient presence and fast input;
+  - a floating weather glyph for ambient presence and fast input;
   - a full Cockpit for tasks, approvals, artifacts, history, and settings.
-- Human state is rendered as **micro-weather around a stable character**.
-- Agent work state is rendered separately through an outer ring, badge, and
-  small motion. Agent state never replaces human-state weather.
-- Clicking the character or using a global shortcut opens a **pure input
+- Human state is rendered as one **simple weather icon** without a mascot,
+  orbit, particle system, or decorative container.
+- Agent work state is rendered separately through one small status dot. Agent
+  state never replaces human-state weather.
+- The whole weather icon distinguishes click from drag: pointer movement beyond
+  a small threshold invokes native window dragging; a click or global shortcut opens a **pure input
   capsule**. The capsule contains no recommendations, history, rhythm summary,
   or task timeline.
-- Submitting a command immediately closes the capsule.
+- Submitting a command immediately closes the capsule. Escape, the explicit
+  close control, and loss of window focus also close it.
 - The Cockpit **never opens automatically**. The user opens it through the
-  task ring/badge, tray, or explicit command.
+  task status dot, tray, or explicit command.
 - WeatherFlow is silent by default. Human-state changes alter micro-weather but
   do not create speech bubbles, system notifications, or proactive actions.
 - Inside the explicitly opened Cockpit, conversation is the dominant workspace.
@@ -148,7 +151,7 @@ The expected behavior is:
 1. The current HumanStateSnapshot indicates high cognitive load and recovery
    need, with sufficient evidence and freshness.
 2. The user submits the request through the pure input capsule.
-3. The capsule closes. A durable Run is created, and the companion task ring
+3. The capsule closes. A durable Run is created, and the secondary task dot
    indicates background work.
 4. The Orchestrator receives a RhythmPolicy that favors fewer questions,
    batched approvals, background delegation, compact output, and removal of
@@ -494,7 +497,7 @@ contain human-state-to-weather logic.
    - never produces proactive text.
 2. **Command Capsule**
    - anchored to the companion;
-   - opened by character click or global shortcut;
+   - opened by weather-icon click or global shortcut;
    - one focused input with paste and file drop;
    - closes immediately after successful command acceptance.
 3. **Cockpit Window**
@@ -507,12 +510,12 @@ contain human-state-to-weather logic.
 
 | Run state | Companion treatment |
 |---|---|
-| idle | no task ring |
-| queued/running | animated cyan/indigo ring |
-| waiting approval | amber ring and small approval badge |
-| paused/offline | muted gray ring |
-| succeeded | short green completion transition, then idle |
-| failed/needs review | red or coral badge; no modal or auto-open |
+| idle | no task dot |
+| queued/running | blue task dot |
+| waiting approval | amber task dot |
+| paused/offline | muted gray task dot |
+| succeeded | return to idle |
+| failed/needs review | red or coral task dot; no modal or auto-open |
 
 Human-state weather remains visible through every Run state.
 
@@ -885,7 +888,7 @@ must judge policy, state transition, provenance, and recovery contracts.
 - click and global-shortcut capsule activation;
 - submit and immediate capsule collapse;
 - weather update without a proactive bubble;
-- task ring state transitions;
+- task-dot state transitions;
 - explicit Cockpit opening;
 - approval through Cockpit;
 - daemon crash and recovery;

@@ -27,6 +27,14 @@ describe("Capsule", () => {
     expect(cancel).toHaveBeenCalledTimes(2);
   });
 
+  it("cancels automatically when the window loses focus", () => {
+    const cancel = vi.fn();
+    const client = { createRun: vi.fn() } as unknown as WeatherFlowClient;
+    render(<Capsule client={client} workspaceId="w1" onAccepted={() => undefined} onCancel={cancel} />);
+    fireEvent.blur(window);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("keeps input visible when acceptance fails", async () => {
     const client = { createRun: vi.fn().mockRejectedValue(new Error("offline")) } as unknown as WeatherFlowClient;
     render(<Capsule client={client} workspaceId="w1" onAccepted={() => undefined} onCancel={() => undefined} />);

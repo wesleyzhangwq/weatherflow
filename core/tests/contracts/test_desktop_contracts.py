@@ -31,10 +31,14 @@ def test_tauri_starts_only_companion_and_owns_window_lifecycle() -> None:
 def test_desktop_surfaces_are_compact_movable_and_responsive() -> None:
     rust = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
     companion = (ROOT / "desktop/src/components/Companion.tsx").read_text()
+    native = (ROOT / "desktop/src/native.ts").read_text()
     styles = (ROOT / "desktop/src/styles.css").read_text()
 
-    assert "const STARTUP_SIZE: (f64, f64) = (128.0, 128.0);" in rust
-    assert "data-tauri-drag-region" in companion
+    assert "const STARTUP_SIZE: (f64, f64) = (72.0, 72.0);" in rust
+    assert "startCompanionDrag" in native
+    assert "onStartDrag" in companion
+    assert "character-image" not in companion
+    assert "Focused(false)" in rust
     assert "100dvh" in styles
     assert "@media (max-width: 980px)" in styles
 

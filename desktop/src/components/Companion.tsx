@@ -1,16 +1,44 @@
+import { useRef, type MouseEvent } from "react";
+import {
+  Cloud,
+  CloudFog,
+  CloudLightning,
+  CloudSun,
+  MoonStars,
+  Sun,
+} from "@phosphor-icons/react";
 import type { DesktopSnapshot, RunStatus, WeatherScene } from "../types";
-import { AppWindow } from "@phosphor-icons/react";
-import companionIcon from "../../src-tauri/icons/icon.png";
 
 interface CompanionProps {
   snapshot: DesktopSnapshot | null;
   offline?: boolean;
   sensorAvailable?: boolean;
+  onStartDrag: () => void | Promise<void>;
   onOpenCapsule: () => void;
   onOpenCockpit: () => void;
 }
 
-function ringState(status?: RunStatus): string {
+const weatherIcons = {
+  clear: Sun,
+  fair: CloudSun,
+  fog: CloudFog,
+  storm: CloudLightning,
+  still: Cloud,
+  night: MoonStars,
+  mixed: CloudSun,
+} satisfies Record<WeatherScene, typeof Sun>;
+
+const weatherLabels: Record<WeatherScene, string> = {
+  clear: "晴朗",
+  fair: "微晴",
+  fog: "薄雾",
+  storm: "风暴",
+  still: "静滞",
+  night: "夜色",
+  mixed: "混合",
+};
+
+function runState(status?: RunStatus): string {
   if (!status || ["succeeded", "cancelled"].includes(status)) return "idle";
   if (["queued", "planning", "running"].includes(status)) return "active";
   if (status === "waiting_approval") return "approval";
@@ -18,24 +46,64 @@ function ringState(status?: RunStatus): string {
   return "attention";
 }
 
-export function Companion({ snapshot, offline = false, sensorAvailable = true, onOpenCapsule, onOpenCockpit }: CompanionProps) {
+export function Companion({ snapshot, offline = false, sensorAvailable = true, onStartDrag, onOpenCapsule, onOpenCockpit }: CompanionProps) {
   const weather: WeatherScene = snapshot?.rhythm.weather.scene ?? "mixed";
-  const ring = offline ? "offline" : ringState(snapshot?.latest_run?.status);
+  const state = offline ? "offline" : runState(snapshot?.latest_run?.status);
+  const WeatherIcon = weatherIcons[weather];
+  const pointerOrigin = useRef<{ x: number; y: number } | null>(null);
+  const dragged = useRef(false);
+
+  const pointerDown = (event: MouseEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    pointerOrigin.current = { x: event.clientX, y: event.clientY };
+    dragged.current = false;
+  };
+  const pointerMove = (event: MouseEvent<HTMLButtonElement>) => {
+    const origin = pointerOrigin.current;
+    if (!origin || dragged.current) return;
+    if ((event.buttons & 1) === 0) {
+      pointerOrigin.current = null;
+      return;
+    }
+    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) < 5) return;
+    dragged.current = true;
+    pointerOrigin.current = null;
+    void onStartDrag();
+  };
+  const pointerUp = () => {
+    pointerOrigin.current = null;
+    if (dragged.current) window.setTimeout(() => { dragged.current = false; }, 0);
+  };
+  const click = () => {
+    if (dragged.current) return;
+    onOpenCapsule();
+  };
+
   return (
-    <main className="companion-shell" data-weather={weather} data-ring={ring}>
-      <div className="companion-drag-surface" data-tauri-drag-region aria-label="拖动悬浮天气" />
-      <button className="companion-character" aria-label="打开指令输入框" onClick={onOpenCapsule}>
-        <span className="weather-layer" aria-hidden="true">
-          <span className="weather-orbit" />
-          <span className="weather-particle particle-one" />
-          <span className="weather-particle particle-two" />
-        </span>
-        <span className="run-ring" aria-hidden="true" />
-        <img className="character-image" src={companionIcon} alt="" draggable={false} />
-        {ring === "approval" && <span className="approval-badge" aria-label="等待批准">!</span>}
+    <main className="companion-shell" data-weather={weather} data-agent-state={state}>
+      <button
+        className="weather-button"
+        aria-label={`当前天气：${weatherLabels[weather]}`}
+        title={`${weatherLabels[weather]} · 点击输入，拖动移动，右键打开控制台`}
+        onMouseDown={pointerDown}
+        onMouseMove={pointerMove}
+        onMouseUp={pointerUp}
+        onClick={click}
+        onContextMenu={(event) => { event.preventDefault(); onOpenCockpit(); }}
+      >
+        <WeatherIcon className="weather-symbol" weight="duotone" aria-hidden="true" />
       </button>
-      {snapshot?.metadata_sensor_enabled && !sensorAvailable && <span className="sensor-unavailable" role="status">行为信号暂不可用</span>}
-      <button className="cockpit-trigger" aria-label="打开控制台" onClick={onOpenCockpit}><AppWindow weight="bold" /></button>
+      {state !== "idle" && (
+        <button
+          className="task-status"
+          data-state={state}
+          aria-label={state === "approval" ? "等待批准" : "查看任务状态"}
+          onClick={onOpenCockpit}
+        />
+      )}
+      {snapshot?.metadata_sensor_enabled && !sensorAvailable && (
+        <span className="sensor-unavailable" role="status" aria-label="行为信号暂不可用" />
+      )}
     </main>
   );
 }

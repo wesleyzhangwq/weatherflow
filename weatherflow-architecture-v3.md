@@ -18,7 +18,7 @@ no code, API, or data compatibility obligation to v2.
 1. WeatherFlow is a rhythm-aware personal agent OS.
 2. Human state is a runtime input, not merely a label or animation.
 3. Explicit user goals outrank rhythm-derived strategy recommendations.
-4. The floating companion is the primary habit surface.
+4. The floating weather glyph is the primary habit surface.
 5. Human weather and Agent work state use separate visual channels.
 6. The command capsule is pure input; the Cockpit never auto-opens.
 7. v3.0 proactivity is silent ambient presentation only.
@@ -133,3 +133,8 @@ compatibility.
   keys remain in Keychain. A custom compatible endpoint may be entered but
   cannot change capability or Trust policy. MiniMax-specific thinking handling
   remains an adapter quirk, not a runtime contract.
+- 2026-07-12: Simplified the ambient shell from a character/orb into one native
+  weather icon. The entire icon is a click-or-drag target: movement beyond a
+  small threshold starts native window dragging, while a click opens the pure
+  input Capsule. Agent state is limited to a small secondary status dot. The
+  Capsule closes on submit, Escape, explicit close, or loss of window focus.

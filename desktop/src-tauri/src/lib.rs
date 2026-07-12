@@ -7,8 +7,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const STARTUP_SURFACE: &str = "companion";
 const SHORTCUT_SURFACE: &str = "capsule";
-const STARTUP_SIZE: (f64, f64) = (128.0, 128.0);
-const CAPSULE_SIZE: (f64, f64) = (500.0, 68.0);
+const STARTUP_SIZE: (f64, f64) = (72.0, 72.0);
+const CAPSULE_SIZE: (f64, f64) = (460.0, 58.0);
 const COCKPIT_SIZE: (f64, f64) = (1080.0, 760.0);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -72,6 +72,15 @@ fn show_or_create(
         window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 restore_companion(&app_handle);
+            }
+        });
+    } else if surface == "capsule" {
+        let capsule_handle = app.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Focused(false)) {
+                if let Some(capsule) = capsule_handle.get_webview_window("capsule") {
+                    let _ = capsule.hide();
+                }
             }
         });
     }
@@ -225,8 +234,8 @@ mod tests {
 
     #[test]
     fn companion_and_capsule_use_compact_sizes() {
-        assert_eq!(STARTUP_SIZE, (128.0, 128.0));
-        assert_eq!(CAPSULE_SIZE, (500.0, 68.0));
+        assert_eq!(STARTUP_SIZE, (72.0, 72.0));
+        assert_eq!(CAPSULE_SIZE, (460.0, 58.0));
     }
 
     #[test]

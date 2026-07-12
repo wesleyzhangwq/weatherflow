@@ -3,17 +3,18 @@
 **Goal:** Make the macOS shell comfortable for daily use and add a truthful,
 bounded connection surface for GitHub, Gmail, and Google Calendar.
 
-## Task 1: Compact movable Companion
+## Task 1: Compact movable weather glyph
 
-- [x] Add failing desktop/Rust contracts for a 128×128 startup window, a native
-  drag region, Chinese accessibility labels, and separate explicit Capsule and
-  Cockpit controls.
-- [x] Replace the oversized character with a compact micro-weather orb and
-  verify click, drag, Run ring, weather, and reduced-motion behavior.
+- [x] Add failing desktop/Rust contracts for a 72×72 startup window, native
+  click-versus-drag behavior, Chinese accessibility labels, and separate
+  explicit Capsule and Cockpit controls.
+- [x] Replace the oversized character/orb with a compact weather icon and
+  verify click-versus-native-drag, secondary Run status, weather, and reduced-motion behavior.
 
 ## Task 2: Cancellable Capsule
 
-- [x] Add failing tests for an explicit close button and Escape cancellation.
+- [x] Add failing tests for an explicit close button, Escape cancellation, and
+  automatic cancellation when the window loses focus.
 - [x] Implement Chinese pure-input copy, retain-on-error, immediate
   close-after-acceptance, and a compact anchored window.
 
