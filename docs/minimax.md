@@ -1,9 +1,14 @@
 # MiniMax model configuration
 
 WeatherFlow uses MiniMax through its OpenAI-compatible Chat Completions API.
-The default production model is `MiniMax-M2.7`; `MiniMax-M2.7-highspeed`,
-`MiniMax-M2.5`, and other currently supported M2 variants can be selected when
-the account exposes them.
+The default production model is `MiniMax-M3`. WeatherFlow currently consumes
+its text and tool-calling subset. Other models can still be selected explicitly
+when the account exposes them.
+
+M3 thinking is explicitly disabled in OpenAI-compatible requests. This avoids
+the provider requirement to replay hidden reasoning during multi-turn tool use
+and preserves WeatherFlow's rule that chain-of-thought never enters durable
+history.
 
 ## Choose the matching endpoint
 
@@ -15,6 +20,30 @@ the account exposes them.
 Do not move a key between regions unless the MiniMax account confirms that the
 key is valid on that endpoint.
 
+## Configure a source checkout
+
+For a Mainland China account:
+
+```bash
+pnpm model:configure:cn
+```
+
+For an international account:
+
+```bash
+pnpm model:configure
+```
+
+Both commands select `MiniMax-M3`, use a hidden API-key prompt, and store the
+credential in macOS Keychain. Start the development app with:
+
+```bash
+pnpm dev:app
+```
+
+This starts the Vite frontend, debug Tauri shell, and reloadable Python core
+from source. Check the non-secret model status with `pnpm model:status`.
+
 ## Configure the installed app
 
 Quit WeatherFlow, then run the standalone daemon inside the installed app:
@@ -23,7 +52,7 @@ Quit WeatherFlow, then run the standalone daemon inside the installed app:
 /Applications/WeatherFlow.app/Contents/MacOS/weatherflow-core \
   --data-dir "$HOME/.local/share/weatherflow" \
   configure-minimax \
-  --model MiniMax-M2.7 \
+  --model MiniMax-M3 \
   --base-url https://api.minimax.io/v1
 ```
 
@@ -42,7 +71,7 @@ Check the non-secret status:
   --data-dir "$HOME/.local/share/weatherflow" model-status
 ```
 
-Reopen WeatherFlow. Cockpit should show `minimax · MiniMax-M2.7` instead of
+Reopen WeatherFlow. Cockpit should show `minimax · MiniMax-M3` instead of
 `Echo smoke fallback`.
 
 ## Runtime boundary

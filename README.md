@@ -50,8 +50,10 @@ and native macOS shell gates.
 P4 completes verified extension packages, supervised MCP client/server
 surfaces, Personal Operations, source-linked local memory, diagnostics,
 retention/reset, recovery, onboarding, and a standalone arm64 macOS release.
-The MiniMax production adapter adds OpenAI-compatible M2.7/M2.5 text and tool
-calling while keeping API keys in macOS Keychain.
+The MiniMax production adapter defaults to OpenAI-compatible `MiniMax-M3` text
+and tool calling while keeping API keys in macOS Keychain. M3 thinking is
+explicitly disabled at the provider boundary so hidden reasoning never has to
+enter durable WeatherFlow history.
 
 ## Read first
 
@@ -71,23 +73,30 @@ WeatherFlow v2 is preserved in Git history and the local tag
 
 - Python 3.12
 - uv
+- Node.js 22+
+- pnpm 10
+- Rust stable
 
 ## Quick start
 
 ```bash
-cp .env.example .env
 make install
 make check
-make eval
-make dev
+pnpm model:configure:cn  # one time; hidden API-key prompt
+pnpm dev:app
 ```
 
-Desktop development uses the same root gate:
+`pnpm dev:app` starts Vite, the debug Tauri shell, and the current Python core
+source with reload enabled. It does not use the last PyInstaller release
+sidecar. International MiniMax accounts should run `pnpm model:configure`
+instead of the `:cn` command.
+
+Useful development commands:
 
 ```bash
-cd desktop && npm ci
 make check
-cd desktop && npx tauri dev
+pnpm dev:web
+pnpm model:status
 ```
 
 The release desktop bundles a standalone arm64 Python sidecar. Development may
@@ -97,7 +106,7 @@ P2 native acceptance also runs successfully with:
 
 ```bash
 cd desktop
-npx tauri build --debug --no-bundle
+pnpm tauri build --debug --no-bundle
 ```
 
 Release assembly and local ad-hoc validation are documented in

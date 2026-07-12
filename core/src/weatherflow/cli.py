@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-minimax",
         help="Validate and store a MiniMax API key in the macOS Keychain",
     )
-    configure_minimax.add_argument("--model", default="MiniMax-M2.7")
+    configure_minimax.add_argument("--model", default="MiniMax-M3")
     configure_minimax.add_argument("--base-url", default="https://api.minimax.io/v1")
     configure_minimax.add_argument("--api-key-stdin", action="store_true")
     subparsers.add_parser("model-status", help="Show non-secret model configuration status")

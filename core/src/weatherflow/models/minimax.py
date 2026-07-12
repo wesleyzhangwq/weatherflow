@@ -48,7 +48,7 @@ class MiniMaxAdapter:
         *,
         broker: CredentialBroker,
         credential_ref: CredentialRef,
-        model: str = "MiniMax-M2.7",
+        model: str = "MiniMax-M3",
         base_url: str = "https://api.minimax.io/v1",
         max_completion_tokens: int = 2048,
         timeout_seconds: float = 120,
@@ -83,6 +83,8 @@ class MiniMaxAdapter:
             "top_p": 0.95,
             "reasoning_split": True,
         }
+        if self.model.startswith("MiniMax-M3"):
+            payload["thinking"] = {"type": "disabled"}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

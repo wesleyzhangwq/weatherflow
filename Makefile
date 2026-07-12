@@ -4,7 +4,7 @@ PY := uv run --package weatherflow-core --extra dev
 
 install:
 	uv sync --all-packages --all-extras
-	cd desktop && npm ci
+	pnpm install --frozen-lockfile
 
 lint:
 	$(PY) ruff check core/src core/tests
@@ -22,7 +22,10 @@ security-check:
 	$(PY) pytest core/tests/operations/test_hardening.py -q
 
 desktop-check:
-	cd desktop && npm run lint && npm run typecheck && npm test && npm run build
+	pnpm --filter weatherflow-desktop lint
+	pnpm --filter weatherflow-desktop typecheck
+	pnpm --filter weatherflow-desktop test
+	pnpm --filter weatherflow-desktop build
 
 rust-check:
 	cd desktop/src-tauri && TOOLCHAIN_BIN=$$(dirname "$$(rustup which cargo)") && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo fmt --check && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo test --lib && PATH="$$TOOLCHAIN_BIN:$$PATH" cargo check

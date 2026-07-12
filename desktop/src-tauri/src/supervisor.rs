@@ -1,8 +1,31 @@
 use serde::Serialize;
 use std::{net::TcpListener, sync::Mutex, time::Duration};
 use tauri::{AppHandle, Manager};
+#[cfg(not(debug_assertions))]
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 use uuid::Uuid;
+
+enum DaemonChild {
+    #[cfg(debug_assertions)]
+    Development(std::process::Child),
+    #[cfg(not(debug_assertions))]
+    Bundled(CommandChild),
+}
+
+impl DaemonChild {
+    fn kill(self) {
+        match self {
+            #[cfg(debug_assertions)]
+            Self::Development(mut child) => {
+                let _ = child.kill();
+            }
+            #[cfg(not(debug_assertions))]
+            Self::Bundled(child) => {
+                let _ = child.kill();
+            }
+        }
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,7 +35,7 @@ pub struct BridgeConfig {
 }
 
 pub struct DaemonSupervisor {
-    pub child: Option<CommandChild>,
+    child: Option<DaemonChild>,
     pub bridge: BridgeConfig,
     failures: u32,
 }
@@ -29,7 +52,7 @@ impl DaemonSupervisor {
 
     fn replace(&mut self, app: &AppHandle) -> Result<(), String> {
         if let Some(child) = self.child.take() {
-            let _ = child.kill();
+            child.kill();
         }
         let (child, bridge) = spawn_sidecar(app)?;
         self.child = Some(child);
@@ -39,7 +62,15 @@ impl DaemonSupervisor {
     }
 }
 
-fn spawn_sidecar(app: &AppHandle) -> Result<(CommandChild, BridgeConfig), String> {
+impl Drop for DaemonSupervisor {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.take() {
+            child.kill();
+        }
+    }
+}
+
+fn spawn_sidecar(app: &AppHandle) -> Result<(DaemonChild, BridgeConfig), String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
     let port = listener
         .local_addr()
@@ -47,13 +78,7 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(CommandChild, BridgeConfig), String
         .port();
     drop(listener);
     let token = Uuid::new_v4().to_string();
-    let command = app
-        .shell()
-        .sidecar("weatherflow-core")
-        .map_err(|error| error.to_string())?
-        .args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
-        .env("WF_BRIDGE_TOKEN", &token);
-    let (_events, child) = command.spawn().map_err(|error| error.to_string())?;
+    let child = spawn_core(app, port, &token)?;
     Ok((
         child,
         BridgeConfig {
@@ -61,6 +86,55 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(CommandChild, BridgeConfig), String
             token,
         },
     ))
+}
+
+#[cfg(debug_assertions)]
+fn spawn_core(_app: &AppHandle, port: u16, token: &str) -> Result<DaemonChild, String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve WeatherFlow source root: {error}"))?;
+    let child = std::process::Command::new("uv")
+        .current_dir(root)
+        .args(development_daemon_args(port))
+        .env("WF_BRIDGE_TOKEN", token)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(|error| format!("cannot start live Python core through uv: {error}"))?;
+    Ok(DaemonChild::Development(child))
+}
+
+#[cfg(not(debug_assertions))]
+fn spawn_core(app: &AppHandle, port: u16, token: &str) -> Result<DaemonChild, String> {
+    let command = app
+        .shell()
+        .sidecar("weatherflow-core")
+        .map_err(|error| error.to_string())?
+        .args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
+        .env("WF_BRIDGE_TOKEN", token);
+    let (_events, child) = command.spawn().map_err(|error| error.to_string())?;
+    Ok(DaemonChild::Bundled(child))
+}
+
+#[cfg(debug_assertions)]
+fn development_daemon_args(port: u16) -> Vec<String> {
+    [
+        "run",
+        "--package",
+        "weatherflow-core",
+        "weatherflow",
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        &port.to_string(),
+        "--reload",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 pub fn restart_delay(failures: u32) -> Duration {
@@ -128,7 +202,7 @@ pub fn restart_daemon(
 
 #[cfg(test)]
 mod tests {
-    use super::restart_delay;
+    use super::{development_daemon_args, restart_delay};
     use std::time::Duration;
 
     #[test]
@@ -136,5 +210,24 @@ mod tests {
         assert_eq!(restart_delay(0), Duration::from_millis(500));
         assert_eq!(restart_delay(1), Duration::from_millis(1_000));
         assert_eq!(restart_delay(20), Duration::from_millis(5_000));
+    }
+
+    #[test]
+    fn debug_app_starts_the_live_python_core() {
+        assert_eq!(
+            development_daemon_args(8765),
+            [
+                "run",
+                "--package",
+                "weatherflow-core",
+                "weatherflow",
+                "serve",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8765",
+                "--reload",
+            ]
+        );
     }
 }

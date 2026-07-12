@@ -22,6 +22,12 @@
 - [x] Rebuild the standalone sidecar and local ad-hoc `.app`/`.dmg` after all adapter tests and full gates pass.
 - [x] Document first-time MiniMax configuration for both `api.minimaxi.com` and `api.minimax.io` accounts.
 
+## M3 development follow-up
+
+- [x] Promote `MiniMax-M3` to the default and explicitly disable M3 thinking at the provider boundary.
+- [x] Add a root pnpm workspace with `pnpm dev:app` and Keychain-backed model configuration commands.
+- [x] Make debug Tauri supervise the reloadable Python source core while preserving the bundled release-sidecar path.
+
 Implementation follows observed RED → code → focused tests → `make check` →
 sidecar/release rebuild → atomic commits. No model response may bypass the
 existing capability snapshot, Trust Plane, approval flow, or Worker bound.

@@ -11,6 +11,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from weatherflow import __version__
@@ -60,6 +61,8 @@ def create_app(
 
     @app.middleware("http")
     async def authenticate_bridge(request: Request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
         expected = resolved_settings.bridge_token
         if expected is not None and not _valid_token(
             request.headers.get("authorization"), expected
@@ -69,6 +72,18 @@ def create_app(
                 content={"detail": {"code": "bridge_unauthorized"}},
             )
         return await call_next(request)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:1420",
+            "http://127.0.0.1:1420",
+            "tauri://localhost",
+            "http://tauri.localhost",
+        ],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
     async def runtime() -> RuntimeContainer:
         if app.state.container is None:

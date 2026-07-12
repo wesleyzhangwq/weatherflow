@@ -21,7 +21,7 @@ class FakeKeyring:
 
 def client() -> httpx.AsyncClient:
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": [{"id": "MiniMax-M2.7"}]})
+        return httpx.Response(200, json={"data": [{"id": "MiniMax-M3"}]})
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -40,7 +40,7 @@ async def test_runtime_activates_and_rebuilds_persisted_minimax_adapter(
 
     configuration = await first.configure_minimax(
         api_key="valid-key",
-        model="MiniMax-M2.7",
+        model="MiniMax-M3",
         base_url="https://api.minimax.test/v1",
     )
 
@@ -53,7 +53,7 @@ async def test_runtime_activates_and_rebuilds_persisted_minimax_adapter(
         model_http_client=client(),
     )
     assert isinstance(rebuilt.model, MiniMaxAdapter)
-    assert rebuilt.model.model == "MiniMax-M2.7"
+    assert rebuilt.model.model == "MiniMax-M3"
     status = await rebuilt.model_configurations.status(rebuilt.default_workspace.id)
     assert status.configured is True
     assert status.credential_available is True

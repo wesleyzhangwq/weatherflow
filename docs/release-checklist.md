@@ -4,7 +4,7 @@
 
 1. Use arm64 macOS 13 or newer with Xcode command-line tools, Node, `uv`, and
    the Rust toolchain available through `rustup`.
-2. Run `uv sync --all-packages --all-extras` and `npm ci` in `desktop/`.
+2. Run `uv sync --all-packages --all-extras` and `pnpm install --frozen-lockfile` at the repository root.
 3. Run `python3 tools/release/release_macos.py` from the repository root.
 4. Run `make release-check`.
 

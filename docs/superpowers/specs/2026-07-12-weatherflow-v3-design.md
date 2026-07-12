@@ -295,7 +295,7 @@ message structures into domain data.
 #### 6.3.1 Production model adapter
 
 MiniMax's OpenAI-compatible Chat Completions API is the first production model
-provider. `MiniMaxAdapter` translates domain messages, frozen `ToolSpec`
+provider, with `MiniMax-M3` as the default. `MiniMaxAdapter` translates domain messages, frozen `ToolSpec`
 schemas, usage, final text, tool calls, and bounded leaf delegation at the
 provider boundary. Canonical dotted tool IDs receive deterministic provider-
 safe aliases and map back before the runtime sees a `ModelTurn`; an unknown
@@ -307,9 +307,11 @@ is resolved by `CredentialBroker` only inside the HTTP transport callback.
 Echo is a visible unconfigured smoke fallback, not a production model path.
 
 MiniMax reasoning fields and `<think>` blocks are not persisted in domain
-messages, checkpoints, events, or memory. WeatherFlow preserves action/tool
-continuity rather than hidden chain-of-thought. Provider errors are redacted
-and enter the existing bounded retry/pause semantics.
+messages, checkpoints, events, or memory. M3 requests explicitly set
+`thinking.type=disabled`, so multi-turn tool continuity does not require replay
+of hidden reasoning. WeatherFlow preserves action/tool continuity rather than
+hidden chain-of-thought. Provider errors are redacted and enter the existing
+bounded retry/pause semantics.
 
 ### 6.4 Agent hierarchy
 

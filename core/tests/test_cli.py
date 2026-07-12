@@ -46,7 +46,7 @@ def test_minimax_configuration_parser_uses_current_safe_defaults() -> None:
     args = build_parser().parse_args(["configure-minimax", "--api-key-stdin"])
 
     assert args.command == "configure-minimax"
-    assert args.model == "MiniMax-M2.7"
+    assert args.model == "MiniMax-M3"
     assert args.base_url == "https://api.minimax.io/v1"
     assert args.api_key_stdin is True
 
@@ -57,7 +57,7 @@ def test_minimax_configuration_uses_hidden_prompt_and_redacted_output(monkeypatc
     class Configuration:
         def model_dump_json(self, **kwargs) -> str:
             assert kwargs == {"exclude": {"credential_ref"}}
-            return '{"provider":"minimax","model":"MiniMax-M2.7"}'
+            return '{"provider":"minimax","model":"MiniMax-M3"}'
 
     class Container:
         async def configure_minimax(self, **kwargs):
@@ -75,7 +75,7 @@ def test_minimax_configuration_uses_hidden_prompt_and_redacted_output(monkeypatc
     assert exit_code == 0
     assert captured == {
         "api_key": "hidden-key",
-        "model": "MiniMax-M2.7",
+        "model": "MiniMax-M3",
         "base_url": "https://api.minimax.io/v1",
     }
     assert "hidden-key" not in capsys.readouterr().out

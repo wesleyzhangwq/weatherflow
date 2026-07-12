@@ -57,7 +57,7 @@ def adapter(handler) -> MiniMaxAdapter:
     return MiniMaxAdapter(
         broker=CredentialBroker(MappingCredentialStore({"minimax.api_key": SECRET})),
         credential_ref=CredentialRef(provider="minimax", name="api_key"),
-        model="MiniMax-M2.7",
+        model="MiniMax-M3",
         base_url="https://api.minimax.test/v1",
         client=client,
     )
@@ -68,7 +68,8 @@ async def test_final_text_and_usage_are_provider_neutral() -> None:
         assert http_request.url == "https://api.minimax.test/v1/chat/completions"
         assert http_request.headers["authorization"] == f"Bearer {SECRET}"
         body = json.loads(http_request.content)
-        assert body["model"] == "MiniMax-M2.7"
+        assert body["model"] == "MiniMax-M3"
+        assert body["thinking"] == {"type": "disabled"}
         assert body["messages"][0]["role"] == "system"
         assert body["messages"][0]["content"].startswith(
             "Complete the explicit goal without widening authority."

@@ -92,3 +92,8 @@ messaging catalogs, and all v2 compatibility.
   boundary. Provider-safe function aliases map back to the frozen ToolSpec IDs.
   Hidden reasoning is intentionally not persisted; Echo remains only as a
   visibly unconfigured smoke fallback.
+- 2026-07-12: Promoted `MiniMax-M3` to the default production model. OpenAI-
+  compatible requests disable M3 thinking so no hidden reasoning must be
+  replayed or persisted. Local development standardizes on `pnpm dev:app`;
+  debug Tauri supervises the reloadable Python source core, while release builds
+  continue to supervise the bundled sidecar.

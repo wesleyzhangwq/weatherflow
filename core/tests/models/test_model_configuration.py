@@ -36,7 +36,7 @@ def model_transport(*, status: int = 200):
         assert request.headers["authorization"] == f"Bearer {SECRET}"
         if status != 200:
             return httpx.Response(status, json={"error": {"message": SECRET}})
-        return httpx.Response(200, json={"data": [{"id": "MiniMax-M2.7"}]})
+        return httpx.Response(200, json={"data": [{"id": "MiniMax-M3"}]})
 
     return httpx.MockTransport(handler)
 
@@ -84,7 +84,7 @@ async def test_validated_minimax_configuration_persists_reference_only(
     configuration = await service.configure_minimax(
         workspace_id=workspace.id,
         api_key=SECRET,
-        model="MiniMax-M2.7",
+        model="MiniMax-M3",
         base_url="https://api.minimax.test/v1/",
     )
 
@@ -114,7 +114,7 @@ async def test_invalid_key_is_not_stored_or_activated(tmp_path: Path) -> None:
         await service.configure_minimax(
             workspace_id=workspace.id,
             api_key=SECRET,
-            model="MiniMax-M2.7",
+            model="MiniMax-M3",
             base_url="https://api.minimax.test/v1",
         )
 
