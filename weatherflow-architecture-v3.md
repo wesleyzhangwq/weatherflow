@@ -27,6 +27,9 @@ no code, API, or data compatibility obligation to v2.
 10. Capability and authority are separate systems.
 11. User data is local, inspectable, exportable, and deletable.
 12. macOS is the only supported v3.0 desktop platform.
+13. The Cockpit's primary workspace is conversation; Runs, rhythm, approvals,
+    integrations, and settings support that conversation instead of competing
+    with it as an equal card grid.
 
 ## 2. System model
 
@@ -77,7 +80,8 @@ ownership, diagnostics, and macOS packaging.
 
 v3.0 excludes Windows/Linux support, mobile/cloud/team features, content-level
 desktop monitoring, recursive agent networks, a workflow canvas, broad email or
-messaging catalogs, and all v2 compatibility.
+messaging catalogs beyond the bounded first-party Gmail connector, and all v2
+compatibility.
 
 ## 5. Change discipline
 
@@ -109,3 +113,23 @@ messaging catalogs, and all v2 compatibility.
   Companion, and inspect results/approvals/artifacts in Cockpit. Provider and
   packaging expansion remains frozen until this loop passes a real read-only
   trajectory. Native activity sampling now requires persisted opt-in.
+- 2026-07-12: Approved a bounded first-party integration surface limited to
+  GitHub, Gmail, and Google Calendar. Connection is explicit and revocable;
+  background fetch is read-only, silent, interval-bounded, and independently
+  disableable per connector. Synced summaries are local derived context with
+  source identifiers and timestamps. Connector credentials stay in Keychain and
+  never enter prompts, logs, events, memory, or artifacts. Gmail is a narrow
+  exception to the earlier email deferral; broader email and messaging remain
+  out of scope.
+- 2026-07-12: Approved a conversation-first Chinese desktop redesign grounded
+  in the local OpenHuman/harness interaction model: persistent left navigation,
+  conversation as the dominant workspace, and secondary dedicated views for
+  Runs, rhythm, integrations, and settings. The floating Companion remains the
+  primary habit surface and Cockpit remains explicit-only.
+- 2026-07-12: Expanded the production model SPI from MiniMax-only to a curated
+  set of mainland-China OpenAI-compatible providers: MiniMax, DeepSeek,
+  Moonshot/Kimi, Alibaba Model Studio/Qwen, Zhipu GLM, SiliconFlow, and StepFun.
+  Provider presets expose model and HTTPS API endpoint to the user, while API
+  keys remain in Keychain. A custom compatible endpoint may be entered but
+  cannot change capability or Trust policy. MiniMax-specific thinking handling
+  remains an adapter quirk, not a runtime contract.

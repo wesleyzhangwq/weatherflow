@@ -7,6 +7,9 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const STARTUP_SURFACE: &str = "companion";
 const SHORTCUT_SURFACE: &str = "capsule";
+const STARTUP_SIZE: (f64, f64) = (128.0, 128.0);
+const CAPSULE_SIZE: (f64, f64) = (500.0, 68.0);
+const COCKPIT_SIZE: (f64, f64) = (1080.0, 760.0);
 
 #[derive(Debug, PartialEq, Eq)]
 struct SurfacePolicy {
@@ -64,13 +67,41 @@ fn show_or_create(
     .resizable(policy.resizable)
     .skip_taskbar(policy.skip_taskbar)
     .build()?;
+    if surface == "cockpit" {
+        let app_handle = app.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                restore_companion(&app_handle);
+            }
+        });
+    }
     window.set_focus()?;
     Ok(())
 }
 
+fn hide_companion(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("companion") {
+        window.hide()?;
+    }
+    Ok(())
+}
+
+fn restore_companion(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("companion") {
+        let _ = window.show();
+    }
+}
+
 #[tauri::command]
 fn open_capsule(app: tauri::AppHandle) -> tauri::Result<()> {
-    show_or_create(&app, "capsule", "capsule", 560.0, 82.0, true)
+    show_or_create(
+        &app,
+        "capsule",
+        "capsule",
+        CAPSULE_SIZE.0,
+        CAPSULE_SIZE.1,
+        true,
+    )
 }
 
 #[tauri::command]
@@ -83,7 +114,16 @@ fn close_capsule(app: tauri::AppHandle) -> tauri::Result<()> {
 
 #[tauri::command]
 fn open_cockpit(app: tauri::AppHandle) -> tauri::Result<()> {
-    show_or_create(&app, "cockpit", "cockpit", 1100.0, 760.0, false)
+    show_or_create(
+        &app,
+        "cockpit",
+        "cockpit",
+        COCKPIT_SIZE.0,
+        COCKPIT_SIZE.1,
+        false,
+    )?;
+    hide_companion(&app)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -124,8 +164,8 @@ pub fn run() {
                             app,
                             SHORTCUT_SURFACE,
                             SHORTCUT_SURFACE,
-                            560.0,
-                            82.0,
+                            CAPSULE_SIZE.0,
+                            CAPSULE_SIZE.1,
                             true,
                         );
                     }
@@ -140,8 +180,8 @@ pub fn run() {
                 app.handle(),
                 STARTUP_SURFACE,
                 STARTUP_SURFACE,
-                190.0,
-                190.0,
+                STARTUP_SIZE.0,
+                STARTUP_SIZE.1,
                 true,
             )?;
             supervisor::monitor(app.handle().clone());
@@ -167,7 +207,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{SurfacePolicy, SHORTCUT_SURFACE, STARTUP_SURFACE};
+    use super::{SurfacePolicy, CAPSULE_SIZE, SHORTCUT_SURFACE, STARTUP_SIZE, STARTUP_SURFACE};
 
     #[test]
     fn startup_and_shortcut_never_auto_open_cockpit() {
@@ -181,6 +221,12 @@ mod tests {
     fn newly_created_surfaces_are_focused_to_start_the_webview() {
         let source = include_str!("lib.rs");
         assert!(source.contains("window.set_focus()?;"));
+    }
+
+    #[test]
+    fn companion_and_capsule_use_compact_sizes() {
+        assert_eq!(STARTUP_SIZE, (128.0, 128.0));
+        assert_eq!(CAPSULE_SIZE, (500.0, 68.0));
     }
 
     #[test]
@@ -201,5 +247,12 @@ mod tests {
                 skip_taskbar: true,
             }
         );
+    }
+
+    #[test]
+    fn cockpit_temporarily_replaces_the_companion() {
+        let source = include_str!("lib.rs");
+        assert!(source.matches("hide_companion(&app)?;").count() > 1);
+        assert!(source.matches("restore_companion").count() > 1);
     }
 }

@@ -42,10 +42,11 @@ class MiniMaxResponseError(MiniMaxError):
     pass
 
 
-class MiniMaxAdapter:
+class OpenAICompatibleAdapter:
     def __init__(
         self,
         *,
+        provider: str,
         broker: CredentialBroker,
         credential_ref: CredentialRef,
         model: str = "MiniMax-M3",
@@ -54,14 +55,17 @@ class MiniMaxAdapter:
         timeout_seconds: float = 120,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not model.startswith("MiniMax-"):
-            raise ValueError("unsupported MiniMax model identifier")
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", provider):
+            raise ValueError("invalid provider identifier")
+        if not model.strip() or len(model) > 200:
+            raise ValueError("invalid model identifier")
         normalized_url = base_url.rstrip("/")
         if not normalized_url.startswith("https://"):
-            raise ValueError("MiniMax base URL must use HTTPS")
+            raise ValueError("model base URL must use HTTPS")
         if not 1 <= max_completion_tokens <= 2048:
             raise ValueError("max_completion_tokens must be between 1 and 2048")
         self.broker = broker
+        self.provider = provider
         self.credential_ref = credential_ref
         self.model = model
         self.base_url = normalized_url
@@ -78,13 +82,19 @@ class MiniMaxAdapter:
             "model": self.model,
             "messages": self._messages(request, name_to_tool),
             "stream": False,
-            "max_completion_tokens": self.max_completion_tokens,
-            "temperature": 1.0,
-            "top_p": 0.95,
-            "reasoning_split": True,
+            "max_tokens": self.max_completion_tokens,
         }
-        if self.model.startswith("MiniMax-M3"):
-            payload["thinking"] = {"type": "disabled"}
+        if self.provider == "minimax":
+            payload.update(
+                {
+                    "max_completion_tokens": payload.pop("max_tokens"),
+                    "temperature": 1.0,
+                    "top_p": 0.95,
+                    "reasoning_split": True,
+                }
+            )
+            if self.model.startswith("MiniMax-M3"):
+                payload["thinking"] = {"type": "disabled"}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -95,7 +105,7 @@ class MiniMaxAdapter:
         try:
             response = await self.broker.call(self.credential_ref, transport)
         except CredentialUnavailableError as error:
-            raise MiniMaxAuthenticationError("MiniMax credential is unavailable") from error
+            raise MiniMaxAuthenticationError("model credential is unavailable") from error
         return self._turn(response, name_to_tool)
 
     async def verify(self) -> None:
@@ -107,16 +117,16 @@ class MiniMaxAdapter:
                     timeout=self.timeout_seconds,
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as error:
-                raise MiniMaxRetryableError("MiniMax model verification unavailable") from error
+                raise MiniMaxRetryableError("model verification unavailable") from error
             self._raise_for_status(response)
             data = response.json().get("data", [])
             if not any(item.get("id") == self.model for item in data if isinstance(item, dict)):
-                raise MiniMaxResponseError("configured MiniMax model is not available")
+                raise MiniMaxResponseError("configured model is not available")
 
         try:
             await self.broker.call(self.credential_ref, transport)
         except CredentialUnavailableError as error:
-            raise MiniMaxAuthenticationError("MiniMax credential is unavailable") from error
+            raise MiniMaxAuthenticationError("model credential is unavailable") from error
 
     async def _post(self, payload: dict[str, Any], secret: str) -> dict[str, Any]:
         try:
@@ -127,32 +137,33 @@ class MiniMaxAdapter:
                 timeout=self.timeout_seconds,
             )
         except (httpx.TimeoutException, httpx.NetworkError) as error:
-            raise MiniMaxRetryableError("MiniMax request unavailable") from error
+            raise MiniMaxRetryableError("model request unavailable") from error
         self._raise_for_status(response)
         try:
             value = response.json()
         except ValueError as error:
-            raise MiniMaxResponseError("MiniMax returned invalid JSON") from error
+            raise MiniMaxResponseError("model provider returned invalid JSON") from error
         if not isinstance(value, dict):
-            raise MiniMaxResponseError("MiniMax returned an invalid response object")
+            raise MiniMaxResponseError("model provider returned an invalid response object")
         base_response = value.get("base_resp")
         if isinstance(base_response, dict) and base_response.get("status_code") not in {
             None,
             0,
         }:
-            raise MiniMaxResponseError("MiniMax returned a provider-level error")
+            raise MiniMaxResponseError("model provider returned a provider-level error")
         return value
 
-    @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
+    def _raise_for_status(self, response: httpx.Response) -> None:
         if response.status_code in {401, 403}:
-            raise MiniMaxAuthenticationError("MiniMax credential was rejected")
+            raise MiniMaxAuthenticationError(f"{self.provider} credential was rejected")
         if response.status_code in {408, 409, 429} or response.status_code >= 500:
             raise MiniMaxRetryableError(
-                f"MiniMax request failed with retryable status {response.status_code}"
+                f"{self.provider} request failed with retryable status {response.status_code}"
             )
         if response.is_error:
-            raise MiniMaxResponseError(f"MiniMax request failed with status {response.status_code}")
+            raise MiniMaxResponseError(
+                f"{self.provider} request failed with status {response.status_code}"
+            )
 
     def _messages(
         self,
@@ -222,19 +233,19 @@ class MiniMaxAdapter:
     def _turn(response: dict[str, Any], name_to_tool: dict[str, ToolSpec]) -> ModelTurn:
         choices = response.get("choices")
         if not isinstance(choices, list) or len(choices) != 1:
-            raise MiniMaxResponseError("MiniMax returned an invalid choice count")
+            raise MiniMaxResponseError("model provider returned an invalid choice count")
         message = choices[0].get("message")
         if not isinstance(message, dict):
-            raise MiniMaxResponseError("MiniMax returned no assistant message")
+            raise MiniMaxResponseError("model provider returned no assistant message")
         usage = _usage(response.get("usage"))
         calls = message.get("tool_calls")
         if calls:
             if not isinstance(calls, list) or len(calls) != 1:
-                raise MiniMaxResponseError("MiniMax returned multiple tool calls")
+                raise MiniMaxResponseError("model provider returned multiple tool calls")
             call = calls[0]
             function = call.get("function") if isinstance(call, dict) else None
             if not isinstance(function, dict):
-                raise MiniMaxResponseError("MiniMax returned an invalid tool call")
+                raise MiniMaxResponseError("model provider returned an invalid tool call")
             name = function.get("name")
             arguments = _arguments(function.get("arguments"))
             if name == DELEGATE_FUNCTION:
@@ -245,10 +256,12 @@ class MiniMaxAdapter:
                         usage=usage,
                     )
                 except (KeyError, TypeError, ValueError) as error:
-                    raise MiniMaxResponseError("MiniMax returned invalid delegation") from error
+                    raise MiniMaxResponseError(
+                        "model provider returned invalid delegation"
+                    ) from error
             tool = name_to_tool.get(str(name))
             if tool is None:
-                raise MiniMaxResponseError("MiniMax returned an unknown function")
+                raise MiniMaxResponseError("model provider returned an unknown function")
             return ToolCallTurn(
                 call_id=str(call.get("id")) if call.get("id") else None,
                 tool_id=tool.tool_id,
@@ -257,16 +270,42 @@ class MiniMaxAdapter:
             )
         content = message.get("content")
         if not isinstance(content, str):
-            raise MiniMaxResponseError("MiniMax returned neither text nor a tool call")
+            raise MiniMaxResponseError("model provider returned neither text nor a tool call")
         cleaned = THINK_PATTERN.sub("", content).strip()
         if not cleaned:
-            raise MiniMaxResponseError("MiniMax returned empty final text")
+            raise MiniMaxResponseError("model provider returned empty final text")
         return FinalTurn(content=cleaned, usage=usage)
 
     def __repr__(self) -> str:
         return (
-            f"MiniMaxAdapter(model={self.model!r}, base_url={self.base_url!r}, "
-            "credential=<redacted>)"
+            f"OpenAICompatibleAdapter(provider={self.provider!r}, model={self.model!r}, "
+            f"base_url={self.base_url!r}, credential=<redacted>)"
+        )
+
+
+class MiniMaxAdapter(OpenAICompatibleAdapter):
+    def __init__(
+        self,
+        *,
+        broker: CredentialBroker,
+        credential_ref: CredentialRef,
+        model: str = "MiniMax-M3",
+        base_url: str = "https://api.minimax.io/v1",
+        max_completion_tokens: int = 2048,
+        timeout_seconds: float = 120,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        if not model.startswith("MiniMax-"):
+            raise ValueError("unsupported MiniMax model identifier")
+        super().__init__(
+            provider="minimax",
+            broker=broker,
+            credential_ref=credential_ref,
+            model=model,
+            base_url=base_url,
+            max_completion_tokens=max_completion_tokens,
+            timeout_seconds=timeout_seconds,
+            client=client,
         )
 
 

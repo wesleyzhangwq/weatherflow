@@ -29,3 +29,4 @@ def test_tauri_development_hooks_use_pnpm() -> None:
     assert "const DEVELOPMENT_PORT: u16 = 8765;" in supervisor
     bridge = (ROOT / "desktop" / "src" / "bridge.ts").read_text()
     assert 'baseUrl: "http://127.0.0.1:8765"' in bridge
+    assert '"--reload"' in supervisor

@@ -20,7 +20,7 @@ describe("Companion", () => {
     const shell = container.querySelector(".companion-shell");
     expect(shell).toHaveAttribute("data-weather", "storm");
     expect(shell).toHaveAttribute("data-ring", "approval");
-    expect(screen.getByLabelText("Approval waiting")).toBeInTheDocument();
+    expect(screen.getByLabelText("等待批准")).toBeInTheDocument();
     expect(container.querySelector(".speech-bubble")).not.toBeInTheDocument();
     expect(screen.queryByText("Overloaded")).not.toBeInTheDocument();
   });
@@ -29,17 +29,18 @@ describe("Companion", () => {
     const openCapsule = vi.fn();
     const openCockpit = vi.fn();
     render(<Companion snapshot={snapshot} onOpenCapsule={openCapsule} onOpenCockpit={openCockpit} />);
-    fireEvent.click(screen.getByLabelText("Open command capsule"));
+    expect(screen.getByLabelText("拖动悬浮天气")).toHaveAttribute("data-tauri-drag-region");
+    fireEvent.click(screen.getByLabelText("打开指令输入框"));
     expect(openCapsule).toHaveBeenCalledOnce();
     expect(openCockpit).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("Open Cockpit"));
+    fireEvent.click(screen.getByLabelText("打开控制台"));
     expect(openCockpit).toHaveBeenCalledOnce();
   });
 
   it("surfaces an unavailable opted-in sensor without changing weather", () => {
     const optedIn = { ...snapshot, metadata_sensor_enabled: true };
     const { container } = render(<Companion snapshot={optedIn} sensorAvailable={false} onOpenCapsule={() => undefined} onOpenCockpit={() => undefined} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Activity signal unavailable");
+    expect(screen.getByRole("status")).toHaveTextContent("行为信号暂不可用");
     expect(container.querySelector(".companion-shell")).toHaveAttribute("data-weather", "storm");
   });
 });

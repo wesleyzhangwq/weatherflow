@@ -12,6 +12,8 @@ from weatherflow.models import (
     ModelConfigurationRepository,
     ModelConfigurationService,
     ModelProvider,
+    OpenAICompatibleAdapter,
+    provider_presets,
 )
 from weatherflow.storage import Database
 from weatherflow.workspaces import Workspace, WorkspaceRepository
@@ -30,13 +32,21 @@ class FakeKeyring:
         self.values[(service, username)] = password
 
 
+class LockedKeyring(FakeKeyring):
+    def get_password(self, service: str, username: str) -> str | None:
+        raise RuntimeError("keychain is locked")
+
+
 def model_transport(*, status: int = 200):
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"
         assert request.headers["authorization"] == f"Bearer {SECRET}"
         if status != 200:
             return httpx.Response(status, json={"error": {"message": SECRET}})
-        return httpx.Response(200, json={"data": [{"id": "MiniMax-M3"}]})
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "MiniMax-M3"}, {"id": "deepseek-v4-flash"}]},
+        )
 
     return httpx.MockTransport(handler)
 
@@ -120,3 +130,61 @@ async def test_invalid_key_is_not_stored_or_activated(tmp_path: Path) -> None:
 
     assert backend.values == {}
     assert await service.repository.get(workspace.id) is None
+
+
+def test_mainland_provider_presets_expose_editable_https_endpoints() -> None:
+    presets = {preset.provider: preset for preset in provider_presets()}
+
+    assert set(presets) == {
+        ModelProvider.MINIMAX,
+        ModelProvider.DEEPSEEK,
+        ModelProvider.MOONSHOT,
+        ModelProvider.QWEN,
+        ModelProvider.ZHIPU,
+        ModelProvider.SILICONFLOW,
+        ModelProvider.STEPFUN,
+    }
+    assert presets[ModelProvider.DEEPSEEK].default_model == "deepseek-v4-flash"
+    assert (
+        presets[ModelProvider.QWEN].base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    assert all(preset.base_url.startswith("https://") for preset in presets.values())
+
+
+async def test_generic_provider_configuration_uses_shared_compatible_adapter(
+    tmp_path: Path,
+) -> None:
+    backend = FakeKeyring()
+    database, workspace, ledger, store, service = await setup(tmp_path, backend)
+
+    configuration = await service.configure(
+        workspace_id=workspace.id,
+        provider=ModelProvider.DEEPSEEK,
+        api_key=SECRET,
+        model="deepseek-v4-flash",
+        base_url="https://api.minimax.test/v1",
+    )
+
+    assert configuration.provider is ModelProvider.DEEPSEEK
+    assert isinstance(service.adapter(configuration), OpenAICompatibleAdapter)
+    assert store.resolve(configuration.credential_ref) == SECRET
+    events = await ledger.list_stream("workspace", workspace.id, limit=100)
+    assert SECRET not in "".join(event.model_dump_json() for event in events)
+    assert (await ModelConfigurationRepository(database).get(workspace.id)) == configuration
+
+
+async def test_status_stays_available_when_keychain_access_is_denied(tmp_path: Path) -> None:
+    backend = FakeKeyring()
+    _, workspace, _, _, service = await setup(tmp_path, backend)
+    await service.configure_minimax(
+        workspace_id=workspace.id,
+        api_key=SECRET,
+        model="MiniMax-M3",
+        base_url="https://api.minimax.test/v1",
+    )
+    service.credential_store = KeyringCredentialStore(backend=LockedKeyring())
+
+    status = await service.status(workspace.id)
+
+    assert status.configured is True
+    assert status.credential_available is False

@@ -6,6 +6,8 @@ from weatherflow.models.configuration import (
     ModelConfigurationService,
     ModelProvider,
     ModelStatus,
+    ProviderPreset,
+    provider_presets,
 )
 from weatherflow.models.minimax import (
     MiniMaxAdapter,
@@ -13,6 +15,7 @@ from weatherflow.models.minimax import (
     MiniMaxError,
     MiniMaxResponseError,
     MiniMaxRetryableError,
+    OpenAICompatibleAdapter,
 )
 
 __all__ = [
@@ -21,9 +24,12 @@ __all__ = [
     "MiniMaxError",
     "MiniMaxResponseError",
     "MiniMaxRetryableError",
+    "OpenAICompatibleAdapter",
     "ModelConfiguration",
     "ModelConfigurationRepository",
     "ModelConfigurationService",
     "ModelProvider",
     "ModelStatus",
+    "ProviderPreset",
+    "provider_presets",
 ]

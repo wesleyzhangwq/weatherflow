@@ -1,4 +1,6 @@
 import type { DesktopSnapshot, RunStatus, WeatherScene } from "../types";
+import { AppWindow } from "@phosphor-icons/react";
+import companionIcon from "../../src-tauri/icons/icon.png";
 
 interface CompanionProps {
   snapshot: DesktopSnapshot | null;
@@ -21,20 +23,19 @@ export function Companion({ snapshot, offline = false, sensorAvailable = true, o
   const ring = offline ? "offline" : ringState(snapshot?.latest_run?.status);
   return (
     <main className="companion-shell" data-weather={weather} data-ring={ring}>
-      <button className="companion-character" aria-label="Open command capsule" onClick={onOpenCapsule}>
+      <div className="companion-drag-surface" data-tauri-drag-region aria-label="拖动悬浮天气" />
+      <button className="companion-character" aria-label="打开指令输入框" onClick={onOpenCapsule}>
         <span className="weather-layer" aria-hidden="true">
           <span className="weather-orbit" />
           <span className="weather-particle particle-one" />
           <span className="weather-particle particle-two" />
         </span>
         <span className="run-ring" aria-hidden="true" />
-        <span className="character-body" aria-hidden="true">
-          <span className="character-face"><i /><i /></span>
-        </span>
-        {ring === "approval" && <span className="approval-badge" aria-label="Approval waiting">!</span>}
+        <img className="character-image" src={companionIcon} alt="" draggable={false} />
+        {ring === "approval" && <span className="approval-badge" aria-label="等待批准">!</span>}
       </button>
-      {snapshot?.metadata_sensor_enabled && !sensorAvailable && <span className="sensor-unavailable" role="status">Activity signal unavailable</span>}
-      <button className="cockpit-trigger" aria-label="Open Cockpit" onClick={onOpenCockpit}>⌁</button>
+      {snapshot?.metadata_sensor_enabled && !sensorAvailable && <span className="sensor-unavailable" role="status">行为信号暂不可用</span>}
+      <button className="cockpit-trigger" aria-label="打开控制台" onClick={onOpenCockpit}><AppWindow weight="bold" /></button>
     </main>
   );
 }

@@ -66,6 +66,10 @@ The following decisions are binding for v3.0.
   task ring/badge, tray, or explicit command.
 - WeatherFlow is silent by default. Human-state changes alter micro-weather but
   do not create speech bubbles, system notifications, or proactive actions.
+- Inside the explicitly opened Cockpit, conversation is the dominant workspace.
+  A persistent navigation rail leads to conversation, Runs, rhythm,
+  integrations, and settings; these are dedicated views rather than a dense
+  equal-weight dashboard card grid.
 
 ### 2.3 State perception and privacy
 
@@ -74,7 +78,7 @@ The following decisions are binding for v3.0.
   - a stable weather projection consumed by the desktop shell.
 - v3.0 may use:
   - deliberate signals: conversation, check-ins, task behavior, Calendar,
-    GitHub, and user corrections;
+    GitHub, bounded Gmail metadata, and user corrections;
   - consented device metadata: active/idle periods, application category
     switches, and continuity of work sessions.
 - v3.0 must not collect:
@@ -128,7 +132,8 @@ The following decisions are binding for v3.0.
 - Screen-content monitoring, keystroke logging, or ambient audio analysis.
 - Recursive agent hierarchies, model councils, or arbitrary agent networks.
 - A visual workflow editor, BPMN runtime, or a second workflow engine.
-- A broad email/messaging integration marketplace.
+- A broad email/messaging integration marketplace. Gmail is the only bounded
+  first-party email connector in v3.0.
 - Backward compatibility with WeatherFlow v2.
 
 ## 4. Flagship acceptance story
@@ -314,10 +319,12 @@ Orchestrator and Workers use the same turn loop:
 The loop must support provider adapters without embedding provider-specific
 message structures into domain data.
 
-#### 6.3.1 Production model adapter
+#### 6.3.1 Production model adapters
 
-MiniMax's OpenAI-compatible Chat Completions API is the first production model
-provider, with `MiniMax-M3` as the default. `MiniMaxAdapter` translates domain messages, frozen `ToolSpec`
+MiniMax's OpenAI-compatible Chat Completions API remains the default production
+provider, with `MiniMax-M3` as the default model. The curated production set is
+MiniMax, DeepSeek, Moonshot/Kimi, Alibaba Model Studio/Qwen, Zhipu GLM,
+SiliconFlow, and StepFun. Provider adapters translate domain messages, frozen `ToolSpec`
 schemas, usage, final text, tool calls, and bounded leaf delegation at the
 provider boundary. Canonical dotted tool IDs receive deterministic provider-
 safe aliases and map back before the runtime sees a `ModelTurn`; an unknown
@@ -328,7 +335,12 @@ version, and `credential_ref`. The MiniMax API key lives in macOS Keychain and
 is resolved by `CredentialBroker` only inside the HTTP transport callback.
 Echo is a visible unconfigured smoke fallback, not a production model path.
 
-MiniMax reasoning fields and `<think>` blocks are not persisted in domain
+All provider API keys live in macOS Keychain. Provider presets expose model and
+HTTPS API endpoint in Cockpit and allow deliberate override for compatible
+regional or workspace endpoints. Endpoint customization never widens tools,
+scopes, or authority.
+
+Provider reasoning fields and `<think>` blocks are not persisted in domain
 messages, checkpoints, events, or memory. M3 requests explicitly set
 `thinking.type=disabled`, so multi-turn tool continuity does not require replay
 of hidden reasoning. WeatherFlow preserves action/tool continuity rather than
@@ -486,8 +498,9 @@ contain human-state-to-weather logic.
    - one focused input with paste and file drop;
    - closes immediately after successful command acceptance.
 3. **Cockpit Window**
-   - normal application window;
-   - tasks, approvals, artifacts, run timeline, evidence, settings, diagnostics;
+   - normal application window with persistent left navigation;
+   - conversation-first primary view;
+   - dedicated tasks, rhythm, approvals/artifacts, integrations, and settings views;
    - opens only through explicit user action.
 
 ### 8.2 Run presentation states
@@ -512,6 +525,8 @@ Human-state weather remains visible through every Run state.
 - macOS activity/idle/application-category metadata adapter;
 - autostart and background-run preferences;
 - reduced-motion, particles, contrast, and always-on-top settings.
+- opening provider authorization URLs in the system browser; OAuth exchange,
+  token storage, fetch policy, and connector state remain in Python.
 
 The activity adapter emits metadata only. No raw content is passed to the
 daemon.
@@ -615,6 +630,11 @@ A Workspace owns:
 - installed packs and agent definitions;
 - default budgets;
 - active session grants.
+
+The first-party connector set is intentionally fixed to GitHub, Gmail, and
+Google Calendar. Connection requires explicit user action. Read-only automatic
+fetch may run silently after connection, at a bounded interval chosen by the
+user. It can never authorize external writes or widen a Run's frozen tools.
 
 A Workspace is an authority boundary, not merely a working directory.
 
@@ -748,8 +768,22 @@ data deletion.
 - schedule proposals influenced by RhythmPolicy;
 - all external mutations through approval.
 
-Email and broad messaging integrations are deferred beyond v3.0. They must be
-added as Packs/MCP capabilities, not core domains.
+### 11.4 First-party integration boundary
+
+- GitHub fetches bounded notifications and repository activity through
+  read-only account authorization.
+- Gmail fetches bounded unread-message metadata and snippets only; attachment
+  bodies and message mutations are outside the automatic-fetch path.
+- Google Calendar fetches a bounded upcoming-event window.
+- Every fetch result retains provider source IDs and fetch timestamps and is
+  stored locally as replaceable derived context.
+- Auto-fetch is silent, read-only, interval-bounded, observable in Cockpit, and
+  independently disableable for each connector.
+- Credentials and refresh tokens are resolved from Keychain only at the HTTP
+  transport boundary.
+
+Broader email and messaging integrations remain deferred. Any future connector
+must be added as a Pack/MCP capability rather than a new core agent loop.
 
 ## 12. Reliability and failure semantics
 
@@ -926,6 +960,8 @@ must judge policy, state transition, provenance, and recovery contracts.
 - Personal Operations completion;
 - diagnostics, retention controls, onboarding, signing, packaging, and release
   validation.
+- one-click Cockpit connection and silent auto-fetch for the bounded GitHub,
+  Gmail, and Google Calendar connector set.
 
 Each phase must end in a runnable, verified increment. No phase may add a second
 execution path to bypass the Run Coordinator.

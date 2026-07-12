@@ -27,7 +27,7 @@ function FlagshipDesktopStory({ client }: { client: WeatherFlowClient }) {
   const [status, setStatus] = useState<RunStatus | undefined>();
   advanceToApproval = () => setStatus("waiting_approval");
   if (surface === "capsule") {
-    return <Capsule client={client} workspaceId="w1" onAccepted={() => { setStatus("running"); setSurface("companion"); }} />;
+    return <Capsule client={client} workspaceId="w1" onAccepted={() => { setStatus("running"); setSurface("companion"); }} onCancel={() => setSurface("companion")} />;
   }
   if (surface === "cockpit") {
     return <Cockpit client={client} snapshot={snapshot(status)} offline={false} />;
@@ -62,22 +62,22 @@ describe("flagship macOS desktop story", () => {
     expect(container.querySelector(".companion-shell")).toHaveAttribute("data-weather", "storm");
     expect(container.querySelector(".speech-bubble")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByLabelText("Open command capsule"));
-    const input = screen.getByLabelText("Tell WeatherFlow what to do");
+    fireEvent.click(screen.getByLabelText("打开指令输入框"));
+    const input = screen.getByLabelText("告诉 WeatherFlow 要做什么");
     fireEvent.change(input, { target: { value: "Ship with least burden" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(client.createRun).toHaveBeenCalledOnce());
     await waitFor(() => expect(container.querySelector(".companion-shell")).toHaveAttribute("data-ring", "active"));
 
     act(() => advanceToApproval());
-    expect(await screen.findByLabelText("Approval waiting")).toBeInTheDocument();
-    expect(screen.queryByText("Daily cockpit")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Open Cockpit"));
+    expect(await screen.findByLabelText("等待批准")).toBeInTheDocument();
+    expect(screen.queryByText("今日控制台")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("打开控制台"));
 
     expect(await screen.findByText("github.create_release")).toBeInTheDocument();
     expect(screen.getByText(/v3.0.0/)).toBeInTheDocument();
     expect(await screen.findByText("release-checklist.md")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(screen.getByRole("button", { name: "批准" }));
     await waitFor(() => expect(client.decide).toHaveBeenCalledWith("approval-1", "approve", 0));
   });
 });

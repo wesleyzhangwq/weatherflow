@@ -22,10 +22,21 @@ def test_tauri_starts_only_companion_and_owns_window_lifecycle() -> None:
     assert config["app"]["windows"] == []
     assert 'STARTUP_SURFACE: &str = "companion"' in rust
     assert 'SHORTCUT_SURFACE: &str = "capsule"' in rust
-    assert '"capsule", "capsule"' in rust
-    assert '"cockpit", "cockpit"' in rust
+    assert rust.count('"capsule"') >= 2
+    assert rust.count('"cockpit"') >= 2
     assert "open_cockpit" in rust
     assert 'show_or_create(app.handle(), "cockpit"' not in rust
+
+
+def test_desktop_surfaces_are_compact_movable_and_responsive() -> None:
+    rust = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
+    companion = (ROOT / "desktop/src/components/Companion.tsx").read_text()
+    styles = (ROOT / "desktop/src/styles.css").read_text()
+
+    assert "const STARTUP_SIZE: (f64, f64) = (128.0, 128.0);" in rust
+    assert "data-tauri-drag-region" in companion
+    assert "100dvh" in styles
+    assert "@media (max-width: 980px)" in styles
 
 
 def test_native_activity_response_has_no_raw_content_fields() -> None:

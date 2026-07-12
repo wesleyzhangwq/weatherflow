@@ -20,6 +20,9 @@ from weatherflow.api.schemas import (
     ApprovalView,
     DesktopSnapshot,
     HealthResponse,
+    ModelConfigurationResponse,
+    ModelConfigureRequest,
+    ModelProviderList,
     OnboardingCompleteRequest,
     ResetConfirmRequest,
     RunCreateRequest,
@@ -30,6 +33,7 @@ from weatherflow.artifacts import ArtifactManifest
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
 from weatherflow.events import Event, UnknownEventCursor
+from weatherflow.models import provider_presets
 from weatherflow.operations import (
     DiagnosticExport,
     LocalMetrics,
@@ -409,6 +413,29 @@ def create_app(
                 "memory": "until_explicit_reset",
             },
             model=model_status,
+        )
+
+    @app.get("/v1/models/providers", response_model=ModelProviderList)
+    async def model_providers() -> ModelProviderList:
+        return ModelProviderList(providers=provider_presets())
+
+    @app.post("/v1/models/configure", response_model=ModelConfigurationResponse)
+    async def configure_model(
+        request: ModelConfigureRequest,
+        workspace_id: str | None = None,
+    ) -> ModelConfigurationResponse:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        configuration = await service.configure_model(
+            workspace_id=workspace.id,
+            provider=request.provider,
+            api_key=request.api_key,
+            model=request.model,
+            base_url=request.base_url,
+        )
+        return ModelConfigurationResponse(
+            configuration=configuration,
+            status=await service.model_configurations.status(workspace.id),
         )
 
     @app.get("/v1/onboarding", response_model=OnboardingState)

@@ -26,10 +26,10 @@ it("shows explicit operational detail and handles approval", async () => {
   render(<Cockpit client={client} snapshot={snapshot} offline={false} />);
   expect(await screen.findByText("Ship release")).toBeInTheDocument();
   expect(await screen.findByText("release.md")).toBeInTheDocument();
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  fireEvent.click(await screen.findByRole("button", { name: "批准" }));
   await waitFor(() => expect(client.decide).toHaveBeenCalledWith("a1", "approve", 0));
-  expect(screen.getByText("Silent")).toBeInTheDocument();
-  expect(screen.getAllByText("Check-ins only")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+  expect(screen.getByText("仅主动签到")).toBeInTheDocument();
 });
 
 it("requires review then a second explicit click before behavior reset", async () => {
@@ -41,9 +41,10 @@ it("requires review then a second explicit click before behavior reset", async (
     reset: vi.fn().mockResolvedValue({ category: "behavior", deleted_count: 3 }),
   } as unknown as WeatherFlowClient;
   render(<Cockpit client={client} snapshot={snapshot} offline={false} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Review behavior reset" }));
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+  fireEvent.click(await screen.findByRole("button", { name: "检查行为数据清理" }));
   expect(client.reset).not.toHaveBeenCalled();
-  fireEvent.click(await screen.findByRole("button", { name: "Delete 3 behavior records" }));
+  fireEvent.click(await screen.findByRole("button", { name: "删除 3 条行为记录" }));
   await waitFor(() => expect(client.reset).toHaveBeenCalledWith("behavior", undefined));
 });
 
@@ -53,8 +54,52 @@ describe("Cockpit lifecycle", () => {
     const open = vi.fn();
     window.addEventListener("weatherflow:open_cockpit", open);
     render(<Cockpit client={client} snapshot={snapshot} offline={false} />);
-    await screen.findByText("Daily cockpit");
+    await screen.findByText("今天想让 WeatherFlow 帮你做什么？");
     expect(open).not.toHaveBeenCalled();
     window.removeEventListener("weatherflow:open_cockpit", open);
   });
+});
+
+it("exposes mainland model providers with editable model and API endpoint", async () => {
+  const configureModel = vi.fn().mockResolvedValue({});
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([{ ...snapshot.latest_run }]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true,
+      telemetry_upload: false,
+      workspace_id: "w1",
+      installed_packs: [],
+      providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {},
+      model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    modelProviders: vi.fn().mockResolvedValue([
+      { provider: "minimax", label: "MiniMax", base_url: "https://api.minimaxi.com/v1", default_model: "MiniMax-M3", suggested_models: ["MiniMax-M3"] },
+      { provider: "deepseek", label: "DeepSeek", base_url: "https://api.deepseek.com", default_model: "deepseek-v4-flash", suggested_models: ["deepseek-v4-flash"] },
+    ]),
+    configureModel,
+    exportDiagnostics: vi.fn().mockResolvedValue({ path: "/tmp/diagnostic.json", sha256: "d", size_bytes: 10 }),
+    previewReset: vi.fn().mockResolvedValue({ category: "behavior", count: 0 }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+  fireEvent.click(await screen.findByRole("button", { name: "DeepSeek" }));
+
+  const endpoint = screen.getByLabelText("API Endpoint");
+  expect(endpoint).toHaveValue("https://api.deepseek.com");
+  fireEvent.change(endpoint, { target: { value: "https://llm.example.cn/v1" } });
+  fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "验证并保存" }));
+
+  await waitFor(() => expect(configureModel).toHaveBeenCalledWith({
+    provider: "deepseek",
+    model: "deepseek-v4-flash",
+    base_url: "https://llm.example.cn/v1",
+    api_key: "secret",
+  }, "w1"));
 });

@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from weatherflow.capabilities import ToolEffect
-from weatherflow.models import ModelStatus
+from weatherflow.models import ModelConfiguration, ModelProvider, ModelStatus, ProviderPreset
 from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import Run
 from weatherflow.trust import Approval
@@ -84,3 +84,25 @@ class SystemStatus(BaseModel):
     behavior_sensor: dict[str, bool | str]
     retention: dict[str, str]
     model: ModelStatus
+
+
+class ModelConfigureRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: ModelProvider
+    model: str
+    base_url: str
+    api_key: str
+
+
+class ModelConfigurationResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    configuration: ModelConfiguration
+    status: ModelStatus
+
+
+class ModelProviderList(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    providers: tuple[ProviderPreset, ...]

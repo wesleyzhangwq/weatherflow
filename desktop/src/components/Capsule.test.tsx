@@ -7,19 +7,30 @@ describe("Capsule", () => {
   it("is pure input and closes immediately after daemon acceptance", async () => {
     const client = { createRun: vi.fn().mockResolvedValue({ id: "run-1" }) } as unknown as WeatherFlowClient;
     const accepted = vi.fn();
-    render(<Capsule client={client} workspaceId="w1" onAccepted={accepted} />);
-    const input = screen.getByLabelText("Tell WeatherFlow what to do");
+    render(<Capsule client={client} workspaceId="w1" onAccepted={accepted} onCancel={() => undefined} />);
+    const input = screen.getByLabelText("告诉 WeatherFlow 要做什么");
     fireEvent.change(input, { target: { value: "Ship the release" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(accepted).toHaveBeenCalledOnce());
     expect(client.createRun).toHaveBeenCalledWith("Ship the release", expect.any(String), "w1");
-    expect(screen.queryByText(/Cockpit/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("控制台")).not.toBeInTheDocument();
+  });
+
+  it("can be cancelled with Escape or the visible close button", () => {
+    const cancel = vi.fn();
+    const client = { createRun: vi.fn() } as unknown as WeatherFlowClient;
+    const { rerender } = render(<Capsule client={client} workspaceId="w1" onAccepted={() => undefined} onCancel={cancel} />);
+    fireEvent.keyDown(screen.getByLabelText("告诉 WeatherFlow 要做什么"), { key: "Escape" });
+    expect(cancel).toHaveBeenCalledOnce();
+    rerender(<Capsule client={client} workspaceId="w1" onAccepted={() => undefined} onCancel={cancel} />);
+    fireEvent.click(screen.getByRole("button", { name: "关闭输入框" }));
+    expect(cancel).toHaveBeenCalledTimes(2);
   });
 
   it("keeps input visible when acceptance fails", async () => {
     const client = { createRun: vi.fn().mockRejectedValue(new Error("offline")) } as unknown as WeatherFlowClient;
-    render(<Capsule client={client} workspaceId="w1" onAccepted={() => undefined} />);
-    const input = screen.getByLabelText("Tell WeatherFlow what to do");
+    render(<Capsule client={client} workspaceId="w1" onAccepted={() => undefined} onCancel={() => undefined} />);
+    const input = screen.getByLabelText("告诉 WeatherFlow 要做什么");
     fireEvent.change(input, { target: { value: "Keep this" } });
     fireEvent.submit(input.closest("form")!);
     expect(await screen.findByRole("alert")).toBeInTheDocument();
@@ -28,11 +39,11 @@ describe("Capsule", () => {
 
   it("keeps desktop Runs behind explicit project authorization", async () => {
     const client = { createRun: vi.fn() } as unknown as WeatherFlowClient;
-    render(<Capsule client={client} onAccepted={() => undefined} />);
-    const input = screen.getByLabelText("Tell WeatherFlow what to do");
+    render(<Capsule client={client} onAccepted={() => undefined} onCancel={() => undefined} />);
+    const input = screen.getByLabelText("告诉 WeatherFlow 要做什么");
     fireEvent.change(input, { target: { value: "Inspect this" } });
     fireEvent.submit(input.closest("form")!);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Choose a project");
+    expect(await screen.findByRole("alert")).toHaveTextContent("先在控制台选择项目");
     expect(client.createRun).not.toHaveBeenCalled();
   });
 });

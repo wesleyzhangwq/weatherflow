@@ -1,4 +1,4 @@
-import type { Approval, Artifact, DesktopSnapshot, DiagnosticExport, LedgerEvent, ResetPreview, ResetResult, Run, SystemStatus, Workspace } from "./types";
+import type { Approval, Artifact, DesktopSnapshot, DiagnosticExport, LedgerEvent, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ResetPreview, ResetResult, Run, SystemStatus, Workspace } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
@@ -77,6 +77,10 @@ export class WeatherFlowClient {
     return this.request(this.scoped("/v1/rhythm/signals", workspaceId), { method: "POST", body: JSON.stringify(signal) });
   }
   status(workspaceId?: string | null): Promise<SystemStatus> { return this.request(this.scoped("/v1/system/status", workspaceId)); }
+  async modelProviders(): Promise<ModelProviderPreset[]> { return (await this.request<{ providers: ModelProviderPreset[] }>("/v1/models/providers")).providers; }
+  configureModel(configuration: ModelConfigureInput, workspaceId?: string | null): Promise<ModelConfigurationResponse> {
+    return this.request(this.scoped("/v1/models/configure", workspaceId), { method: "POST", body: JSON.stringify(configuration) });
+  }
   completeOnboarding(enableMetadataSensor: boolean, workspaceId?: string | null): Promise<unknown> {
     return this.request(this.scoped("/v1/onboarding/complete", workspaceId), {
       method: "POST",

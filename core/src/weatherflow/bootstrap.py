@@ -48,6 +48,7 @@ from weatherflow.models import (
     ModelConfiguration,
     ModelConfigurationRepository,
     ModelConfigurationService,
+    ModelProvider,
 )
 from weatherflow.operations import DiagnosticsService, OnboardingService, PrivacyService
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
@@ -494,8 +495,26 @@ class RuntimeContainer:
         model: str,
         base_url: str,
     ) -> ModelConfiguration:
-        configuration = await self.model_configurations.configure_minimax(
+        return await self.configure_model(
             workspace_id=self.default_workspace.id,
+            provider=ModelProvider.MINIMAX,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
+
+    async def configure_model(
+        self,
+        *,
+        workspace_id: str,
+        provider: ModelProvider,
+        api_key: str,
+        model: str,
+        base_url: str,
+    ) -> ModelConfiguration:
+        configuration = await self.model_configurations.configure(
+            workspace_id=workspace_id,
+            provider=provider,
             api_key=api_key,
             model=model,
             base_url=base_url,

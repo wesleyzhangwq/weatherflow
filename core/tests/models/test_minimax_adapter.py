@@ -10,6 +10,7 @@ from weatherflow.models import (
     MiniMaxAuthenticationError,
     MiniMaxResponseError,
     MiniMaxRetryableError,
+    OpenAICompatibleAdapter,
 )
 from weatherflow.runtime import (
     AgentDefinition,
@@ -91,6 +92,27 @@ async def test_final_text_and_usage_are_provider_neutral() -> None:
         content="Done",
         usage={"input_tokens": 12, "output_tokens": 4},
     )
+
+
+async def test_generic_compatible_provider_omits_minimax_only_fields() -> None:
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        body = json.loads(http_request.content)
+        assert body["model"] == "deepseek-v4-flash"
+        assert "thinking" not in body
+        assert "reasoning_split" not in body
+        return httpx.Response(200, json={"choices": [{"message": {"content": "完成"}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    compatible = OpenAICompatibleAdapter(
+        provider="deepseek",
+        broker=CredentialBroker(MappingCredentialStore({"deepseek.api_key": SECRET})),
+        credential_ref=CredentialRef(provider="deepseek", name="api_key"),
+        model="deepseek-v4-flash",
+        base_url="https://api.deepseek.test/v1",
+        client=client,
+    )
+
+    assert await compatible.complete(request()) == FinalTurn(content="完成")
 
 
 async def test_dotted_tool_ids_round_trip_through_safe_function_names() -> None:

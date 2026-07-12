@@ -63,6 +63,15 @@ export interface SystemStatus {
   retention: Record<string, string>;
   model: { configured: boolean; provider: string; model: string | null; base_url: string | null; credential_available: boolean };
 }
+export interface ModelProviderPreset {
+  provider: string;
+  label: string;
+  base_url: string;
+  default_model: string;
+  suggested_models: string[];
+}
+export interface ModelConfigureInput { provider: string; model: string; base_url: string; api_key: string }
+export interface ModelConfigurationResponse { configuration: { workspace_id: string; provider: string; model: string; base_url: string }; status: SystemStatus["model"] }
 export interface ResetPreview { category: string; count: number }
 export interface ResetResult { category: string; deleted_count: number }
 export interface DiagnosticExport { path: string; sha256: string; size_bytes: number }

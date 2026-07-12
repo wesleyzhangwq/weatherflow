@@ -49,6 +49,7 @@ def stop_stale_development_daemon(root: Path) -> None:
         capture_output=True,
         text=True,
     ).stdout.splitlines()
+    targets: set[int] = set()
     for pid_value in listeners:
         if not pid_value.isdigit():
             continue
@@ -61,12 +62,47 @@ def stop_stale_development_daemon(root: Path) -> None:
         ).stdout
         if "weatherflow serve" not in command or not _process_cwd(pid).startswith(str(root)):
             continue
+        targets.add(pid)
+        parent = _parent_pid(pid)
+        if parent is not None and _process_cwd(parent).startswith(str(root)):
+            targets.add(parent)
+    _terminate_processes(targets)
+
+
+def _parent_pid(pid: int) -> int | None:
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "ppid="],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return int(result) if result.isdigit() else None
+
+
+def _terminate_processes(pids: set[int]) -> None:
+    for pid in pids:
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    if listeners:
-        time.sleep(0.25)
+    deadline = time.monotonic() + 1.5
+    while pids and time.monotonic() < deadline:
+        pids = {pid for pid in pids if _process_exists(pid)}
+        if pids:
+            time.sleep(0.05)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _process_cwd(pid: int) -> str:

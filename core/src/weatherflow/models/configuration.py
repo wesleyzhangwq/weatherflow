@@ -15,12 +15,82 @@ from weatherflow.extensions import (
     MappingCredentialStore,
     WritableCredentialStore,
 )
-from weatherflow.models.minimax import MiniMaxAdapter
+from weatherflow.models.minimax import MiniMaxAdapter, OpenAICompatibleAdapter
 from weatherflow.storage import Database
 
 
 class ModelProvider(StrEnum):
     MINIMAX = "minimax"
+    DEEPSEEK = "deepseek"
+    MOONSHOT = "moonshot"
+    QWEN = "qwen"
+    ZHIPU = "zhipu"
+    SILICONFLOW = "siliconflow"
+    STEPFUN = "stepfun"
+
+
+class ProviderPreset(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: ModelProvider
+    label: str
+    base_url: str
+    default_model: str
+    suggested_models: tuple[str, ...]
+
+
+def provider_presets() -> tuple[ProviderPreset, ...]:
+    return (
+        ProviderPreset(
+            provider=ModelProvider.MINIMAX,
+            label="MiniMax",
+            base_url="https://api.minimaxi.com/v1",
+            default_model="MiniMax-M3",
+            suggested_models=("MiniMax-M3",),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.DEEPSEEK,
+            label="DeepSeek",
+            base_url="https://api.deepseek.com",
+            default_model="deepseek-v4-flash",
+            suggested_models=("deepseek-v4-flash", "deepseek-v4-pro"),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.MOONSHOT,
+            label="月之暗面 · Kimi",
+            base_url="https://api.moonshot.cn/v1",
+            default_model="kimi-k2.5",
+            suggested_models=("kimi-k2.5",),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.QWEN,
+            label="阿里云百炼 · 千问",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            default_model="qwen3.6-plus",
+            suggested_models=("qwen3.6-plus", "qwen3.6-flash"),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.ZHIPU,
+            label="智谱 · GLM",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            default_model="glm-5.1",
+            suggested_models=("glm-5.1", "glm-5-flash"),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.SILICONFLOW,
+            label="硅基流动",
+            base_url="https://api.siliconflow.cn/v1",
+            default_model="deepseek-ai/DeepSeek-V4-Flash",
+            suggested_models=("deepseek-ai/DeepSeek-V4-Flash",),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.STEPFUN,
+            label="阶跃星辰",
+            base_url="https://api.stepfun.com/v1",
+            default_model="step-3.5-flash",
+            suggested_models=("step-3.5-flash",),
+        ),
+    )
 
 
 class ModelConfiguration(BaseModel):
@@ -134,21 +204,35 @@ class ModelConfigurationService:
         model: str,
         base_url: str,
     ) -> ModelConfiguration:
-        reference = CredentialRef(provider="minimax", name="api_key")
-        candidate = ModelConfiguration(
+        return await self.configure(
             workspace_id=workspace_id,
             provider=ModelProvider.MINIMAX,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
+
+    async def configure(
+        self,
+        *,
+        workspace_id: str,
+        provider: ModelProvider,
+        api_key: str,
+        model: str,
+        base_url: str,
+    ) -> ModelConfiguration:
+        reference = CredentialRef(provider=provider.value, name="api_key")
+        candidate = ModelConfiguration(
+            workspace_id=workspace_id,
+            provider=provider,
             model=model,
             base_url=base_url,
             credential_ref=reference,
             updated_at=datetime.now(UTC),
         )
-        verifier = MiniMaxAdapter(
-            broker=CredentialBroker(MappingCredentialStore({reference.key: api_key})),
-            credential_ref=reference,
-            model=candidate.model,
-            base_url=candidate.base_url,
-            client=self.client,
+        verifier = self._adapter(
+            candidate,
+            CredentialBroker(MappingCredentialStore({reference.key: api_key})),
         )
         await verifier.verify()
         self.credential_store.set(reference, api_key)
@@ -173,27 +257,43 @@ class ModelConfigurationService:
             )
         return saved
 
-    def adapter(self, configuration: ModelConfiguration) -> MiniMaxAdapter:
-        return MiniMaxAdapter(
-            broker=CredentialBroker(self.credential_store),
-            credential_ref=configuration.credential_ref,
-            model=configuration.model,
-            base_url=configuration.base_url,
-            client=self.client,
-        )
+    def adapter(self, configuration: ModelConfiguration) -> OpenAICompatibleAdapter:
+        return self._adapter(configuration, CredentialBroker(self.credential_store))
+
+    def _adapter(
+        self,
+        configuration: ModelConfiguration,
+        broker: CredentialBroker,
+    ) -> OpenAICompatibleAdapter:
+        arguments = {
+            "broker": broker,
+            "credential_ref": configuration.credential_ref,
+            "model": configuration.model,
+            "base_url": configuration.base_url,
+            "client": self.client,
+        }
+        if configuration.provider is ModelProvider.MINIMAX:
+            return MiniMaxAdapter(**arguments)
+        return OpenAICompatibleAdapter(provider=configuration.provider.value, **arguments)
 
     async def status(self, workspace_id: str) -> ModelStatus:
         configuration = await self.repository.get(workspace_id)
         if configuration is None:
             return ModelStatus(configured=False, provider="echo")
+        try:
+            credential_available = (
+                self.credential_store.resolve(configuration.credential_ref) is not None
+            )
+        except Exception:
+            # Keychain can be temporarily locked or deny a non-interactive lookup.
+            # Status reads must remain available and never expose backend details.
+            credential_available = False
         return ModelStatus(
             configured=True,
             provider=configuration.provider.value,
             model=configuration.model,
             base_url=configuration.base_url,
-            credential_available=(
-                self.credential_store.resolve(configuration.credential_ref) is not None
-            ),
+            credential_available=credential_available,
         )
 
 
