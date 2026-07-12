@@ -505,7 +505,7 @@ def create_app(
                     current_cursor = event.id
                 if not events:
                     await asyncio.sleep(0.25)
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RuntimeError):
             return
 
     return app

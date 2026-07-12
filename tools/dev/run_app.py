@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import signal
 import subprocess
 import time
@@ -39,6 +39,34 @@ def stop_stale_weatherflow_apps() -> None:
             pass
     if stopped:
         time.sleep(0.5)
+    stop_stale_development_daemon(root)
+
+
+def stop_stale_development_daemon(root: Path) -> None:
+    listeners = subprocess.run(
+        ["lsof", "-tiTCP:8765", "-sTCP:LISTEN"],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    for pid_value in listeners:
+        if not pid_value.isdigit():
+            continue
+        pid = int(pid_value)
+        command = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if "weatherflow serve" not in command or not _process_cwd(pid).startswith(str(root)):
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    if listeners:
+        time.sleep(0.25)
 
 
 def _process_cwd(pid: int) -> str:

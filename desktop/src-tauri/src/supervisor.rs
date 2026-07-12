@@ -1,9 +1,15 @@
 use serde::Serialize;
-use std::{net::TcpListener, sync::Mutex, time::Duration};
+#[cfg(not(debug_assertions))]
+use std::net::TcpListener;
+use std::{sync::Mutex, time::Duration};
 use tauri::{AppHandle, Manager};
 #[cfg(not(debug_assertions))]
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
+#[cfg(not(debug_assertions))]
 use uuid::Uuid;
+
+#[cfg(debug_assertions)]
+const DEVELOPMENT_PORT: u16 = 8765;
 
 enum DaemonChild {
     #[cfg(debug_assertions)]
@@ -71,13 +77,19 @@ impl Drop for DaemonSupervisor {
 }
 
 fn spawn_sidecar(app: &AppHandle) -> Result<(DaemonChild, BridgeConfig), String> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| error.to_string())?
-        .port();
-    drop(listener);
-    let token = Uuid::new_v4().to_string();
+    #[cfg(debug_assertions)]
+    let (port, token) = (DEVELOPMENT_PORT, String::new());
+    #[cfg(not(debug_assertions))]
+    let (port, token) = {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| error.to_string())?
+            .port();
+        drop(listener);
+        let token = Uuid::new_v4().to_string();
+        (port, token)
+    };
     let child = spawn_core(app, port, &token)?;
     Ok((
         child,
@@ -89,7 +101,7 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(DaemonChild, BridgeConfig), String>
 }
 
 #[cfg(debug_assertions)]
-fn spawn_core(_app: &AppHandle, port: u16, token: &str) -> Result<DaemonChild, String> {
+fn spawn_core(_app: &AppHandle, port: u16, _token: &str) -> Result<DaemonChild, String> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -97,7 +109,6 @@ fn spawn_core(_app: &AppHandle, port: u16, token: &str) -> Result<DaemonChild, S
     let child = std::process::Command::new("uv")
         .current_dir(root)
         .args(development_daemon_args(port))
-        .env("WF_BRIDGE_TOKEN", token)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
@@ -201,7 +212,7 @@ pub fn restart_daemon(
 
 #[cfg(test)]
 mod tests {
-    use super::{development_daemon_args, restart_delay};
+    use super::{development_daemon_args, restart_delay, DEVELOPMENT_PORT};
     use std::time::Duration;
 
     #[test]
@@ -213,8 +224,9 @@ mod tests {
 
     #[test]
     fn debug_app_starts_the_live_python_core() {
+        assert_eq!(DEVELOPMENT_PORT, 8765);
         assert_eq!(
-            development_daemon_args(8765),
+            development_daemon_args(DEVELOPMENT_PORT),
             [
                 "run",
                 "--package",

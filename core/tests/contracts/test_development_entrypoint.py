@@ -14,6 +14,7 @@ def test_root_package_exposes_pnpm_live_desktop_entrypoint() -> None:
     assert '"productName": "WeatherFlow Dev"' in launcher
     assert '"identifier": "ai.weatherflow.desktop.dev"' in launcher
     assert '"devUrl": "http://localhost:1421"' in launcher
+    assert '["lsof", "-tiTCP:8765", "-sTCP:LISTEN"]' in launcher
 
 
 def test_tauri_development_hooks_use_pnpm() -> None:
@@ -24,3 +25,7 @@ def test_tauri_development_hooks_use_pnpm() -> None:
     vite_configuration = (ROOT / "desktop" / "vite.config.ts").read_text()
     assert "port: 1421" in vite_configuration
     assert "strictPort: true" in vite_configuration
+    supervisor = (ROOT / "desktop" / "src-tauri" / "src" / "supervisor.rs").read_text()
+    assert "const DEVELOPMENT_PORT: u16 = 8765;" in supervisor
+    bridge = (ROOT / "desktop" / "src" / "bridge.ts").read_text()
+    assert 'baseUrl: "http://127.0.0.1:8765"' in bridge

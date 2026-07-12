@@ -8,15 +8,25 @@ declare global {
 }
 
 export function bridgeConfig(): BridgeConfig {
-  return window.__WEATHERFLOW_BRIDGE__ ?? { baseUrl: "http://127.0.0.1:8765" };
+  return explicitBridgeConfig() ?? { baseUrl: "http://127.0.0.1:8765" };
 }
 
 export async function resolveBridgeConfig(): Promise<BridgeConfig> {
-  if (window.__WEATHERFLOW_BRIDGE__) return window.__WEATHERFLOW_BRIDGE__;
-  if ("__TAURI_INTERNALS__" in window) {
-    return invoke<BridgeConfig>("daemon_bridge");
+  if (import.meta.env.DEV) return bridgeConfig();
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const embedded = explicitBridgeConfig();
+    if (embedded) return embedded;
+    try {
+      return await invoke<BridgeConfig>("daemon_bridge");
+    } catch {
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+    }
   }
   return bridgeConfig();
+}
+
+function explicitBridgeConfig(): BridgeConfig | null {
+  return window.__WEATHERFLOW_BRIDGE__ ?? null;
 }
 
 export class WeatherFlowClient {
