@@ -47,19 +47,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
-        working-directory: desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Frontend gates
-        working-directory: desktop
-        run: npm run lint && npm run typecheck && npm test && npm run build
+        run: pnpm --filter weatherflow-desktop lint && pnpm --filter weatherflow-desktop typecheck && pnpm --filter weatherflow-desktop test && pnpm --filter weatherflow-desktop build
 
       - name: Rust format
         working-directory: desktop/src-tauri

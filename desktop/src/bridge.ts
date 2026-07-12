@@ -1,4 +1,4 @@
-import type { Approval, Artifact, DesktopSnapshot, DiagnosticExport, LedgerEvent, ResetPreview, ResetResult, Run, SystemStatus } from "./types";
+import type { Approval, Artifact, DesktopSnapshot, DiagnosticExport, LedgerEvent, ResetPreview, ResetResult, Run, SystemStatus, Workspace } from "./types";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
 
@@ -26,14 +26,26 @@ export class WeatherFlowClient {
     return response.json() as Promise<T>;
   }
 
-  snapshot(): Promise<DesktopSnapshot> { return this.request("/v1/desktop/snapshot"); }
+  private scoped(path: string, workspaceId?: string | null): string {
+    if (!workspaceId) return path;
+    const separator = path.includes("?") ? "&" : "?";
+    return `${path}${separator}workspace_id=${encodeURIComponent(workspaceId)}`;
+  }
+
+  snapshot(workspaceId?: string | null): Promise<DesktopSnapshot> { return this.request(this.scoped("/v1/desktop/snapshot", workspaceId)); }
+  workspaces(): Promise<Workspace[]> { return this.request("/v1/workspaces"); }
+  authorizeWorkspace(name: string, path: string): Promise<Workspace> {
+    return this.request("/v1/workspaces", { method: "POST", body: JSON.stringify({ name, path }) });
+  }
+  runs(workspaceId?: string | null): Promise<Run[]> { return this.request(this.scoped("/v1/runs", workspaceId)); }
   approvals(): Promise<Approval[]> { return this.request("/v1/approvals"); }
   timeline(runId: string): Promise<LedgerEvent[]> { return this.request(`/v1/runs/${runId}/timeline`); }
   artifacts(runId: string): Promise<Artifact[]> { return this.request(`/v1/runs/${runId}/artifacts`); }
-  createRun(userIntent: string, clientRequestId: string): Promise<Run> {
+  cancel(runId: string): Promise<Run> { return this.request(`/v1/runs/${runId}/cancel`, { method: "POST" }); }
+  createRun(userIntent: string, clientRequestId: string, workspaceId?: string | null, contextRunId?: string | null): Promise<Run> {
     return this.request("/v1/runs", {
       method: "POST",
-      body: JSON.stringify({ user_intent: userIntent, client_request_id: clientRequestId }),
+      body: JSON.stringify({ user_intent: userIntent, client_request_id: clientRequestId, workspace_id: workspaceId, context_run_id: contextRunId }),
     });
   }
   decide(approvalId: string, decision: "approve" | "deny", version: number): Promise<unknown> {
@@ -42,12 +54,12 @@ export class WeatherFlowClient {
       body: JSON.stringify({ decision, expected_version: version, resume: true }),
     });
   }
-  ingestSignal(signal: Record<string, unknown>): Promise<unknown> {
-    return this.request("/v1/rhythm/signals", { method: "POST", body: JSON.stringify(signal) });
+  ingestSignal(signal: Record<string, unknown>, workspaceId?: string | null): Promise<unknown> {
+    return this.request(this.scoped("/v1/rhythm/signals", workspaceId), { method: "POST", body: JSON.stringify(signal) });
   }
-  status(): Promise<SystemStatus> { return this.request("/v1/system/status"); }
-  completeOnboarding(enableMetadataSensor: boolean): Promise<unknown> {
-    return this.request("/v1/onboarding/complete", {
+  status(workspaceId?: string | null): Promise<SystemStatus> { return this.request(this.scoped("/v1/system/status", workspaceId)); }
+  completeOnboarding(enableMetadataSensor: boolean, workspaceId?: string | null): Promise<unknown> {
+    return this.request(this.scoped("/v1/onboarding/complete", workspaceId), {
       method: "POST",
       body: JSON.stringify({
         confirm_local_ownership: true,
@@ -55,14 +67,19 @@ export class WeatherFlowClient {
       }),
     });
   }
-  exportDiagnostics(): Promise<DiagnosticExport> {
-    return this.request("/v1/diagnostics/export", { method: "POST" });
+  async artifactContent(artifactId: string): Promise<Blob> {
+    const response = await fetch(`${this.config.baseUrl}/v1/artifacts/${artifactId}/content`, { headers: this.headers() });
+    if (!response.ok) throw new Error(`WeatherFlow bridge ${response.status}`);
+    return response.blob();
   }
-  previewReset(category: string): Promise<ResetPreview> {
-    return this.request(`/v1/privacy/reset/${category}`);
+  exportDiagnostics(workspaceId?: string | null): Promise<DiagnosticExport> {
+    return this.request(this.scoped("/v1/diagnostics/export", workspaceId), { method: "POST" });
   }
-  reset(category: string): Promise<ResetResult> {
-    return this.request(`/v1/privacy/reset/${category}`, {
+  previewReset(category: string, workspaceId?: string | null): Promise<ResetPreview> {
+    return this.request(this.scoped(`/v1/privacy/reset/${category}`, workspaceId));
+  }
+  reset(category: string, workspaceId?: string | null): Promise<ResetResult> {
+    return this.request(this.scoped(`/v1/privacy/reset/${category}`, workspaceId), {
       method: "POST", body: JSON.stringify({ confirm: true }),
     });
   }

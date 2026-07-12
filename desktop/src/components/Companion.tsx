@@ -3,6 +3,7 @@ import type { DesktopSnapshot, RunStatus, WeatherScene } from "../types";
 interface CompanionProps {
   snapshot: DesktopSnapshot | null;
   offline?: boolean;
+  sensorAvailable?: boolean;
   onOpenCapsule: () => void;
   onOpenCockpit: () => void;
 }
@@ -15,7 +16,7 @@ function ringState(status?: RunStatus): string {
   return "attention";
 }
 
-export function Companion({ snapshot, offline = false, onOpenCapsule, onOpenCockpit }: CompanionProps) {
+export function Companion({ snapshot, offline = false, sensorAvailable = true, onOpenCapsule, onOpenCockpit }: CompanionProps) {
   const weather: WeatherScene = snapshot?.rhythm.weather.scene ?? "mixed";
   const ring = offline ? "offline" : ringState(snapshot?.latest_run?.status);
   return (
@@ -32,6 +33,7 @@ export function Companion({ snapshot, offline = false, onOpenCapsule, onOpenCock
         </span>
         {ring === "approval" && <span className="approval-badge" aria-label="Approval waiting">!</span>}
       </button>
+      {snapshot?.metadata_sensor_enabled && !sensorAvailable && <span className="sensor-unavailable" role="status">Activity signal unavailable</span>}
       <button className="cockpit-trigger" aria-label="Open Cockpit" onClick={onOpenCockpit}>⌁</button>
     </main>
   );

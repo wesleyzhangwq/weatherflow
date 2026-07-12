@@ -7,6 +7,7 @@ from weatherflow.models import ModelStatus
 from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import Run
 from weatherflow.trust import Approval
+from weatherflow.workspaces import Workspace
 
 
 class HealthResponse(BaseModel):
@@ -22,8 +23,16 @@ class RunCreateRequest(BaseModel):
 
     user_intent: str
     client_request_id: str | None = None
-    workspace_id: str | None = None
+    workspace_id: str
+    context_run_id: str | None = None
     execute: bool = False
+
+
+class WorkspaceCreateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    path: str
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -40,6 +49,8 @@ class DesktopSnapshot(BaseModel):
 
     rhythm: CurrentRhythm
     latest_run: Run | None = None
+    workspace: Workspace
+    metadata_sensor_enabled: bool = False
 
 
 class ApprovalView(Approval):

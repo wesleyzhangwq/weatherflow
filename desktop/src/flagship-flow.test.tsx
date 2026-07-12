@@ -16,7 +16,9 @@ function snapshot(status?: RunStatus): DesktopSnapshot {
       policy: { proactivity: "silent", work_mode: "single_thread" },
       weather: { scene: "storm", intensity: 0.92, transition: "steady", snapshot_id: "state-overloaded", valid_until: "2026-07-12", presentation_version: "weather-v1" },
     },
-    latest_run: status ? { id: "run-flagship", user_intent: "Ship with least burden", status, result_summary: status === "succeeded" ? "Release prepared" : null, updated_at: "2026-07-12" } : null,
+    latest_run: status ? { id: "run-flagship", workspace_id: "w1", user_intent: "Ship with least burden", status, result_summary: status === "succeeded" ? "Release prepared" : null, updated_at: "2026-07-12" } : null,
+    workspace: { id: "w1", name: "Project", action_roots: ["/tmp/project"], installed_packs: ["developer"] },
+    metadata_sensor_enabled: false,
   };
 }
 
@@ -25,7 +27,7 @@ function FlagshipDesktopStory({ client }: { client: WeatherFlowClient }) {
   const [status, setStatus] = useState<RunStatus | undefined>();
   advanceToApproval = () => setStatus("waiting_approval");
   if (surface === "capsule") {
-    return <Capsule client={client} onAccepted={() => { setStatus("running"); setSurface("companion"); }} />;
+    return <Capsule client={client} workspaceId="w1" onAccepted={() => { setStatus("running"); setSurface("companion"); }} />;
   }
   if (surface === "cockpit") {
     return <Cockpit client={client} snapshot={snapshot(status)} offline={false} />;
@@ -49,6 +51,7 @@ describe("flagship macOS desktop story", () => {
     const client = {
       createRun: vi.fn().mockResolvedValue({ id: "run-flagship" }),
       approvals: vi.fn().mockImplementation(async () => [{ ...approval, status: approvalStatus }]),
+      runs: vi.fn().mockImplementation(async () => snapshot("waiting_approval").latest_run ? [snapshot("waiting_approval").latest_run] : []),
       timeline: vi.fn().mockResolvedValue([{ id: "event-1", type: "approval.requested", recorded_at: "2026-07-12", payload: {} }]),
       artifacts: vi.fn().mockResolvedValue([{ id: "artifact-1", run_id: "run-flagship", name: "release-checklist.md", media_type: "text/markdown", digest: "digest", size_bytes: 42 }]),
       decide: vi.fn().mockImplementation(async () => { approvalStatus = "approved"; return {}; }),

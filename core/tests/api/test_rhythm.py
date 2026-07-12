@@ -66,3 +66,36 @@ async def test_rhythm_api_rejects_raw_activity_content(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 422
+
+
+async def test_activity_metadata_requires_explicit_workspace_consent(
+    tmp_path: Path,
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    transport = ASGITransport(app=create_app(container=container))
+    now = datetime.now(UTC)
+    payload = {
+        "kind": "activity_metadata",
+        "observed_at": now.isoformat(),
+        "window_start": (now - timedelta(minutes=1)).isoformat(),
+        "window_end": now.isoformat(),
+        "active_seconds": 45,
+        "idle_seconds": 15,
+        "app_switch_count": 2,
+        "category_seconds": {"development": 45},
+    }
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        rejected = await client.post("/v1/rhythm/signals", json=payload)
+        await client.post(
+            "/v1/onboarding/complete",
+            json={
+                "confirm_local_ownership": True,
+                "enable_metadata_sensor": True,
+            },
+        )
+        accepted = await client.post("/v1/rhythm/signals", json=payload)
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "metadata_sensor_consent_required"
+    assert accepted.status_code == 201

@@ -45,7 +45,7 @@ async function sample(): Promise<NativeActivitySample> {
   return invoke<NativeActivitySample>("sample_activity_metadata");
 }
 
-export function useActivityMetadata(client: WeatherFlowClient, enabled: boolean) {
+export function useActivityMetadata(client: WeatherFlowClient, enabled: boolean, workspaceId?: string | null) {
   const [available, setAvailable] = useState(true);
   useEffect(() => {
     if (!enabled) return;
@@ -54,10 +54,10 @@ export function useActivityMetadata(client: WeatherFlowClient, enabled: boolean)
     const timer = window.setInterval(() => {
       void sample().then((value) => {
         setAvailable(true); accumulator.record(value, 5); seconds += 5;
-        if (seconds >= 60) { seconds = 0; void client.ingestSignal(accumulator.flush()); }
+        if (seconds >= 60) { seconds = 0; void client.ingestSignal(accumulator.flush(), workspaceId); }
       }).catch(() => setAvailable(false));
     }, 5_000);
     return () => window.clearInterval(timer);
-  }, [client, enabled]);
+  }, [client, enabled, workspaceId]);
   return available;
 }

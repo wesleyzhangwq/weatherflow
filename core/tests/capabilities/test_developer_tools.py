@@ -91,6 +91,11 @@ async def test_command_execution_is_allowlisted_and_bounded(tmp_path: Path) -> N
     assert result.output["returncode"] == 0
     assert result.output["stdout"] == "ok\n"
 
+    pnpm = await executor.execute(
+        spec("developer.run_command"), {"argv": ["pnpm", "--version"]}, context
+    )
+    assert pnpm.output["returncode"] == 0
+
     with pytest.raises(PermissionError):
         await executor.execute(
             spec("developer.run_command"), {"argv": ["sh", "-c", "echo unsafe"]}, context

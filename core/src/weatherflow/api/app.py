@@ -24,6 +24,7 @@ from weatherflow.api.schemas import (
     ResetConfirmRequest,
     RunCreateRequest,
     SystemStatus,
+    WorkspaceCreateRequest,
 )
 from weatherflow.artifacts import ArtifactManifest
 from weatherflow.bootstrap import RuntimeContainer
@@ -46,6 +47,7 @@ from weatherflow.trust import (
     ApprovalBundle,
     ApprovalStatus,
 )
+from weatherflow.workspaces import Workspace
 
 
 def create_app(
@@ -90,7 +92,22 @@ def create_app(
             async with app.state.container_lock:
                 if app.state.container is None:
                     app.state.container = await RuntimeContainer.create(resolved_settings)
-        return app.state.container
+        service = app.state.container
+        await service.start_background()
+        return service
+
+    async def selected_workspace(service: RuntimeContainer, workspace_id: str | None) -> Workspace:
+        workspace = (
+            await service.workspaces.get(workspace_id)
+            if workspace_id is not None
+            else service.default_workspace
+        )
+        if workspace is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "workspace_not_found", "workspace_id": workspace_id},
+            )
+        return workspace
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
@@ -104,7 +121,8 @@ def create_app(
                 user_intent=request.user_intent,
                 client_request_id=request.client_request_id,
                 workspace_id=request.workspace_id,
-                execute=request.execute,
+                context_run_id=request.context_run_id,
+                execute=False,
             )
         except LookupError as error:
             raise HTTPException(
@@ -114,7 +132,61 @@ def create_app(
         stored = await service.runs.get(run.id)
         if stored is None:
             raise RuntimeError(run.id)
+        resumable = {
+            RunStatus.QUEUED,
+            RunStatus.PLANNING,
+            RunStatus.RUNNING,
+            RunStatus.PAUSED,
+        }
+        if stored.status in resumable:
+            if request.execute:
+                await service.resume_run(run.id)
+            else:
+                service.schedule_run(run.id)
+            stored = await service.runs.get(run.id)
+            if stored is None:
+                raise RuntimeError(run.id)
         return stored
+
+    @app.get("/v1/runs", response_model=list[Run])
+    async def list_runs(workspace_id: str | None = None, limit: int = 50) -> list[Run]:
+        service = await runtime()
+        return await service.runs.list_recent(limit=limit, workspace_id=workspace_id)
+
+    @app.get("/v1/workspaces", response_model=list[Workspace])
+    async def list_workspaces() -> list[Workspace]:
+        service = await runtime()
+        return [
+            workspace
+            for workspace in await service.workspaces.list_all()
+            if workspace.id != service.default_workspace.id
+        ]
+
+    @app.post(
+        "/v1/workspaces",
+        response_model=Workspace,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def authorize_workspace(request: WorkspaceCreateRequest) -> Workspace:
+        service = await runtime()
+        try:
+            return await service.authorize_workspace(name=request.name, path=request.path)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "workspace_path_invalid"},
+            ) from error
+
+    @app.get("/v1/workspaces/{workspace_id}", response_model=Workspace)
+    async def get_workspace(workspace_id: str) -> Workspace:
+        service = await runtime()
+        workspace = await service.workspaces.get(workspace_id)
+        if workspace is None or workspace.id == service.default_workspace.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "workspace_not_found", "workspace_id": workspace_id},
+            )
+        return workspace
 
     @app.get("/v1/runs/{run_id}", response_model=Run)
     async def get_run(run_id: str) -> Run:
@@ -130,6 +202,7 @@ def create_app(
     @app.post("/v1/runs/{run_id}/cancel", response_model=Run)
     async def cancel_run(run_id: str) -> Run:
         service = await runtime()
+        await service.cancel_background_run(run_id)
         run = await service.runs.get(run_id)
         if run is None:
             raise HTTPException(
@@ -263,28 +336,44 @@ def create_app(
         response_model=CurrentRhythm,
         status_code=status.HTTP_201_CREATED,
     )
-    async def ingest_rhythm_signal(signal: RhythmSignal) -> CurrentRhythm:
+    async def ingest_rhythm_signal(
+        signal: RhythmSignal, workspace_id: str | None = None
+    ) -> CurrentRhythm:
         service = await runtime()
-        return await service.rhythm.ingest(service.default_workspace.id, signal)
+        workspace = await selected_workspace(service, workspace_id)
+        if signal.kind == "activity_metadata":
+            onboarding = await service.onboarding.get(workspace.id)
+            if not onboarding.metadata_sensor_enabled:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "metadata_sensor_consent_required"},
+                )
+        return await service.rhythm.ingest(workspace.id, signal)
 
     @app.get("/v1/rhythm/current", response_model=CurrentRhythm)
-    async def current_rhythm() -> CurrentRhythm:
+    async def current_rhythm(workspace_id: str | None = None) -> CurrentRhythm:
         service = await runtime()
-        return await service.rhythm.current(service.default_workspace.id)
+        workspace = await selected_workspace(service, workspace_id)
+        return await service.rhythm.current(workspace.id)
 
     @app.get("/v1/desktop/snapshot", response_model=DesktopSnapshot)
-    async def desktop_snapshot() -> DesktopSnapshot:
+    async def desktop_snapshot(workspace_id: str | None = None) -> DesktopSnapshot:
         service = await runtime()
-        rhythm = await service.rhythm.current(service.default_workspace.id)
-        recent = await service.runs.list_recent(limit=1)
-        return DesktopSnapshot(rhythm=rhythm, latest_run=recent[0] if recent else None)
+        workspace = await selected_workspace(service, workspace_id)
+        rhythm = await service.rhythm.current(workspace.id)
+        recent = await service.runs.list_recent(limit=1, workspace_id=workspace.id)
+        onboarding = await service.onboarding.get(workspace.id)
+        return DesktopSnapshot(
+            rhythm=rhythm,
+            latest_run=recent[0] if recent else None,
+            workspace=workspace,
+            metadata_sensor_enabled=onboarding.metadata_sensor_enabled,
+        )
 
     @app.get("/v1/system/status", response_model=SystemStatus)
-    async def system_status() -> SystemStatus:
+    async def system_status(workspace_id: str | None = None) -> SystemStatus:
         service = await runtime()
-        workspace = await service.workspaces.get(service.default_workspace.id)
-        if workspace is None:
-            raise HTTPException(status_code=409, detail={"code": "workspace_missing"})
+        workspace = await selected_workspace(service, workspace_id)
         providers: dict[str, str] = {}
         for tool in service.catalog.all():
             if tool.source.startswith("builtin.") and tool.source not in {
@@ -301,6 +390,8 @@ def create_app(
             providers[f"mcp.{connection.client.server_name}"] = health
         onboarding = await service.onboarding.get(workspace.id)
         model_status = await service.model_configurations.status(workspace.id)
+        if not model_status.configured and workspace.id != service.default_workspace.id:
+            model_status = await service.model_configurations.status(service.default_workspace.id)
         return SystemStatus(
             workspace_id=workspace.id,
             onboarding_completed=onboarding.completed,
@@ -308,6 +399,7 @@ def create_app(
             providers=providers,
             behavior_sensor={
                 "mode": "metadata_only",
+                "enabled": onboarding.metadata_sensor_enabled,
                 "raw_content_captured": False,
                 "fallback_to_deliberate_signals": True,
             },
@@ -320,13 +412,15 @@ def create_app(
         )
 
     @app.get("/v1/onboarding", response_model=OnboardingState)
-    async def onboarding_state() -> OnboardingState:
+    async def onboarding_state(workspace_id: str | None = None) -> OnboardingState:
         service = await runtime()
-        return await service.onboarding.get(service.default_workspace.id)
+        workspace = await selected_workspace(service, workspace_id)
+        return await service.onboarding.get(workspace.id)
 
     @app.post("/v1/onboarding/complete", response_model=OnboardingState)
     async def complete_onboarding(
         request: OnboardingCompleteRequest,
+        workspace_id: str | None = None,
     ) -> OnboardingState:
         if not request.confirm_local_ownership:
             raise HTTPException(
@@ -334,39 +428,52 @@ def create_app(
                 detail={"code": "local_ownership_confirmation_required"},
             )
         service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
         return await service.onboarding.complete(
-            service.default_workspace.id,
+            workspace.id,
             metadata_sensor_enabled=request.enable_metadata_sensor,
         )
 
     @app.get("/v1/diagnostics/metrics", response_model=LocalMetrics)
-    async def diagnostic_metrics() -> LocalMetrics:
+    async def diagnostic_metrics(workspace_id: str | None = None) -> LocalMetrics:
         service = await runtime()
-        return await service.diagnostics.metrics(service.default_workspace.id)
+        workspace = await selected_workspace(service, workspace_id)
+        return await service.diagnostics.metrics(workspace.id)
 
     @app.post(
         "/v1/diagnostics/export",
         response_model=DiagnosticExport,
         status_code=status.HTTP_201_CREATED,
     )
-    async def export_diagnostics() -> DiagnosticExport:
+    async def export_diagnostics(
+        workspace_id: str | None = None,
+    ) -> DiagnosticExport:
         service = await runtime()
-        return await service.diagnostics.export(service.default_workspace.id)
+        workspace = await selected_workspace(service, workspace_id)
+        return await service.diagnostics.export(workspace.id)
 
     @app.get("/v1/privacy/reset/{category}", response_model=ResetPreview)
-    async def preview_reset(category: ResetCategory) -> ResetPreview:
+    async def preview_reset(
+        category: ResetCategory, workspace_id: str | None = None
+    ) -> ResetPreview:
         service = await runtime()
-        return await service.privacy.preview_reset(service.default_workspace.id, category)
+        workspace = await selected_workspace(service, workspace_id)
+        return await service.privacy.preview_reset(workspace.id, category)
 
     @app.post("/v1/privacy/reset/{category}", response_model=ResetResult)
-    async def reset(category: ResetCategory, request: ResetConfirmRequest) -> ResetResult:
+    async def reset(
+        category: ResetCategory,
+        request: ResetConfirmRequest,
+        workspace_id: str | None = None,
+    ) -> ResetResult:
         if not request.confirm:
             raise HTTPException(
                 status_code=409,
                 detail={"code": "explicit_confirmation_required"},
             )
         service = await runtime()
-        return await service.privacy.reset(service.default_workspace.id, category)
+        workspace = await selected_workspace(service, workspace_id)
+        return await service.privacy.reset(workspace.id, category)
 
     @app.get("/v1/security/scan", response_model=SecurityScan)
     async def security_scan() -> SecurityScan:

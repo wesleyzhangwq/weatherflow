@@ -10,7 +10,7 @@ describe("WeatherFlowClient", () => {
     );
     const client = new WeatherFlowClient({ baseUrl: "http://127.0.0.1:9000", token: "secret" });
 
-    await client.createRun("Ship release", "request-1");
+    await client.createRun("Ship release", "request-1", "workspace-1");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:9000/v1/runs",
@@ -20,6 +20,6 @@ describe("WeatherFlowClient", () => {
       }),
     );
     const body = JSON.parse((fetchMock.mock.calls[0][1]?.body as string));
-    expect(body).toEqual({ user_intent: "Ship release", client_request_id: "request-1" });
+    expect(body).toEqual({ user_intent: "Ship release", client_request_id: "request-1", workspace_id: "workspace-1" });
   });
 });

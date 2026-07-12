@@ -16,7 +16,9 @@ from weatherflow.capabilities.models import (
 from weatherflow.runtime import ToolExecutionContext, ToolExecutionResult
 from weatherflow.workspaces import Workspace, WorkspaceRepository
 
-ALLOWED_COMMANDS = frozenset({"git", "python", "python3", "pytest", "uv", "npm", "npx", "make"})
+ALLOWED_COMMANDS = frozenset(
+    {"git", "python", "python3", "pytest", "uv", "npm", "npx", "pnpm", "make"}
+)
 MAX_FILE_BYTES = 1_000_000
 MAX_OUTPUT_CHARS = 16_000
 

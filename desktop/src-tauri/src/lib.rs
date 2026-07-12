@@ -1,7 +1,7 @@
 mod activity;
 mod supervisor;
 
-use std::sync::Mutex;
+use std::{process::Command, sync::Mutex};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -85,6 +85,33 @@ fn open_cockpit(app: tauri::AppHandle) -> tauri::Result<()> {
     show_or_create(&app, "cockpit", "cockpit", 1100.0, 760.0, false)
 }
 
+#[tauri::command]
+fn choose_workspace_directory() -> Result<Option<String>, String> {
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            "try",
+            "-e",
+            "POSIX path of (choose folder with prompt \"Choose a project for WeatherFlow\")",
+            "-e",
+            "on error number -128",
+            "-e",
+            "return \"\"",
+            "-e",
+            "end try",
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let path = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .trim_end_matches('/')
+        .to_owned();
+    Ok((!path.is_empty()).then_some(path))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -125,6 +152,7 @@ pub fn run() {
             open_capsule,
             close_capsule,
             open_cockpit,
+            choose_workspace_directory,
             supervisor::daemon_bridge,
             supervisor::restart_daemon,
             activity::sample_activity_metadata

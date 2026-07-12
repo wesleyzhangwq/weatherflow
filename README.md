@@ -54,6 +54,13 @@ The MiniMax production adapter defaults to OpenAI-compatible `MiniMax-M3` text
 and tool calling while keeping API keys in macOS Keychain. M3 thinking is
 explicitly disabled at the provider boundary so hidden reasoning never has to
 enter durable WeatherFlow history.
+P5 resets the product loop around real daily use: Cockpit explicitly authorizes
+a project directory, Capsule durably acknowledges a Workspace-bound Run before
+MiniMax work starts, the daemon owns background execution and safe recovery,
+and Cockpit exposes Run history, cancellation, results, follow-ups, approvals,
+timeline evidence, and authenticated Artifact downloads. Deliberate rhythm
+check-ins work by default; native activity metadata remains off until the user
+opts in for that Workspace.
 
 ## Read first
 
@@ -90,6 +97,17 @@ pnpm dev:app
 source with reload enabled. It does not use the last PyInstaller release
 sidecar. International MiniMax accounts should run `pnpm model:configure`
 instead of the `:cn` command.
+
+On the first launch:
+
+1. Open Cockpit from the small `⌁` control on the Companion.
+2. Choose a real project directory. Capsule will not create a desktop Run until
+   a project has been explicitly authorized.
+3. Choose either **Check-ins only** or **Enable metadata**. The latter records
+   only coarse active/idle time, app-switch counts, and category totals.
+4. Press `⌘⇧Space`, type a goal, and press Return. Capsule closes after durable
+   acceptance while execution continues in the daemon; reopen Cockpit to see
+   progress, evidence, results, follow-ups, and any approval request.
 
 Useful development commands:
 

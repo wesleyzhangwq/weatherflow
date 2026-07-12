@@ -20,13 +20,26 @@ export interface CurrentRhythm {
 
 export interface Run {
   id: string;
+  workspace_id: string;
   user_intent: string;
   status: RunStatus;
   result_summary: string | null;
   updated_at: string;
 }
 
-export interface DesktopSnapshot { rhythm: CurrentRhythm; latest_run: Run | null }
+export interface Workspace {
+  id: string;
+  name: string;
+  action_roots: string[];
+  installed_packs: string[];
+}
+
+export interface DesktopSnapshot {
+  rhythm: CurrentRhythm;
+  latest_run: Run | null;
+  workspace: Workspace;
+  metadata_sensor_enabled: boolean;
+}
 export interface Approval {
   id: string;
   action_id: string;
@@ -46,7 +59,7 @@ export interface SystemStatus {
   workspace_id: string;
   installed_packs: string[];
   providers: Record<string, string>;
-  behavior_sensor: { mode: string; raw_content_captured: false; fallback_to_deliberate_signals: true };
+  behavior_sensor: { mode: string; enabled?: boolean; raw_content_captured: false; fallback_to_deliberate_signals: true };
   retention: Record<string, string>;
   model: { configured: boolean; provider: string; model: string | null; base_url: string | null; credential_available: boolean };
 }

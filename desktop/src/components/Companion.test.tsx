@@ -9,7 +9,9 @@ const snapshot: DesktopSnapshot = {
     policy: { proactivity: "silent", work_mode: "single_thread" },
     weather: { scene: "storm", intensity: 0.9, transition: "steady", snapshot_id: "state-1", valid_until: "2026-07-12", presentation_version: "weather-v1" },
   },
-  latest_run: { id: "run-1", user_intent: "Ship", status: "waiting_approval", result_summary: null, updated_at: "2026-07-12" },
+  latest_run: { id: "run-1", workspace_id: "w1", user_intent: "Ship", status: "waiting_approval", result_summary: null, updated_at: "2026-07-12" },
+  workspace: { id: "w1", name: "Project", action_roots: ["/tmp/project"], installed_packs: ["developer"] },
+  metadata_sensor_enabled: false,
 };
 
 describe("Companion", () => {
@@ -32,5 +34,12 @@ describe("Companion", () => {
     expect(openCockpit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByLabelText("Open Cockpit"));
     expect(openCockpit).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces an unavailable opted-in sensor without changing weather", () => {
+    const optedIn = { ...snapshot, metadata_sensor_enabled: true };
+    const { container } = render(<Companion snapshot={optedIn} sensorAvailable={false} onOpenCapsule={() => undefined} onOpenCockpit={() => undefined} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Activity signal unavailable");
+    expect(container.querySelector(".companion-shell")).toHaveAttribute("data-weather", "storm");
   });
 });

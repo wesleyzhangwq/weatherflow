@@ -1,5 +1,7 @@
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -118,6 +120,8 @@ class RuntimeContainer:
     model_configurations: ModelConfigurationService
     model_configuration: ModelConfiguration | None
     credential_store: WritableCredentialStore
+    background_tasks: dict[str, asyncio.Task[LoopOutcome]]
+    background_started: bool = False
 
     @classmethod
     async def create(
@@ -339,9 +343,149 @@ class RuntimeContainer:
             model_configurations=model_configurations,
             model_configuration=model_configuration,
             credential_store=resolved_credential_store,
+            background_tasks={},
         )
         await container._audit_startup_recovery()
         return container
+
+    async def authorize_workspace(self, *, name: str, path: str | Path) -> Workspace:
+        root = await asyncio.to_thread(_authorized_workspace_root, path)
+        for existing in await self.workspaces.list_all():
+            if existing.action_roots == (str(root),):
+                return existing
+        storage_key = uuid4().hex
+        workspace = Workspace.new(
+            name=name.strip() or root.name,
+            action_roots=[root],
+            internal_root=self.settings.data_dir / "workspaces" / storage_key / "internal",
+            artifact_root=self.settings.data_dir / "workspaces" / storage_key / "artifacts",
+            granted_scopes={
+                "workspace:read",
+                "workspace:write",
+                "workspace:execute",
+            },
+            installed_packs={DEVELOPER_PACK},
+        )
+        async with self.database.transaction() as connection:
+            await self.workspaces.create_in(connection, workspace)
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="workspace.authorized",
+                    actor=Actor.USER,
+                    stream_kind="workspace",
+                    stream_id=workspace.id,
+                    correlation_id=workspace.id,
+                    payload={
+                        "name": workspace.name,
+                        "action_roots": list(workspace.action_roots),
+                        "installed_packs": list(workspace.installed_packs),
+                    },
+                ),
+            )
+        return workspace
+
+    async def start_background(self) -> None:
+        if self.background_started:
+            return
+        self.background_started = True
+        recoverable = {
+            RunStatus.QUEUED,
+            RunStatus.PLANNING,
+            RunStatus.RUNNING,
+            RunStatus.PAUSED,
+        }
+        for run in await self.runs.list_recent(limit=1000):
+            if run.status in recoverable:
+                self.schedule_run(run.id)
+
+    def schedule_run(self, run_id: str) -> asyncio.Task[LoopOutcome]:
+        existing = self.background_tasks.get(run_id)
+        if existing is not None and not existing.done():
+            return existing
+        task = asyncio.create_task(
+            self._drive_background_run(run_id),
+            name=f"weatherflow-run-{run_id}",
+        )
+        self.background_tasks[run_id] = task
+
+        def finished(completed: asyncio.Task[LoopOutcome]) -> None:
+            self.background_tasks.pop(run_id, None)
+            if not completed.cancelled():
+                completed.exception()
+
+        task.add_done_callback(finished)
+        return task
+
+    async def cancel_background_run(self, run_id: str) -> None:
+        task = self.background_tasks.get(run_id)
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def wait_for_background_run(
+        self,
+        run_id: str,
+        *,
+        timeout_seconds: float = 30,
+    ) -> Run:
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        terminal = {
+            RunStatus.WAITING_APPROVAL,
+            RunStatus.NEEDS_REVIEW,
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }
+        while True:
+            run = await self.runs.get(run_id)
+            if run is None:
+                raise LookupError(run_id)
+            if run.status in terminal:
+                return run
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError(run_id)
+            task = self.background_tasks.get(run_id)
+            if task is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=remaining)
+                except TimeoutError:
+                    raise TimeoutError(run_id) from None
+            else:
+                await asyncio.sleep(min(0.02, remaining))
+
+    async def _drive_background_run(self, run_id: str) -> LoopOutcome:
+        try:
+            return await self.resume_run(run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            await self._record_background_failure(run_id, error)
+            raise
+
+    async def _record_background_failure(self, run_id: str, error: Exception) -> None:
+        current = await self.runs.get(run_id)
+        if current is None:
+            return
+        if current.status is RunStatus.QUEUED:
+            current = await self.run_coordinator.transition(
+                run_id=run_id,
+                target=RunStatus.PLANNING,
+                expected_version=current.version,
+            )
+        if current.status in {RunStatus.PLANNING, RunStatus.RUNNING, RunStatus.PAUSED}:
+            await self.run_coordinator.transition(
+                run_id=run_id,
+                target=RunStatus.FAILED,
+                expected_version=current.version,
+                error_class=type(error).__name__,
+                error_message="background execution failed",
+            )
 
     async def configure_minimax(
         self,
@@ -368,6 +512,7 @@ class RuntimeContainer:
         user_intent: str,
         client_request_id: str | None = None,
         workspace_id: str | None = None,
+        context_run_id: str | None = None,
         execute: bool = True,
     ) -> tuple[Run, LoopOutcome | None]:
         workspace = (
@@ -377,6 +522,11 @@ class RuntimeContainer:
         )
         if workspace is None:
             raise LookupError(workspace_id)
+        context_run = None
+        if context_run_id is not None:
+            context_run = await self.runs.get(context_run_id)
+            if context_run is None or context_run.workspace_id != workspace.id:
+                raise LookupError(context_run_id)
         requested_tool_ids = await self._requested_tool_ids(workspace)
         run = await self.run_coordinator.create_run(
             client_request_id=client_request_id or str(uuid4()),
@@ -390,6 +540,19 @@ class RuntimeContainer:
             and tool.health.value == "unavailable"
         )
         timeline = await self.ledger.list_correlation(run.id, limit=1000)
+        if context_run is not None and not any(
+            event.type == "run.follow_up_linked" for event in timeline
+        ):
+            await self.ledger.append(
+                Event.new(
+                    type="run.follow_up_linked",
+                    actor=Actor.USER,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload={"context_run_id": context_run.id},
+                )
+            )
         if unavailable and not any(event.type == "provider.degraded" for event in timeline):
             await self.ledger.append(
                 Event.new(
@@ -402,7 +565,7 @@ class RuntimeContainer:
                 )
             )
         if run.rhythm_snapshot_id is None:
-            run = await self._bind_rhythm_context(run, workspace)
+            run = await self._bind_rhythm_context(run, workspace, context_run=context_run)
         if await self.snapshots.get_by_run_id(run.id) is None:
             frozen = await self.capability_coordinator.freeze_for_run(
                 run_id=run.id,
@@ -516,7 +679,13 @@ class RuntimeContainer:
             for artifact in await self.artifacts.list_run(related_run_id)
         ]
 
-    async def _bind_rhythm_context(self, run: Run, workspace: Workspace) -> Run:
+    async def _bind_rhythm_context(
+        self,
+        run: Run,
+        workspace: Workspace,
+        *,
+        context_run: Run | None = None,
+    ) -> Run:
         current = await self.rhythm.current(workspace.id)
         definitions = builtin_worker_definitions()
         skills: dict[str, str] = {}
@@ -564,16 +733,28 @@ class RuntimeContainer:
             )
             checkpoint = await self.checkpoints.get_in(connection, run.id)
             if checkpoint is None:
+                transcript = []
+                if context_run is not None:
+                    transcript.append(
+                        AgentMessage(
+                            role=MessageRole.SYSTEM,
+                            content=(
+                                f"This Run follows Run {context_run.id}. Its prior result was: "
+                                f"{context_run.result_summary or 'No final result was committed.'}"
+                            )[:4_000],
+                        )
+                    )
+                transcript.append(
+                    AgentMessage(
+                        role=MessageRole.USER,
+                        content=run.user_intent,
+                    )
+                )
                 await self.checkpoints.create_in(
                     connection,
                     RunCheckpoint.new(
                         run_id=run.id,
-                        transcript=(
-                            AgentMessage(
-                                role=MessageRole.USER,
-                                content=run.user_intent,
-                            ),
-                        ),
+                        transcript=tuple(transcript),
                         state=state,
                     ),
                 )
@@ -651,7 +832,14 @@ class RuntimeContainer:
                     correlation_id=run.id,
                     payload={
                         "status": run.status.value,
-                        "decision": "retained_for_explicit_resume",
+                        "decision": "scheduled_for_background_resume",
                     },
                 )
             )
+
+
+def _authorized_workspace_root(path: str | Path) -> Path:
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError("workspace path must be an existing directory")
+    return root

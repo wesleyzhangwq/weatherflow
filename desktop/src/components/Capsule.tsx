@@ -1,21 +1,25 @@
 import { useState, type DragEvent, type FormEvent } from "react";
 import { WeatherFlowClient } from "../bridge";
 
-interface CapsuleProps { client: WeatherFlowClient; onAccepted: () => void }
+interface CapsuleProps { client: WeatherFlowClient; workspaceId?: string | null; onAccepted: () => void }
 
-export function Capsule({ client, onAccepted }: CapsuleProps) {
+export function Capsule({ client, workspaceId, onAccepted }: CapsuleProps) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!workspaceId) {
+      setError("Choose a project in Cockpit before starting a Run.");
+      return;
+    }
     const intent = value.trim();
     if (!intent || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      await client.createRun(intent, crypto.randomUUID());
+      await client.createRun(intent, crypto.randomUUID(), workspaceId);
       onAccepted();
     } catch {
       setError("WeatherFlow is unavailable. Your input is still here.");

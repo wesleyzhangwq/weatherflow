@@ -73,7 +73,7 @@ async def test_corrupt_checkpoint_is_quarantined_and_run_needs_review(
     assert any(event.type == "runtime.checkpoint_quarantined" for event in timeline)
 
 
-async def test_restart_audits_non_terminal_runs_without_auto_executing(
+async def test_restart_audits_and_resumes_non_terminal_runs_in_background(
     tmp_path: Path,
 ) -> None:
     first = await RuntimeContainer.create(Settings(data_dir=tmp_path))
@@ -84,13 +84,14 @@ async def test_restart_audits_non_terminal_runs_without_auto_executing(
     )
 
     rebuilt = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    await rebuilt.start_background()
+    stored = await rebuilt.wait_for_background_run(run.id, timeout_seconds=1)
 
-    stored = await rebuilt.runs.get(run.id)
-    assert stored is not None and stored.status is RunStatus.QUEUED
+    assert stored.status is RunStatus.SUCCEEDED
     events = await rebuilt.ledger.list_correlation(run.id, limit=1000)
     audit = [event for event in events if event.type == "runtime.startup_recovery_audited"]
     assert len(audit) == 1
-    assert audit[0].payload["decision"] == "retained_for_explicit_resume"
+    assert audit[0].payload["decision"] == "scheduled_for_background_resume"
 
 
 async def test_missing_provider_is_recorded_for_new_run(tmp_path: Path) -> None:
