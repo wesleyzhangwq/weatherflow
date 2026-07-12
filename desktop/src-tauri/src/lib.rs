@@ -50,7 +50,7 @@ fn show_or_create(
         "window.__WEATHERFLOW_BRIDGE__ = {};",
         serde_json::to_string(&bridge).expect("bridge config must serialize")
     );
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         label,
         WebviewUrl::App(format!("index.html?surface={surface}").into()),
@@ -64,6 +64,7 @@ fn show_or_create(
     .resizable(policy.resizable)
     .skip_taskbar(policy.skip_taskbar)
     .build()?;
+    window.set_focus()?;
     Ok(())
 }
 
@@ -174,6 +175,12 @@ mod tests {
         assert_eq!(SHORTCUT_SURFACE, "capsule");
         assert_ne!(STARTUP_SURFACE, "cockpit");
         assert_ne!(SHORTCUT_SURFACE, "cockpit");
+    }
+
+    #[test]
+    fn newly_created_surfaces_are_focused_to_start_the_webview() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("window.set_focus()?;"));
     }
 
     #[test]
