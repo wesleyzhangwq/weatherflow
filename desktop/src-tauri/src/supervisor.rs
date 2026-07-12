@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 #[cfg(debug_assertions)]
 const DEVELOPMENT_PORT: u16 = 8765;
+const INITIAL_HEALTH_GRACE: Duration = Duration::from_secs(5);
 
 enum DaemonChild {
     #[cfg(debug_assertions)]
@@ -155,6 +156,7 @@ pub fn restart_delay(failures: u32) -> Duration {
 pub fn monitor(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::new();
+        tokio_sleep(INITIAL_HEALTH_GRACE).await;
         loop {
             tokio_sleep(Duration::from_secs(2)).await;
             let bridge = {
@@ -213,11 +215,12 @@ pub fn restart_daemon(
 
 #[cfg(test)]
 mod tests {
-    use super::{development_daemon_args, restart_delay, DEVELOPMENT_PORT};
+    use super::{development_daemon_args, restart_delay, DEVELOPMENT_PORT, INITIAL_HEALTH_GRACE};
     use std::time::Duration;
 
     #[test]
     fn restart_backoff_is_bounded() {
+        assert_eq!(INITIAL_HEALTH_GRACE, Duration::from_secs(5));
         assert_eq!(restart_delay(0), Duration::from_millis(500));
         assert_eq!(restart_delay(1), Duration::from_millis(1_000));
         assert_eq!(restart_delay(20), Duration::from_millis(5_000));
