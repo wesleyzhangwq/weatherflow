@@ -61,6 +61,12 @@ The daemon is also usable through CLI and MCP. No client owns business state.
 15. No alternate execution path may bypass the Run Coordinator or Trust Plane.
 16. Model adapters translate provider wire formats only; they cannot add tools,
     scopes, approvals, or durable provider-specific reasoning state.
+17. Desktop Run submission acknowledges durable acceptance before model work;
+    the daemon then owns background execution through the same shared turn loop.
+18. A desktop Run always names an explicitly authorized Workspace. The default
+    internal data directory is not a substitute for selecting a real project.
+19. Activity sensing is disabled until the persisted onboarding preference
+    explicitly enables it.
 
 ## 4. v3.0 scope
 
@@ -97,3 +103,9 @@ messaging catalogs, and all v2 compatibility.
   replayed or persisted. Local development standardizes on `pnpm dev:app`;
   debug Tauri supervises the reloadable Python source core, while release builds
   continue to supervise the bundled sidecar.
+- 2026-07-12: Reset product delivery around one live loop before adding more
+  integrations: authorize a real Workspace, acknowledge Capsule input quickly,
+  execute MiniMax-M3 in the daemon background, reflect Run state through the
+  Companion, and inspect results/approvals/artifacts in Cockpit. Provider and
+  packaging expansion remains frozen until this loop passes a real read-only
+  trajectory. Native activity sampling now requires persisted opt-in.

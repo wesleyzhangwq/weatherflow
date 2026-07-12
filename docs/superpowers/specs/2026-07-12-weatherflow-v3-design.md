@@ -163,6 +163,28 @@ The expected behavior is:
 Passing this story requires the desktop, harness, trust, rhythm, memory,
 artifact, and recovery contracts to work together.
 
+### 4.1 Product-loop reset acceptance
+
+Before further provider or packaging expansion, the implementation must pass a
+smaller live trajectory using the Developer Pack and MiniMax-M3:
+
+1. The user explicitly authorizes an existing project directory as a Workspace.
+2. Capsule submission durably creates a Run and returns before model latency.
+3. The daemon owns background execution through `SharedTurnLoop`; no client
+   process or alternate task runner owns the work.
+4. Companion reflects queued/running/approval/terminal state from committed
+   Run facts.
+5. Cockpit lists recent Runs and exposes the selected Run's final result,
+   summarized timeline, approvals, and authenticated Artifact content.
+6. A deliberate state check-in or correction affects the selected Workspace;
+   native activity metadata is ingested only after persisted opt-in.
+7. A real read-only MiniMax-M3 run inspects the authorized repository and
+   completes without modifying it.
+
+Calendar, GitHub, Research, MCP discovery, extension marketplace UX, release
+packaging, and advanced memory automation are not acceptance dependencies for
+this reset.
+
 ## 5. Top-level architecture
 
 ```text
@@ -515,6 +537,7 @@ syntax changes during the implementation plan:
 
 ```text
 POST /v1/runs
+GET  /v1/runs
 GET  /v1/runs/{run_id}
 POST /v1/runs/{run_id}/cancel
 GET  /v1/runs/{run_id}/timeline
@@ -523,6 +546,8 @@ POST /v1/approvals/{approval_id}/decision
 GET  /v1/artifacts/{artifact_id}
 GET  /v1/rhythm/current
 GET  /v1/desktop/snapshot
+GET  /v1/workspaces
+POST /v1/workspaces
 WS   /v1/events?cursor={event_id}
 ```
 
