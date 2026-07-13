@@ -5,6 +5,10 @@ from typing import Any
 from pydantic import TypeAdapter
 
 from weatherflow.capabilities import CapabilitySnapshotRepository, ToolSpec
+from weatherflow.continuations import (
+    ProviderContinuationRepository,
+    ProviderContinuationUnavailableError,
+)
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime.action_execution import (
@@ -19,13 +23,18 @@ from weatherflow.runtime.models import (
     FinalTurn,
     LeafDelegationError,
     MessageRole,
+    ModelCompletion,
     ModelRequest,
     ModelTurn,
     ToolCallTurn,
     ToolExecutionContext,
 )
 from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopStatus
-from weatherflow.runtime.protocols import ModelAdapter
+from weatherflow.runtime.protocols import (
+    ModelAdapter,
+    ModelResolver,
+    ModelRouteUnavailableError,
+)
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.runtime.tools import ToolExecutorNotFound, ToolExecutorRegistry
 from weatherflow.runtime.workers import WorkerCoordinator, WorkerDefinitionError
@@ -47,9 +56,11 @@ class SharedTurnLoop:
         runs: RunRepository,
         run_coordinator: RunCoordinator,
         checkpoints: RunCheckpointRepository,
+        continuations: ProviderContinuationRepository | None = None,
         snapshots: CapabilitySnapshotRepository,
         ledger: EventLedger,
         model: ModelAdapter,
+        model_resolver: ModelResolver | None = None,
         executors: ToolExecutorRegistry,
         policy: SupervisedPolicy,
         approval_coordinator: ApprovalCoordinator | None = None,
@@ -60,9 +71,11 @@ class SharedTurnLoop:
         self.runs = runs
         self.run_coordinator = run_coordinator
         self.checkpoints = checkpoints
+        self.continuations = continuations
         self.snapshots = snapshots
         self.ledger = ledger
         self.model = model
+        self.model_resolver = model_resolver
         self.executors = executors
         self.policy = policy
         self.approval_coordinator = approval_coordinator
@@ -82,6 +95,10 @@ class SharedTurnLoop:
         checkpoint = await self._ensure_checkpoint(initial)
         if initial.status is RunStatus.WAITING_APPROVAL:
             return await self._waiting_outcome(initial, checkpoint)
+        try:
+            active_model = await self._model_for_run(run_id)
+        except ModelRouteUnavailableError:
+            return await self._model_route_needs_review(initial, checkpoint)
         run = await self._ensure_running(run_id)
         snapshot = await self.snapshots.get_by_run_id(run_id)
         if snapshot is None:
@@ -99,23 +116,38 @@ class SharedTurnLoop:
             if pending is None:
                 if checkpoint.step_index >= step_limit:
                     return await self._fail(run, checkpoint, "step budget exhausted")
-                request = ModelRequest(
-                    run_id=run_id,
-                    agent=agent,
-                    messages=checkpoint.transcript,
-                    tools=tools,
-                )
                 try:
-                    turn = agent.validate_turn(await self._complete_with_retry(request))
+                    provider_continuations = await self._continuations_for(
+                        checkpoint,
+                        active_model,
+                    )
+                    request = ModelRequest(
+                        run_id=run_id,
+                        agent=agent,
+                        messages=checkpoint.transcript,
+                        tools=tools,
+                        provider_continuations=provider_continuations,
+                    )
+                    completion = await self._complete_with_retry(request, active_model)
+                    turn = agent.validate_turn(completion.turn)
                 except (TimeoutError, ConnectionError):
                     return await self._pause_for_model(run, checkpoint)
+                except ProviderContinuationUnavailableError as error:
+                    return await self._needs_review(run, checkpoint, str(error))
                 except LeafDelegationError:
                     return await self._fail(
                         run,
                         checkpoint,
                         f"leaf Worker {agent.agent_id} attempted nested delegation",
                     )
-                checkpoint = await self._record_turn(checkpoint, turn)
+                try:
+                    checkpoint = await self._record_turn(
+                        checkpoint,
+                        completion.model_copy(update={"turn": turn}),
+                        active_model,
+                    )
+                except ProviderContinuationUnavailableError as error:
+                    return await self._needs_review(run, checkpoint, str(error))
             else:
                 turn = TypeAdapter(ModelTurn).validate_python(pending)
 
@@ -228,7 +260,13 @@ class SharedTurnLoop:
             await self.checkpoints.create_in(connection, checkpoint)
         return checkpoint
 
-    async def _record_turn(self, checkpoint: RunCheckpoint, turn: ModelTurn) -> RunCheckpoint:
+    async def _record_turn(
+        self,
+        checkpoint: RunCheckpoint,
+        completion: ModelCompletion,
+        active_model: ModelAdapter,
+    ) -> RunCheckpoint:
+        turn = completion.turn
         message = self._turn_message(turn)
         state = dict(checkpoint.state)
         state["pending_turn"] = turn.model_dump(mode="json")
@@ -240,6 +278,32 @@ class SharedTurnLoop:
             }
         )
         async with self.database.transaction() as connection:
+            if completion.continuation is not None:
+                if self.continuations is None:
+                    raise ProviderContinuationUnavailableError(
+                        "provider continuation store is unavailable"
+                    )
+                if isinstance(turn, FinalTurn):
+                    raise ProviderContinuationUnavailableError(
+                        "terminal model turn cannot carry a provider continuation"
+                    )
+                expected_provider = getattr(active_model, "continuation_provider", None)
+                expected_model = getattr(active_model, "continuation_model", None)
+                if (
+                    completion.continuation.provider != expected_provider
+                    or completion.continuation.model != expected_model
+                ):
+                    raise ProviderContinuationUnavailableError(
+                        "provider continuation does not match the active model"
+                    )
+                await self.continuations.save_in(
+                    connection,
+                    run_id=checkpoint.run_id,
+                    step_index=checkpoint.step_index + 1,
+                    provider=completion.continuation.provider,
+                    model=completion.continuation.model,
+                    payload=completion.continuation.payload,
+                )
             saved = await self.checkpoints.save_in(
                 connection, desired, expected_version=checkpoint.version
             )
@@ -458,6 +522,8 @@ class SharedTurnLoop:
                 expected_version=current_run.version,
                 result_summary=content,
             )
+            if self.continuations is not None:
+                await self.continuations.delete_run_in(connection, run.id)
         return LoopOutcome(
             run_id=run.id,
             status=LoopStatus.SUCCEEDED,
@@ -482,12 +548,21 @@ class SharedTurnLoop:
                 error_class="RuntimeLimitError",
                 error_message=error,
             )
+            if self.continuations is not None:
+                await self.continuations.delete_run_in(connection, run.id)
         return LoopOutcome(run_id=run.id, status=LoopStatus.FAILED, error=error)
 
-    async def _complete_with_retry(self, request: ModelRequest) -> ModelTurn:
+    async def _complete_with_retry(
+        self,
+        request: ModelRequest,
+        active_model: ModelAdapter,
+    ) -> ModelCompletion:
         for attempt in range(1, 4):
             try:
-                return await self.model.complete(request)
+                result = await active_model.complete(request)
+                return (
+                    result if isinstance(result, ModelCompletion) else ModelCompletion(turn=result)
+                )
             except (TimeoutError, ConnectionError):
                 if attempt == 3:
                     raise
@@ -503,6 +578,127 @@ class SharedTurnLoop:
                 )
                 await asyncio.sleep(0.05 * (2 ** (attempt - 1)))
         raise RuntimeError("unreachable")
+
+    async def _continuations_for(
+        self,
+        checkpoint: RunCheckpoint,
+        active_model: ModelAdapter,
+    ):
+        provider = getattr(active_model, "continuation_provider", None)
+        model = getattr(active_model, "continuation_model", None)
+        if provider is None or model is None:
+            return ()
+        if self.continuations is None:
+            raise ProviderContinuationUnavailableError("provider continuation store is unavailable")
+        required_steps = tuple(
+            index
+            for index, message in enumerate(
+                (item for item in checkpoint.transcript if item.role is MessageRole.ASSISTANT),
+                start=1,
+            )
+            if self._assistant_requires_continuation(message)
+        )
+        return await self.continuations.require_for_run(
+            checkpoint.run_id,
+            provider=provider,
+            model=model,
+            required_steps=required_steps,
+        )
+
+    async def _model_for_run(self, run_id: str) -> ModelAdapter:
+        if self.model_resolver is None:
+            return self.model
+        resolved = await self.model_resolver.resolve(run_id)
+        return resolved or self.model
+
+    @staticmethod
+    def _assistant_requires_continuation(message: AgentMessage) -> bool:
+        try:
+            value = json.loads(message.content)
+        except ValueError:
+            return False
+        return isinstance(value, dict) and value.get("kind") in {"tool_call", "delegation"}
+
+    async def _needs_review(
+        self,
+        run: Run,
+        checkpoint: RunCheckpoint,
+        reason: str,
+    ) -> LoopOutcome:
+        state = dict(checkpoint.state)
+        state["review_reason"] = "provider_continuation_unavailable"
+        desired = checkpoint.model_copy(update={"state": state})
+        current = await self.runs.get(run.id)
+        if current is None:
+            raise LookupError(run.id)
+        async with self.database.transaction() as connection:
+            await self.checkpoints.save_in(connection, desired, expected_version=checkpoint.version)
+            await self.run_coordinator.transition_in(
+                connection,
+                run_id=run.id,
+                target=RunStatus.NEEDS_REVIEW,
+                expected_version=current.version,
+                error_class="ProviderContinuationUnavailable",
+                error_message="provider continuation unavailable; explicit review required",
+            )
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="runtime.provider_continuation_unavailable",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload={"reason": reason[:200]},
+                ),
+            )
+        return LoopOutcome(
+            run_id=run.id,
+            status=LoopStatus.NEEDS_REVIEW,
+            error="provider continuation unavailable; explicit review required",
+        )
+
+    async def _model_route_needs_review(
+        self,
+        run: Run,
+        checkpoint: RunCheckpoint,
+    ) -> LoopOutcome:
+        state = dict(checkpoint.state)
+        state["review_reason"] = "model_route_unavailable"
+        desired = checkpoint.model_copy(update={"state": state})
+        current = await self.runs.get(run.id)
+        if current is None:
+            raise LookupError(run.id)
+        async with self.database.transaction() as connection:
+            await self.checkpoints.save_in(
+                connection,
+                desired,
+                expected_version=checkpoint.version,
+            )
+            await self.run_coordinator.transition_in(
+                connection,
+                run_id=run.id,
+                target=RunStatus.NEEDS_REVIEW,
+                expected_version=current.version,
+                error_class="ModelRouteUnavailable",
+                error_message="frozen model route unavailable; explicit review required",
+            )
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="runtime.model_route_unavailable",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=run.id,
+                    correlation_id=run.id,
+                    payload={},
+                ),
+            )
+        return LoopOutcome(
+            run_id=run.id,
+            status=LoopStatus.NEEDS_REVIEW,
+            error="frozen model route unavailable; explicit review required",
+        )
 
     async def _pause_for_model(self, run: Run, checkpoint: RunCheckpoint) -> LoopOutcome:
         state = dict(checkpoint.state)

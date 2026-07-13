@@ -1,4 +1,4 @@
-import type { Approval, Artifact, DesktopSnapshot, DiagnosticExport, LedgerEvent, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ResetPreview, ResetResult, Run, SystemStatus, Workspace } from "./types";
+import type { Approval, Artifact, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, LedgerEvent, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, Run, SystemStatus, Workspace } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
@@ -42,6 +42,7 @@ export class WeatherFlowClient {
       headers: { "Content-Type": "application/json", ...this.headers(), ...init?.headers },
     });
     if (!response.ok) throw new Error(`WeatherFlow bridge ${response.status}`);
+    if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   }
 
@@ -78,6 +79,9 @@ export class WeatherFlowClient {
   }
   status(workspaceId?: string | null): Promise<SystemStatus> { return this.request(this.scoped("/v1/system/status", workspaceId)); }
   async modelProviders(): Promise<ModelProviderPreset[]> { return (await this.request<{ providers: ModelProviderPreset[] }>("/v1/models/providers")).providers; }
+  providerModels(provider: string): Promise<ProviderModelCatalog> {
+    return this.request(`/v1/models/providers/${encodeURIComponent(provider)}/models`);
+  }
   configureModel(configuration: ModelConfigureInput, workspaceId?: string | null): Promise<ModelConfigurationResponse> {
     return this.request(this.scoped("/v1/models/configure", workspaceId), { method: "POST", body: JSON.stringify(configuration) });
   }
@@ -106,14 +110,36 @@ export class WeatherFlowClient {
       method: "POST", body: JSON.stringify({ confirm: true }),
     });
   }
+  connectors(workspaceId?: string | null): Promise<ConnectorStatus[]> { return this.request(this.scoped("/v1/connectors", workspaceId)); }
+  configureConnectors(): Promise<{ configured: boolean }> {
+    return this.request("/v1/connectors/configure", { method: "POST" });
+  }
+  connectConnector(connector: ConnectorKind, workspaceId?: string | null): Promise<ConnectHandoff> {
+    return this.request(this.scoped(`/v1/connectors/${connector}/connect`, workspaceId), { method: "POST" });
+  }
+  connectorAttempt(attemptId: string): Promise<ConnectionAttempt> { return this.request(`/v1/connector-attempts/${attemptId}`); }
+  updateConnectorSettings(connector: ConnectorKind, autoFetchEnabled: boolean, intervalMinutes: number, workspaceId?: string | null): Promise<void> {
+    return this.request(this.scoped(`/v1/connectors/${connector}/settings`, workspaceId), { method: "POST", body: JSON.stringify({ auto_fetch_enabled: autoFetchEnabled, interval_minutes: intervalMinutes }) });
+  }
+  syncConnector(connector: ConnectorKind, workspaceId?: string | null): Promise<ConnectorSnapshot> {
+    return this.request(this.scoped(`/v1/connectors/${connector}/sync`, workspaceId), { method: "POST" });
+  }
+  disconnectConnector(connector: ConnectorKind): Promise<void> {
+    return this.request(`/v1/connectors/${connector}/disconnect`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+  }
 
-  events(cursor: string | null, onEvent: (event: LedgerEvent) => void, onRefresh: () => void): WebSocket {
+  events(cursor: string | null, onEvent: (event: LedgerEvent) => void, onRefresh: () => void, onDisconnect?: () => void): WebSocket {
     const url = new URL(this.config.baseUrl.replace(/^http/, "ws") + "/v1/events");
     if (cursor) url.searchParams.set("cursor", cursor);
-    if (this.config.token) url.searchParams.set("token", this.config.token);
-    const socket = new WebSocket(url);
+    const protocols = this.config.token
+      ? ["weatherflow-v1", `weatherflow-auth.${this.config.token}`]
+      : undefined;
+    const socket = new WebSocket(url, protocols);
     socket.onmessage = (message) => onEvent(JSON.parse(message.data as string) as LedgerEvent);
-    socket.onclose = (event) => { if (event.code === 4409) onRefresh(); };
+    socket.onclose = (event) => {
+      if (event.code === 4409) onRefresh();
+      onDisconnect?.();
+    };
     return socket;
   }
 }

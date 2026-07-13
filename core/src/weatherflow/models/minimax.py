@@ -1,11 +1,16 @@
 import hashlib
 import json
 import re
+from copy import deepcopy
 from typing import Any
 
 import httpx
 
 from weatherflow.capabilities import ToolSpec
+from weatherflow.continuations import (
+    ProviderAssistantMessage,
+    ProviderContinuationUnavailableError,
+)
 from weatherflow.extensions import (
     CredentialBroker,
     CredentialRef,
@@ -16,6 +21,7 @@ from weatherflow.runtime import (
     DelegationTurn,
     FinalTurn,
     MessageRole,
+    ModelCompletion,
     ModelRequest,
     ModelTurn,
     ModelUsage,
@@ -72,8 +78,12 @@ class OpenAICompatibleAdapter:
         self.max_completion_tokens = max_completion_tokens
         self.timeout_seconds = timeout_seconds
         self.client = client or httpx.AsyncClient()
+        self.continuation_provider = (
+            provider if provider == "minimax" and model.startswith("MiniMax-M2") else None
+        )
+        self.continuation_model = model if self.continuation_provider is not None else None
 
-    async def complete(self, request: ModelRequest) -> ModelTurn:
+    async def complete(self, request: ModelRequest) -> ModelTurn | ModelCompletion:
         name_to_tool = {_function_name(tool.tool_id): tool for tool in request.tools}
         tools = [_tool_payload(name, tool) for name, tool in name_to_tool.items()]
         if not request.agent.is_leaf:
@@ -108,25 +118,46 @@ class OpenAICompatibleAdapter:
             raise MiniMaxAuthenticationError("model credential is unavailable") from error
         return self._turn(response, name_to_tool)
 
-    async def verify(self) -> None:
-        async def transport(secret: str) -> None:
+    async def list_models(
+        self,
+        *,
+        query: dict[str, str] | None = None,
+    ) -> tuple[str, ...]:
+        async def transport(secret: str) -> tuple[str, ...]:
             try:
                 response = await self.client.get(
                     f"{self.base_url}/models",
                     headers={"Authorization": f"Bearer {secret}"},
+                    params=query,
                     timeout=self.timeout_seconds,
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as error:
                 raise MiniMaxRetryableError("model verification unavailable") from error
             self._raise_for_status(response)
-            data = response.json().get("data", [])
-            if not any(item.get("id") == self.model for item in data if isinstance(item, dict)):
-                raise MiniMaxResponseError("configured model is not available")
+            try:
+                payload = response.json()
+            except ValueError as error:
+                raise MiniMaxResponseError("model catalog returned invalid JSON") from error
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise MiniMaxResponseError("model catalog returned an invalid response")
+            models = tuple(
+                item["id"]
+                for item in payload["data"]
+                if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
+            )
+            if not models:
+                raise MiniMaxResponseError("model catalog is empty")
+            return tuple(dict.fromkeys(models))
 
         try:
-            await self.broker.call(self.credential_ref, transport)
+            return await self.broker.call(self.credential_ref, transport)
         except CredentialUnavailableError as error:
             raise MiniMaxAuthenticationError("model credential is unavailable") from error
+
+    async def verify(self) -> None:
+        models = await self.list_models()
+        if self.model not in models:
+            raise MiniMaxResponseError("configured model is not available")
 
     async def _post(self, payload: dict[str, Any], secret: str) -> dict[str, Any]:
         try:
@@ -170,6 +201,10 @@ class OpenAICompatibleAdapter:
         request: ModelRequest,
         name_to_tool: dict[str, ToolSpec],
     ) -> list[dict[str, Any]]:
+        identity = json.dumps(
+            {"provider": self.provider, "model": self.model},
+            ensure_ascii=False,
+        )
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -177,12 +212,39 @@ class OpenAICompatibleAdapter:
                     f"{request.agent.system_prompt}\n\n"
                     "Call at most one tool per turn. Never invent a tool name. "
                     "Every tool call must include every field listed in the function's "
-                    "JSON Schema required array."
+                    "JSON Schema required array.\n\n"
+                    "The runtime-selected model identity is trusted metadata: "
+                    f"{identity}. "
+                    "When asked which provider or model is active, report exactly this "
+                    "metadata instead of relying on pretrained self-identity."
                 ),
             }
         ]
         tool_to_name = {tool.tool_id: name for name, tool in name_to_tool.items()}
+        continuation_by_step = {
+            continuation.step_index: continuation for continuation in request.provider_continuations
+        }
+        assistant_step = 0
         for message in request.messages:
+            if message.role is MessageRole.ASSISTANT:
+                assistant_step += 1
+                continuation = continuation_by_step.get(assistant_step)
+                if continuation is not None:
+                    if (
+                        continuation.provider != self.continuation_provider
+                        or continuation.model != self.continuation_model
+                    ):
+                        raise ProviderContinuationUnavailableError(
+                            "provider continuation does not match the active model"
+                        )
+                    messages.append(deepcopy(continuation.payload))
+                    continue
+                if self.continuation_provider is not None and _assistant_requires_continuation(
+                    message.content
+                ):
+                    raise ProviderContinuationUnavailableError(
+                        "required provider continuation history is unavailable"
+                    )
             messages.append(self._message(message, tool_to_name))
         return messages
 
@@ -229,8 +291,11 @@ class OpenAICompatibleAdapter:
             }
         return {"role": message.role.value, "content": message.content}
 
-    @staticmethod
-    def _turn(response: dict[str, Any], name_to_tool: dict[str, ToolSpec]) -> ModelTurn:
+    def _turn(
+        self,
+        response: dict[str, Any],
+        name_to_tool: dict[str, ToolSpec],
+    ) -> ModelTurn | ModelCompletion:
         choices = response.get("choices")
         if not isinstance(choices, list) or len(choices) != 1:
             raise MiniMaxResponseError("model provider returned an invalid choice count")
@@ -238,6 +303,23 @@ class OpenAICompatibleAdapter:
         if not isinstance(message, dict):
             raise MiniMaxResponseError("model provider returned no assistant message")
         usage = _usage(response.get("usage"))
+        provider_message = deepcopy(message)
+        provider_message.setdefault("role", "assistant")
+
+        def completed(turn: ModelTurn) -> ModelTurn | ModelCompletion:
+            if self.continuation_provider is None:
+                return turn
+            continuation = (
+                ProviderAssistantMessage(
+                    provider=self.continuation_provider,
+                    model=self.continuation_model or self.model,
+                    payload=provider_message,
+                )
+                if isinstance(turn, ToolCallTurn | DelegationTurn)
+                else None
+            )
+            return ModelCompletion(turn=turn, continuation=continuation)
+
         calls = message.get("tool_calls")
         if calls:
             if not isinstance(calls, list) or len(calls) != 1:
@@ -250,10 +332,12 @@ class OpenAICompatibleAdapter:
             arguments = _arguments(function.get("arguments"))
             if name == DELEGATE_FUNCTION:
                 try:
-                    return DelegationTurn(
-                        agent_id=arguments["agent_id"],
-                        task=arguments["task"],
-                        usage=usage,
+                    return completed(
+                        DelegationTurn(
+                            agent_id=arguments["agent_id"],
+                            task=arguments["task"],
+                            usage=usage,
+                        )
                     )
                 except (KeyError, TypeError, ValueError) as error:
                     raise MiniMaxResponseError(
@@ -262,11 +346,13 @@ class OpenAICompatibleAdapter:
             tool = name_to_tool.get(str(name))
             if tool is None:
                 raise MiniMaxResponseError("model provider returned an unknown function")
-            return ToolCallTurn(
-                call_id=str(call.get("id")) if call.get("id") else None,
-                tool_id=tool.tool_id,
-                arguments=arguments,
-                usage=usage,
+            return completed(
+                ToolCallTurn(
+                    call_id=str(call.get("id")) if call.get("id") else None,
+                    tool_id=tool.tool_id,
+                    arguments=arguments,
+                    usage=usage,
+                )
             )
         content = message.get("content")
         if not isinstance(content, str):
@@ -274,7 +360,7 @@ class OpenAICompatibleAdapter:
         cleaned = THINK_PATTERN.sub("", content).strip()
         if not cleaned:
             raise MiniMaxResponseError("model provider returned empty final text")
-        return FinalTurn(content=cleaned, usage=usage)
+        return completed(FinalTurn(content=cleaned, usage=usage))
 
     def __repr__(self) -> str:
         return (
@@ -356,6 +442,14 @@ def _assistant_turn(content: str) -> ModelTurn | None:
         return ToolCallTurn.model_validate(value)
     except ValueError:
         return None
+
+
+def _assistant_requires_continuation(content: str) -> bool:
+    try:
+        value = json.loads(content)
+    except ValueError:
+        return False
+    return isinstance(value, dict) and value.get("kind") in {"tool_call", "delegation"}
 
 
 def _arguments(value: Any) -> dict[str, Any]:

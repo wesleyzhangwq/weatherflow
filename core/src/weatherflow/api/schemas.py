@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from weatherflow.capabilities import ToolEffect
 from weatherflow.models import ModelConfiguration, ModelProvider, ModelStatus, ProviderPreset
@@ -87,12 +87,11 @@ class SystemStatus(BaseModel):
 
 
 class ModelConfigureRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: ModelProvider
     model: str
     base_url: str
-    api_key: str
 
 
 class ModelConfigurationResponse(BaseModel):
@@ -106,3 +105,22 @@ class ModelProviderList(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     providers: tuple[ProviderPreset, ...]
+
+
+class ConnectorConfigureResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    configured: bool = True
+
+
+class ConnectorSettingsRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    auto_fetch_enabled: bool
+    interval_minutes: int = Field(ge=15, le=1440)
+
+
+class ConnectorDisconnectRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    confirm: bool = False

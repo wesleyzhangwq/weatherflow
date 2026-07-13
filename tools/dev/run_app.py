@@ -5,10 +5,67 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
 from pathlib import Path
+
+DEFAULT_DEV_SIGNING_IDENTITY = "WeatherFlow Dev Signer"
+COMPATIBLE_DEV_SIGNING_IDENTITIES = (
+    DEFAULT_DEV_SIGNING_IDENTITY,
+    "OpenHuman Dev Signer",
+)
+DEVELOPMENT_BUNDLE_IDENTIFIER = "ai.weatherflow.desktop.dev"
+
+
+def available_codesigning_identities() -> set[str]:
+    """Return valid local code-signing identity display names."""
+    result = subprocess.run(
+        ["security", "find-identity", "-v", "-p", "codesigning"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return set(re.findall(r'^\s*\d+\)\s+[0-9A-F]+\s+"([^"]+)"', result.stdout, re.M))
+
+
+def resolve_dev_signing_identity() -> str:
+    """Select one stable identity without silently falling back to ad-hoc signing."""
+    available = available_codesigning_identities()
+    override = os.environ.get("WF_DEV_SIGNING_IDENTITY")
+    if override:
+        if override in available:
+            return override
+        raise SystemExit(
+            f'WF_DEV_SIGNING_IDENTITY names unavailable identity "{override}". '
+            "Run `pnpm dev:signing:setup` or choose an identity reported by "
+            "`security find-identity -v -p codesigning`."
+        )
+    for identity in COMPATIBLE_DEV_SIGNING_IDENTITIES:
+        if identity in available:
+            return identity
+    raise SystemExit(
+        "WeatherFlow development requires a stable local signing identity. "
+        "Run `pnpm dev:signing:setup` once, then retry `pnpm dev:app`."
+    )
+
+
+def cargo_runner_environment_key(environment: dict[str, str]) -> str:
+    """Build Cargo's target-specific runner variable for the active toolchain."""
+    rustc = subprocess.run(
+        ["rustc", "-vV"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    ).stdout
+    host = next(
+        line.removeprefix("host: ")
+        for line in rustc.splitlines()
+        if line.startswith("host: ")
+    )
+    return f"CARGO_TARGET_{host.upper().replace('-', '_')}_RUNNER"
 
 
 def stop_stale_weatherflow_apps() -> None:
@@ -60,7 +117,9 @@ def stop_stale_development_daemon(root: Path) -> None:
             capture_output=True,
             text=True,
         ).stdout
-        if "weatherflow serve" not in command or not _process_cwd(pid).startswith(str(root)):
+        if "weatherflow serve" not in command or not _process_cwd(pid).startswith(
+            str(root)
+        ):
             continue
         targets.add(pid)
         parent = _parent_pid(pid)
@@ -123,6 +182,7 @@ def _process_cwd(pid: int) -> str:
 
 
 def main() -> None:
+    root = Path(__file__).parents[2].resolve()
     stop_stale_weatherflow_apps()
     cargo = subprocess.run(
         ["rustup", "which", "cargo"],
@@ -132,6 +192,13 @@ def main() -> None:
     ).stdout.strip()
     environment = os.environ.copy()
     environment["PATH"] = f"{Path(cargo).parent}:{environment.get('PATH', '')}"
+    signing_identity = resolve_dev_signing_identity()
+    environment["APPLE_SIGNING_IDENTITY"] = signing_identity
+    environment["WF_DEV_SIGNING_IDENTITY"] = signing_identity
+    environment["WF_DEV_BUNDLE_IDENTIFIER"] = DEVELOPMENT_BUNDLE_IDENTIFIER
+    environment[cargo_runner_environment_key(environment)] = str(
+        root / "tools" / "dev" / "run_signed_binary.sh"
+    )
     development_config = json.dumps(
         {
             "productName": "WeatherFlow Dev",
@@ -140,20 +207,33 @@ def main() -> None:
         },
         separators=(",", ":"),
     )
-    os.execvpe(
-        "pnpm",
-        [
-            "pnpm",
-            "--filter",
-            "weatherflow-desktop",
-            "exec",
-            "tauri",
-            "dev",
-            "--config",
-            development_config,
-        ],
-        environment,
+    print(
+        "[weatherflow-dev] stable local signing enabled: "
+        f'identifier={DEVELOPMENT_BUNDLE_IDENTIFIER} identity="{signing_identity}"'
     )
+    command = [
+        "pnpm",
+        "--filter",
+        "weatherflow-desktop",
+        "exec",
+        "tauri",
+        "dev",
+        "--config",
+        development_config,
+    ]
+    process = subprocess.Popen(command, env=environment)
+    try:
+        return_code = process.wait()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        stop_stale_development_daemon(root)
+    raise SystemExit(return_code)
 
 
 if __name__ == "__main__":

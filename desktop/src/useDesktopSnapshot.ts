@@ -10,6 +10,8 @@ export function useDesktopSnapshot(client: WeatherFlowClient, workspaceId?: stri
     let alive = true;
     let cursor: string | null = null;
     let refreshTimer: number | null = null;
+    let reconnectTimer: number | null = null;
+    let socket: WebSocket | null = null;
     const refresh = async () => {
       try {
         const next = await client.snapshot(workspaceId);
@@ -24,14 +26,26 @@ export function useDesktopSnapshot(client: WeatherFlowClient, workspaceId?: stri
       }, 75);
     };
     void refresh();
-    const socket = client.events(
-      cursor,
-      (event) => { cursor = event.id; scheduleRefresh(); },
-      () => { cursor = null; scheduleRefresh(); },
-    );
+    const connect = () => {
+      if (!alive) return;
+      socket = client.events(
+        cursor,
+        (event) => { cursor = event.id; scheduleRefresh(); },
+        () => { cursor = null; scheduleRefresh(); },
+        () => {
+          if (!alive || reconnectTimer !== null) return;
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, 500);
+        },
+      );
+    };
+    connect();
     return () => {
       alive = false;
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       socket?.close();
     };
   }, [client, workspaceId]);

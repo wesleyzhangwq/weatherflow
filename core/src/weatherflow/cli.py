@@ -9,8 +9,15 @@ from pathlib import Path
 import uvicorn
 
 from weatherflow import __version__
+from weatherflow.api.app import create_app
+from weatherflow.api.desktop_bootstrap import DesktopBootstrap, watch_parent_disconnect
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
+from weatherflow.extensions import (
+    CredentialRef,
+    KeyringCredentialStore,
+    NativeCredentialResolver,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default=settings.host)
     serve.add_argument("--port", type=int, default=settings.port)
     serve.add_argument("--reload", action="store_true")
+    serve.add_argument("--desktop-bootstrap-stdin", action="store_true", help=argparse.SUPPRESS)
 
     subparsers.add_parser("mcp-server", help="Run the WeatherFlow stdio MCP server")
 
@@ -68,12 +76,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("a command is required")
 
     if args.command == "serve":
+        if args.desktop_bootstrap_stdin:
+            if args.reload:
+                parser.error("desktop bootstrap cannot be combined with reload")
+            bootstrap = DesktopBootstrap.read(sys.stdin.buffer)
+            watch_parent_disconnect(sys.stdin.buffer)
+            settings = Settings(
+                host=args.host,
+                port=args.port,
+                data_dir=args.data_dir,
+                bridge_token=bootstrap.bridge_token,
+            )
+            credential_store = NativeCredentialResolver(
+                socket_path=bootstrap.credential_socket,
+                token=bootstrap.credential_token,
+            )
+            container = asyncio.run(
+                RuntimeContainer.create(settings, credential_store=credential_store)
+            )
+            uvicorn.run(
+                create_app(settings, container=container),
+                host=settings.host,
+                port=settings.port,
+                reload=False,
+                timeout_graceful_shutdown=2,
+                log_level=settings.log_level.lower(),
+            )
+            return 0
         settings = Settings(host=args.host, port=args.port, data_dir=args.data_dir)
         uvicorn.run(
             "weatherflow.api.app:app",
             host=settings.host,
             port=settings.port,
             reload=args.reload,
+            reload_dirs=[str(Path(__file__).resolve().parent)] if args.reload else None,
+            timeout_graceful_shutdown=2,
             log_level=settings.log_level.lower(),
         )
         return 0
@@ -81,7 +118,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 async def _run_command(args: argparse.Namespace) -> int:
-    container = await RuntimeContainer.create(Settings(data_dir=args.data_dir))
     if args.command == "configure-minimax":
         api_key = (
             sys.stdin.readline().strip()
@@ -90,13 +126,28 @@ async def _run_command(args: argparse.Namespace) -> int:
         )
         if not api_key:
             return 2
-        configuration = await container.configure_minimax(
-            api_key=api_key,
-            model=args.model,
-            base_url=args.base_url,
-        )
+        store = KeyringCredentialStore()
+        reference = CredentialRef(provider="minimax", name="api_key")
+        previous = store.resolve(reference)
+        store.set(reference, api_key)
+        del api_key
+        try:
+            container = await RuntimeContainer.create(
+                Settings(data_dir=args.data_dir), credential_store=store
+            )
+            configuration = await container.configure_minimax(
+                model=args.model,
+                base_url=args.base_url,
+            )
+        except Exception:
+            if previous is None:
+                store.delete(reference)
+            else:
+                store.set(reference, previous)
+            raise
         print(configuration.model_dump_json(exclude={"credential_ref"}))
         return 0
+    container = await RuntimeContainer.create(Settings(data_dir=args.data_dir))
     if args.command == "model-status":
         status = await container.model_configurations.status(container.default_workspace.id)
         print(status.model_dump_json())

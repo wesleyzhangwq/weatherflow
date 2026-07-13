@@ -241,4 +241,114 @@ MIGRATIONS = (
         );
         """,
     ),
+    Migration(
+        version=13,
+        sql="""
+        CREATE TABLE connector_accounts (
+            id TEXT PRIMARY KEY,
+            connector TEXT NOT NULL UNIQUE,
+            external_account_id TEXT NOT NULL UNIQUE,
+            phase TEXT NOT NULL,
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE connector_installation (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            user_id TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE connection_attempts (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL REFERENCES connector_accounts(id) ON DELETE CASCADE,
+            phase TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            config TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_connection_attempts_connector
+            ON connection_attempts(connector, created_at);
+
+        CREATE TABLE connector_bindings (
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL REFERENCES connector_accounts(id) ON DELETE CASCADE,
+            enabled INTEGER NOT NULL,
+            auto_fetch_enabled INTEGER NOT NULL,
+            next_sync_at TEXT NOT NULL,
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(workspace_id, connector)
+        );
+        CREATE INDEX idx_connector_bindings_due
+            ON connector_bindings(enabled, auto_fetch_enabled, next_sync_at);
+
+        CREATE TABLE connector_snapshots (
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            snapshot TEXT NOT NULL,
+            PRIMARY KEY(workspace_id, connector)
+        );
+        """,
+    ),
+    Migration(
+        version=14,
+        sql="""
+        CREATE TABLE provider_continuations (
+            run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            step_index INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            nonce BLOB NOT NULL,
+            ciphertext BLOB NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, step_index),
+            CHECK(step_index > 0),
+            CHECK(schema_version = 1),
+            CHECK(length(nonce) = 12),
+            CHECK(length(payload_sha256) = 64)
+        );
+        CREATE INDEX idx_provider_continuations_expiry
+            ON provider_continuations(expires_at, run_id, step_index);
+        """,
+    ),
+    Migration(
+        version=15,
+        sql="""
+        CREATE TABLE run_model_routes (
+            run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            configuration_workspace_id TEXT,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            base_url TEXT,
+            credential_ref TEXT,
+            configuration_version INTEGER,
+            bound_at TEXT NOT NULL,
+            CHECK(configuration_version IS NULL OR configuration_version >= 0),
+            CHECK(
+                (provider = 'echo' AND base_url IS NULL
+                    AND credential_ref IS NULL AND configuration_version IS NULL
+                    AND configuration_workspace_id IS NULL)
+                OR
+                (provider != 'echo' AND base_url IS NOT NULL
+                    AND credential_ref IS NOT NULL AND configuration_version IS NOT NULL
+                    AND configuration_workspace_id IS NOT NULL)
+            )
+        );
+        CREATE INDEX idx_run_model_routes_workspace
+            ON run_model_routes(workspace_id, bound_at, run_id);
+        """,
+    ),
 )

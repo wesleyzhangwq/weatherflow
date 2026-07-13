@@ -15,6 +15,27 @@ def test_root_package_exposes_pnpm_live_desktop_entrypoint() -> None:
     assert '"identifier": "ai.weatherflow.desktop.dev"' in launcher
     assert '"devUrl": "http://localhost:1421"' in launcher
     assert '["lsof", "-tiTCP:8765", "-sTCP:LISTEN"]' in launcher
+    assert "finally:" in launcher
+    assert "stop_stale_development_daemon(root)" in launcher
+    assert (
+        '"--desktop-bootstrap-stdin"' in (ROOT / "desktop/src-tauri/src/supervisor.rs").read_text()
+    )
+    assert '"--reload"' not in (ROOT / "desktop/src-tauri/src/supervisor.rs").read_text()
+
+
+def test_desktop_development_uses_a_stable_local_codesigning_identity() -> None:
+    package = json.loads((ROOT / "package.json").read_text())
+    launcher = (ROOT / "tools" / "dev" / "run_app.py").read_text()
+    setup = (ROOT / "tools" / "dev" / "setup_dev_codesign.sh").read_text()
+
+    assert package["scripts"]["dev:signing:setup"] == ("bash tools/dev/setup_dev_codesign.sh")
+    assert 'environment["APPLE_SIGNING_IDENTITY"]' in launcher
+    assert "WF_DEV_SIGNING_IDENTITY" in launcher
+    assert "WeatherFlow Dev Signer" in launcher
+    assert "CARGO_TARGET_" in launcher
+    assert "run_signed_binary.sh" in launcher
+    assert 'IDENTITY="${WF_DEV_SIGNING_IDENTITY:-WeatherFlow Dev Signer}"' in setup
+    assert "set-key-partition-list" in setup
 
 
 def test_tauri_development_hooks_use_pnpm() -> None:
@@ -29,4 +50,9 @@ def test_tauri_development_hooks_use_pnpm() -> None:
     assert "const DEVELOPMENT_PORT: u16 = 8765;" in supervisor
     bridge = (ROOT / "desktop" / "src" / "bridge.ts").read_text()
     assert 'baseUrl: "http://127.0.0.1:8765"' in bridge
-    assert '"--reload"' in supervisor
+    assert '"--desktop-bootstrap-stdin"' in supervisor
+    assert '"--reload"' not in supervisor
+    assert "DaemonChild::External" not in supervisor
+    cli = (ROOT / "core" / "src" / "weatherflow" / "cli.py").read_text()
+    assert "reload_dirs=" in cli
+    assert "timeout_graceful_shutdown=2" in cli

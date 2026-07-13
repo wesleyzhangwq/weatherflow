@@ -120,6 +120,7 @@ class PrivacyService:
                     "capability_snapshots",
                     "checkpoints",
                     "checkpoint_quarantine",
+                    "provider_continuations",
                 ):
                     cursor = await connection.execute(
                         f"DELETE FROM {table} WHERE run_id IN "

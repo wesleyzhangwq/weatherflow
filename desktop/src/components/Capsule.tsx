@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { X } from "@phosphor-icons/react";
 import { WeatherFlowClient } from "../bridge";
 
@@ -8,6 +8,7 @@ export function Capsule({ client, workspaceId, onAccepted, onCancel }: CapsulePr
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const composing = useRef(false);
 
   useEffect(() => {
     window.addEventListener("blur", onCancel);
@@ -16,6 +17,7 @@ export function Capsule({ client, workspaceId, onAccepted, onCancel }: CapsulePr
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (composing.current) return;
     if (!workspaceId) {
       setError("请先在控制台选择项目，再创建任务。");
       return;
@@ -50,7 +52,14 @@ export function Capsule({ client, workspaceId, onAccepted, onCancel }: CapsulePr
           onChange={(event) => setValue(event.target.value)}
           onDragOver={(event) => event.preventDefault()}
           onDrop={drop}
-          onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") onCancel();
+            if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) {
+              event.preventDefault();
+            }
+          }}
           disabled={submitting}
         />
         <button type="button" className="capsule-close" aria-label="关闭输入框" onClick={onCancel}><X /></button>

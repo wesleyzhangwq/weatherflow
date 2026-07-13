@@ -4,7 +4,7 @@ import httpx
 
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
-from weatherflow.extensions import KeyringCredentialStore
+from weatherflow.extensions import CredentialRef, KeyringCredentialStore
 from weatherflow.models import MiniMaxAdapter
 
 
@@ -31,6 +31,7 @@ async def test_runtime_activates_and_rebuilds_persisted_minimax_adapter(
 ) -> None:
     backend = FakeKeyring()
     store = KeyringCredentialStore(backend=backend)
+    store.set(CredentialRef(provider="minimax", name="api_key"), "valid-key")
     settings = Settings(data_dir=tmp_path)
     first = await RuntimeContainer.create(
         settings,
@@ -39,21 +40,33 @@ async def test_runtime_activates_and_rebuilds_persisted_minimax_adapter(
     )
 
     configuration = await first.configure_minimax(
-        api_key="valid-key",
         model="MiniMax-M3",
         base_url="https://api.minimax.test/v1",
     )
 
-    assert isinstance(first.model, MiniMaxAdapter)
-    assert first.loop.model is first.model
     assert first.model_configuration == configuration
+    run, _ = await first.submit_run(
+        user_intent="hello",
+        client_request_id="frozen-model-route",
+        execute=False,
+    )
+    route = await first.model_routes.get(run.id)
+    resolved = await first.model_configurations.resolve(run.id)
+    assert route is not None
+    assert route.provider == "minimax"
+    assert route.model == "MiniMax-M3"
+    assert isinstance(resolved, MiniMaxAdapter)
+    assert resolved.model == "MiniMax-M3"
     rebuilt = await RuntimeContainer.create(
         settings,
         credential_store=store,
         model_http_client=client(),
     )
-    assert isinstance(rebuilt.model, MiniMaxAdapter)
-    assert rebuilt.model.model == "MiniMax-M3"
+    rebuilt_route = await rebuilt.model_routes.get(run.id)
+    rebuilt_adapter = await rebuilt.model_configurations.resolve(run.id)
+    assert rebuilt_route == route
+    assert isinstance(rebuilt_adapter, MiniMaxAdapter)
+    assert rebuilt_adapter.model == "MiniMax-M3"
     status = await rebuilt.model_configurations.status(rebuilt.default_workspace.id)
     assert status.configured is True
     assert status.credential_available is True

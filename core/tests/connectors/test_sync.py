@@ -1,0 +1,155 @@
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from weatherflow.connectors import (
+    ConnectorAccount,
+    ConnectorBinding,
+    ConnectorKind,
+    ConnectorRepository,
+    ConnectorSyncService,
+)
+from weatherflow.events import EventLedger
+from weatherflow.extensions import CredentialRef
+from weatherflow.storage import Database
+from weatherflow.workspaces import Workspace, WorkspaceRepository
+
+
+class FakeReadGateway:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def execute_read_action(
+        self,
+        *,
+        action: str,
+        connected_account_id: str,
+        arguments: dict[str, Any],
+    ) -> Any:
+        self.calls.append((action, connected_account_id, arguments))
+        if action == "GITHUB_GET_THE_AUTHENTICATED_USER":
+            return {"login": "wesz"}
+        if action == "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS":
+            return {
+                "items": [
+                    {
+                        "id": 123,
+                        "title": "Review release",
+                        "body": "Check the release candidate",
+                        "updated_at": "2026-07-13T03:00:00Z",
+                        "html_url": "https://github.com/wesz/weatherflow/issues/123",
+                    }
+                ]
+            }
+        if action == "GMAIL_FETCH_EMAILS":
+            return {
+                "messages": [
+                    {
+                        "id": "mail-1",
+                        "subject": "Deployment",
+                        "snippet": "The deployment completed.",
+                        "date": "2026-07-13T04:00:00Z",
+                    }
+                ]
+            }
+        if action == "GOOGLECALENDAR_EVENTS_LIST":
+            return {
+                "items": [
+                    {
+                        "id": "event-1",
+                        "summary": "Release review",
+                        "description": "Review the release candidate",
+                        "start": {"dateTime": "2026-07-13T10:00:00+08:00"},
+                        "htmlLink": "https://calendar.google.com/event?eid=event-1",
+                    }
+                ]
+            }
+        raise AssertionError(action)
+
+
+async def setup(tmp_path: Path, connector: ConnectorKind):
+    database = Database(tmp_path / "weatherflow.db")
+    await database.initialize()
+    workspace = Workspace.new(
+        name="Sync",
+        action_roots=[tmp_path / "project"],
+        internal_root=tmp_path / "internal",
+        artifact_root=tmp_path / "artifacts",
+    )
+    await WorkspaceRepository(database).create(workspace)
+    repository = ConnectorRepository(database)
+    now = datetime(2026, 7, 13, 5, tzinfo=UTC)
+    account = ConnectorAccount.new(
+        connector=connector,
+        external_account_id=f"ca_{connector.value}",
+        credential_ref=CredentialRef(provider="composio", name="project_api_key"),
+        now=now,
+    ).activate(now=now)
+    binding = ConnectorBinding.new(
+        workspace_id=workspace.id,
+        connector=connector,
+        account_id=account.id,
+        now=now,
+    ).model_copy(update={"next_sync_at": now - timedelta(seconds=1)})
+    await repository.save_account(account)
+    await repository.save_binding(binding)
+    gateway = FakeReadGateway()
+    service = ConnectorSyncService(
+        repository=repository,
+        ledger=EventLedger(database),
+        gateway=gateway,
+        now=lambda: now,
+        timezone="Asia/Shanghai",
+    )
+    return workspace, repository, gateway, service, now
+
+
+async def test_fixed_read_fetchers_create_bounded_source_linked_snapshots(
+    tmp_path: Path,
+) -> None:
+    for connector in ConnectorKind:
+        workspace, repository, gateway, service, now = await setup(
+            tmp_path / connector.value, connector
+        )
+
+        snapshot = await service.sync(workspace.id, connector)
+
+        assert snapshot.workspace_id == workspace.id
+        assert snapshot.connector is connector
+        assert snapshot.fetched_at == now
+        assert len(snapshot.items) == 1
+        assert snapshot.items[0].source_id
+        assert snapshot.items[0].occurred_at.tzinfo is not None
+        assert await repository.get_snapshot(workspace.id, connector) == snapshot
+        binding = await repository.get_binding(workspace.id, connector)
+        assert binding is not None and binding.last_sync_at == now
+        assert all(
+            call[0]
+            in {
+                "GITHUB_GET_THE_AUTHENTICATED_USER",
+                "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS",
+                "GMAIL_FETCH_EMAILS",
+                "GOOGLECALENDAR_EVENTS_LIST",
+            }
+            for call in gateway.calls
+        )
+
+
+async def test_due_sync_skips_disabled_binding(tmp_path: Path) -> None:
+    workspace, repository, gateway, service, now = await setup(tmp_path, ConnectorKind.GMAIL)
+    binding = await repository.get_binding(workspace.id, ConnectorKind.GMAIL)
+    assert binding is not None
+    await repository.save_binding(
+        binding.model_copy(
+            update={
+                "auto_fetch_enabled": False,
+                "version": binding.version + 1,
+                "updated_at": now,
+            }
+        )
+    )
+
+    synced = await service.sync_due()
+
+    assert synced == []
+    assert gateway.calls == []

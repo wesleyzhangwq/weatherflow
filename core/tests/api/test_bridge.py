@@ -43,18 +43,24 @@ def test_configured_bridge_token_gates_http_and_websocket(tmp_path: Path) -> Non
     assert preflight.headers["access-control-allow-origin"] == "http://localhost:1421"
     assert "authorization" in preflight.headers["access-control-allow-headers"].lower()
 
-    with client.websocket_connect("/v1/events?token=launch-secret") as websocket:
+    protocols = ["weatherflow-v1", "weatherflow-auth.launch-secret"]
+    with client.websocket_connect("/v1/events", subprotocols=protocols) as websocket:
         received = websocket.receive_json()
         assert received["id"] == event.id
         assert received["type"] == "test.event"
+        assert websocket.accepted_subprotocol == "weatherflow-v1"
 
     with pytest.raises(WebSocketDisconnect) as unauthorized:
-        with client.websocket_connect("/v1/events?token=wrong"):
+        with client.websocket_connect(
+            "/v1/events", subprotocols=["weatherflow-v1", "weatherflow-auth.wrong"]
+        ):
             pass
     assert unauthorized.value.code == 4401
 
     with pytest.raises(WebSocketDisconnect) as invalid_cursor:
-        with client.websocket_connect("/v1/events?token=launch-secret&cursor=missing") as websocket:
+        with client.websocket_connect(
+            "/v1/events?cursor=missing", subprotocols=protocols
+        ) as websocket:
             websocket.receive_json()
     assert invalid_cursor.value.code == 4409
 
@@ -68,3 +74,8 @@ def test_unconfigured_development_bridge_remains_usable(tmp_path: Path) -> None:
     client = TestClient(create_app(settings, container=container))
 
     assert client.get("/health").status_code == 200
+
+
+def test_event_socket_observes_disconnects_during_idle_polling() -> None:
+    source = (Path(__file__).parents[2] / "src" / "weatherflow" / "api" / "app.py").read_text()
+    assert "await asyncio.wait_for(websocket.receive(), timeout=0.25)" in source

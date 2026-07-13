@@ -16,6 +16,7 @@ from weatherflow.runtime.models import (
     FinalTurn,
     LeafDelegationError,
     MessageRole,
+    ModelCompletion,
     ModelRequest,
     ModelTurn,
     ModelUsage,
@@ -24,7 +25,13 @@ from weatherflow.runtime.models import (
     ToolExecutionResult,
 )
 from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopStatus
-from weatherflow.runtime.protocols import ModelAdapter, ToolExecutor
+from weatherflow.runtime.protocols import (
+    ModelAdapter,
+    ModelResolver,
+    ModelRouteBinder,
+    ModelRouteUnavailableError,
+    ToolExecutor,
+)
 from weatherflow.runtime.repository import (
     CheckpointCorruptionError,
     CheckpointNotFoundError,
@@ -64,7 +71,11 @@ __all__ = [
     "LoopOutcome",
     "LoopStatus",
     "MessageRole",
+    "ModelCompletion",
     "ModelAdapter",
+    "ModelResolver",
+    "ModelRouteBinder",
+    "ModelRouteUnavailableError",
     "ModelRequest",
     "ModelTurn",
     "ModelUsage",

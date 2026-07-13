@@ -18,6 +18,9 @@ from weatherflow import __version__
 from weatherflow.api.schemas import (
     ApprovalDecisionRequest,
     ApprovalView,
+    ConnectorConfigureResponse,
+    ConnectorDisconnectRequest,
+    ConnectorSettingsRequest,
     DesktopSnapshot,
     HealthResponse,
     ModelConfigurationResponse,
@@ -32,8 +35,21 @@ from weatherflow.api.schemas import (
 from weatherflow.artifacts import ArtifactManifest
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
+from weatherflow.connectors import (
+    ComposioErrorCode,
+    ComposioGatewayError,
+    ConnectHandoff,
+    ConnectionAttempt,
+    ConnectorKind,
+    ConnectorSnapshot,
+    ConnectorStatus,
+)
 from weatherflow.events import Event, UnknownEventCursor
-from weatherflow.models import provider_presets
+from weatherflow.models import (
+    ModelProvider,
+    ProviderModelCatalog,
+    provider_presets,
+)
 from weatherflow.operations import (
     DiagnosticExport,
     LocalMetrics,
@@ -64,6 +80,28 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.container = container
     app.state.container_lock = asyncio.Lock()
+
+    @app.exception_handler(ComposioGatewayError)
+    async def composio_gateway_failure(
+        _request: Request, error: ComposioGatewayError
+    ) -> JSONResponse:
+        status_by_code = {
+            ComposioErrorCode.AUTH: 401,
+            ComposioErrorCode.RATE_LIMIT: 429,
+            ComposioErrorCode.INPUT: 400,
+            ComposioErrorCode.NOT_FOUND: 404,
+            ComposioErrorCode.TRANSPORT: 503,
+            ComposioErrorCode.UPSTREAM: 502,
+        }
+        return JSONResponse(
+            status_code=status_by_code[error.code],
+            content={
+                "detail": {
+                    "code": f"connector_broker_{error.code.value}",
+                    "retryable": error.retryable,
+                }
+            },
+        )
 
     @app.middleware("http")
     async def authenticate_bridge(request: Request, call_next):
@@ -206,7 +244,6 @@ def create_app(
     @app.post("/v1/runs/{run_id}/cancel", response_model=Run)
     async def cancel_run(run_id: str) -> Run:
         service = await runtime()
-        await service.cancel_background_run(run_id)
         run = await service.runs.get(run_id)
         if run is None:
             raise HTTPException(
@@ -214,11 +251,7 @@ def create_app(
                 detail={"code": "run_not_found", "run_id": run_id},
             )
         try:
-            return await service.run_coordinator.transition(
-                run_id=run.id,
-                target=RunStatus.CANCELLED,
-                expected_version=run.version,
-            )
+            return await service.cancel_run(run.id)
         except InvalidTransitionError as error:
             raise HTTPException(
                 status_code=409,
@@ -419,6 +452,14 @@ def create_app(
     async def model_providers() -> ModelProviderList:
         return ModelProviderList(providers=provider_presets())
 
+    @app.get(
+        "/v1/models/providers/{provider}/models",
+        response_model=ProviderModelCatalog,
+    )
+    async def provider_models(provider: ModelProvider) -> ProviderModelCatalog:
+        service = await runtime()
+        return await service.model_configurations.available_models(provider)
+
     @app.post("/v1/models/configure", response_model=ModelConfigurationResponse)
     async def configure_model(
         request: ModelConfigureRequest,
@@ -429,7 +470,6 @@ def create_app(
         configuration = await service.configure_model(
             workspace_id=workspace.id,
             provider=request.provider,
-            api_key=request.api_key,
             model=request.model,
             base_url=request.base_url,
         )
@@ -437,6 +477,91 @@ def create_app(
             configuration=configuration,
             status=await service.model_configurations.status(workspace.id),
         )
+
+    @app.post("/v1/connectors/configure", response_model=ConnectorConfigureResponse)
+    async def configure_connectors() -> ConnectorConfigureResponse:
+        service = await runtime()
+        await service.connector_service.configure()
+        service.start_connector_background()
+        return ConnectorConfigureResponse()
+
+    @app.get("/v1/connectors", response_model=list[ConnectorStatus])
+    async def list_connectors(workspace_id: str | None = None) -> list[ConnectorStatus]:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        return await service.connector_service.statuses(workspace.id)
+
+    @app.post(
+        "/v1/connectors/{connector}/connect",
+        response_model=ConnectHandoff,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def connect_connector(
+        connector: ConnectorKind, workspace_id: str | None = None
+    ) -> ConnectHandoff:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        try:
+            return await service.connector_service.connect(workspace.id, connector)
+        except LookupError as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "connector_not_configured"}
+            ) from error
+
+    @app.get("/v1/connector-attempts/{attempt_id}", response_model=ConnectionAttempt)
+    async def refresh_connector_attempt(attempt_id: str) -> ConnectionAttempt:
+        service = await runtime()
+        try:
+            return await service.connector_service.refresh_attempt(attempt_id)
+        except LookupError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "connection_attempt_not_found", "attempt_id": attempt_id},
+            ) from error
+
+    @app.post("/v1/connectors/{connector}/settings", status_code=204)
+    async def update_connector_settings(
+        connector: ConnectorKind,
+        request: ConnectorSettingsRequest,
+        workspace_id: str | None = None,
+    ) -> Response:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        try:
+            await service.connector_service.update_settings(
+                workspace.id,
+                connector,
+                auto_fetch_enabled=request.auto_fetch_enabled,
+                interval_minutes=request.interval_minutes,
+            )
+        except LookupError as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "connector_not_connected"}
+            ) from error
+        return Response(status_code=204)
+
+    @app.post("/v1/connectors/{connector}/sync", response_model=ConnectorSnapshot)
+    async def sync_connector(
+        connector: ConnectorKind, workspace_id: str | None = None
+    ) -> ConnectorSnapshot:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        try:
+            return await service.connector_sync.sync(workspace.id, connector)
+        except LookupError as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "connector_not_connected"}
+            ) from error
+
+    @app.post("/v1/connectors/{connector}/disconnect", status_code=204)
+    async def disconnect_connector(
+        connector: ConnectorKind, request: ConnectorDisconnectRequest
+    ) -> Response:
+        if not request.confirm:
+            raise HTTPException(status_code=409, detail={"code": "explicit_confirmation_required"})
+        service = await runtime()
+        await service.connector_service.disconnect(connector)
+        return Response(status_code=204)
 
     @app.get("/v1/onboarding", response_model=OnboardingState)
     async def onboarding_state(workspace_id: str | None = None) -> OnboardingState:
@@ -510,14 +635,15 @@ def create_app(
     @app.websocket("/v1/events")
     async def events(websocket: WebSocket, cursor: str | None = None) -> None:
         expected = resolved_settings.bridge_token
-        query_token = websocket.query_params.get("token")
-        if expected is not None and not (
-            _valid_token(websocket.headers.get("authorization"), expected)
-            or (query_token is not None and secrets.compare_digest(query_token, expected))
-        ):
+        protocols = websocket.headers.get("sec-websocket-protocol")
+        if expected is not None and not _valid_websocket_protocol(protocols, expected):
             await websocket.close(code=4401, reason="bridge unauthorized")
             return
-        await websocket.accept()
+        await websocket.accept(
+            subprotocol=(
+                "weatherflow-v1" if _requests_protocol(protocols, "weatherflow-v1") else None
+            )
+        )
         service = await runtime()
         current_cursor = cursor
         try:
@@ -531,8 +657,13 @@ def create_app(
                     await websocket.send_json(event.model_dump(mode="json"))
                     current_cursor = event.id
                 if not events:
-                    await asyncio.sleep(0.25)
-        except (WebSocketDisconnect, RuntimeError):
+                    try:
+                        message = await asyncio.wait_for(websocket.receive(), timeout=0.25)
+                    except TimeoutError:
+                        continue
+                    if message["type"] == "websocket.disconnect":
+                        return
+        except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
             return
 
     return app
@@ -553,3 +684,15 @@ def _valid_token(authorization: str | None, expected: str) -> bool:
     if authorization is None or not authorization.startswith("Bearer "):
         return False
     return secrets.compare_digest(authorization.removeprefix("Bearer "), expected)
+
+
+def _requests_protocol(header: str | None, expected: str) -> bool:
+    if header is None:
+        return False
+    return any(
+        secrets.compare_digest(candidate.strip(), expected) for candidate in header.split(",")
+    )
+
+
+def _valid_websocket_protocol(header: str | None, expected: str) -> bool:
+    return _requests_protocol(header, f"weatherflow-auth.{expected}")

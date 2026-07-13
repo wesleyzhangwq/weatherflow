@@ -6,7 +6,11 @@ from weatherflow.models.configuration import (
     ModelConfigurationService,
     ModelProvider,
     ModelStatus,
+    ProviderModel,
+    ProviderModelCatalog,
     ProviderPreset,
+    RunModelRoute,
+    RunModelRouteRepository,
     provider_presets,
 )
 from weatherflow.models.minimax import (
@@ -30,6 +34,10 @@ __all__ = [
     "ModelConfigurationService",
     "ModelProvider",
     "ModelStatus",
+    "ProviderModelCatalog",
+    "ProviderModel",
     "ProviderPreset",
+    "RunModelRoute",
+    "RunModelRouteRepository",
     "provider_presets",
 ]

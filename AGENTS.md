@@ -35,6 +35,8 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 - External writes, installs, and destructive actions require approval.
 - Unknown or out-of-scope actions fail closed.
 - Credentials never enter prompts, logs, events, memory, or artifacts.
+- Broker-managed provider tokens never enter WeatherFlow; only opaque account
+  references and a Keychain-backed broker credential may cross the connector boundary.
 - Uncertain side effects enter NEEDS_REVIEW, not automatic retry.
 - User deletion outranks append-only retention.
 - No v2 compatibility or fallback path.
@@ -47,6 +49,7 @@ core/
     api/             HTTP adapter
     artifacts/       content-addressed blobs and immutable provenance
     capabilities/    ToolSpec catalog, Pack executors, immutable Run snapshots
+    connectors/      fixed connection identities, Composio gateway, read-only sync
     events/          immutable Event envelope and append-only ledger
     runs/            Run model, optimistic repository, sole state coordinator
     rhythm/          signal facts, six-dimensional state, policy, weather

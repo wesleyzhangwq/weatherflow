@@ -89,14 +89,18 @@ WeatherFlow v2 is preserved in Git history and the local tag
 ```bash
 make install
 make check
+pnpm dev:signing:setup # once, only if this Mac has no local development signer
 pnpm model:configure:cn  # one time; hidden API-key prompt
 pnpm dev:app
 ```
 
 `pnpm dev:app` starts Vite, the debug Tauri shell, and the current Python core
-source with reload enabled. It does not use the last PyInstaller release
-sidecar. International MiniMax accounts should run `pnpm model:configure`
-instead of the `:cn` command.
+source. It signs the final debug executable with the fixed identifier
+`ai.weatherflow.desktop.dev` before launch, so one Keychain **Always Allow**
+decision survives Rust rebuilds. Python source changes require an app restart;
+Vite renderer changes remain live. The command does not use the last
+PyInstaller release sidecar. International MiniMax accounts should run
+`pnpm model:configure` instead of the `:cn` command.
 
 On the first launch:
 

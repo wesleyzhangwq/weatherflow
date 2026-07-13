@@ -13,6 +13,7 @@ from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime.models import AgentDefinition, CompactWorkerResult
 from weatherflow.runtime.outcomes import LoopStatus
+from weatherflow.runtime.protocols import ModelRouteBinder
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.storage import Database
 from weatherflow.workspaces import Workspace
@@ -92,6 +93,7 @@ class WorkerCoordinator:
         artifacts: ArtifactRepository,
         checkpoints: RunCheckpointRepository,
         definitions: Mapping[str, AgentDefinition],
+        model_routes: ModelRouteBinder | None = None,
         max_concurrency: int = 3,
     ) -> None:
         if max_concurrency < 1:
@@ -108,6 +110,7 @@ class WorkerCoordinator:
         self.artifacts = artifacts
         self.checkpoints = checkpoints
         self.definitions = dict(definitions)
+        self.model_routes = model_routes
         self.max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._delegation_locks: dict[str, asyncio.Lock] = {}
@@ -193,6 +196,12 @@ class WorkerCoordinator:
             user_intent=task.strip(),
             workspace_id=workspace.id,
         )
+        if self.model_routes is not None:
+            await self.model_routes.clone_run_route(
+                parent_run_id=parent_run_id,
+                child_run_id=child.id,
+                workspace_id=workspace.id,
+            )
         child_snapshot = await self.snapshots.get_by_run_id(child.id)
         if child_snapshot is None:
             worker_tools = tuple(

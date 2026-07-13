@@ -1,9 +1,11 @@
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from weatherflow.capabilities import ToolEffect, ToolSpec
+from weatherflow.continuations import ProviderContinuation
 from weatherflow.extensions import CredentialBroker, CredentialRef, MappingCredentialStore
 from weatherflow.models import (
     MiniMaxAdapter,
@@ -18,6 +20,7 @@ from weatherflow.runtime import (
     DelegationTurn,
     FinalTurn,
     MessageRole,
+    ModelCompletion,
     ModelRequest,
     ToolCallTurn,
 )
@@ -25,7 +28,11 @@ from weatherflow.runtime import (
 SECRET = "minimax-secret-never-persist"
 
 
-def request(*messages: AgentMessage, leaf: bool = False) -> ModelRequest:
+def request(
+    *messages: AgentMessage,
+    leaf: bool = False,
+    continuations: tuple[ProviderContinuation, ...] = (),
+) -> ModelRequest:
     return ModelRequest(
         run_id="run-1",
         agent=AgentDefinition(
@@ -50,6 +57,7 @@ def request(*messages: AgentMessage, leaf: bool = False) -> ModelRequest:
                 source_version="1",
             ),
         ),
+        provider_continuations=continuations,
     )
 
 
@@ -59,6 +67,17 @@ def adapter(handler) -> MiniMaxAdapter:
         broker=CredentialBroker(MappingCredentialStore({"minimax.api_key": SECRET})),
         credential_ref=CredentialRef(provider="minimax", name="api_key"),
         model="MiniMax-M3",
+        base_url="https://api.minimax.test/v1",
+        client=client,
+    )
+
+
+def m2_adapter(handler, model: str = "MiniMax-M2.7") -> MiniMaxAdapter:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return MiniMaxAdapter(
+        broker=CredentialBroker(MappingCredentialStore({"minimax.api_key": SECRET})),
+        credential_ref=CredentialRef(provider="minimax", name="api_key"),
+        model=model,
         base_url="https://api.minimax.test/v1",
         client=client,
     )
@@ -202,6 +221,96 @@ async def test_tool_history_is_reconstructed_for_the_next_model_call() -> None:
     )
 
     assert turn == FinalTurn(content="Summarized")
+
+
+async def test_m2_preserves_and_replays_the_complete_provider_assistant_message() -> None:
+    assistant_message: dict = {}
+
+    async def first_handler(http_request: httpx.Request) -> httpx.Response:
+        body = json.loads(http_request.content)
+        assert body["model"] == "MiniMax-M2.7"
+        assert body["reasoning_split"] is True
+        assert "thinking" not in body
+        function_name = next(
+            tool["function"]["name"]
+            for tool in body["tools"]
+            if tool["function"]["description"] == "Read a scoped file"
+        )
+        assistant_message.update(
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_details": [
+                    {"type": "reasoning.text", "text": "private-provider-reasoning"}
+                ],
+                "tool_calls": [
+                    {
+                        "id": "call-m2",
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ],
+            }
+        )
+        return httpx.Response(200, json={"choices": [{"message": assistant_message}]})
+
+    completion = await m2_adapter(first_handler).complete(request())
+
+    assert isinstance(completion, ModelCompletion)
+    assert completion.turn == ToolCallTurn(
+        call_id="call-m2",
+        tool_id="developer.read_file",
+        arguments={"path": "README.md"},
+    )
+    assert completion.continuation is not None
+    assert completion.continuation.payload == assistant_message
+
+    now = datetime(2026, 7, 13, tzinfo=UTC)
+    persisted = ProviderContinuation(
+        run_id="run-1",
+        step_index=1,
+        provider="minimax",
+        model="MiniMax-M2.7",
+        payload=assistant_message,
+        created_at=now,
+        expires_at=now + timedelta(days=7),
+    )
+    assistant_turn = AgentMessage(
+        role=MessageRole.ASSISTANT,
+        content=json.dumps(completion.turn.model_dump(mode="json")),
+    )
+    observation = AgentMessage(
+        role=MessageRole.TOOL,
+        name="developer.read_file",
+        tool_call_id="call-m2",
+        content='{"content":"WeatherFlow"}',
+    )
+
+    async def second_handler(http_request: httpx.Request) -> httpx.Response:
+        messages = json.loads(http_request.content)["messages"]
+        assert messages[-2] == assistant_message
+        assert messages[-1]["role"] == "tool"
+        assert messages[-1]["tool_call_id"] == "call-m2"
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "完成"}}]},
+        )
+
+    final = await m2_adapter(second_handler).complete(
+        request(
+            AgentMessage(role=MessageRole.USER, content="Read it"),
+            assistant_turn,
+            observation,
+            continuations=(persisted,),
+        )
+    )
+
+    assert isinstance(final, ModelCompletion)
+    assert final.turn == FinalTurn(content="完成")
+    assert final.continuation is None
 
 
 async def test_orchestrator_can_request_bounded_leaf_delegation() -> None:

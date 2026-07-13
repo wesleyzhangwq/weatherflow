@@ -1,4 +1,5 @@
 mod activity;
+mod credentials;
 mod supervisor;
 
 use std::{process::Command, sync::Mutex};
@@ -29,6 +30,21 @@ impl SurfacePolicy {
     }
 }
 
+fn surface_url(surface: &str) -> WebviewUrl {
+    #[cfg(debug_assertions)]
+    {
+        return WebviewUrl::External(
+            format!("http://localhost:1421/?surface={surface}")
+                .parse()
+                .expect("development surface URL must be valid"),
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        WebviewUrl::App(format!("index.html?surface={surface}").into())
+    }
+}
+
 fn show_or_create(
     app: &tauri::AppHandle,
     label: &str,
@@ -53,20 +69,16 @@ fn show_or_create(
         "window.__WEATHERFLOW_BRIDGE__ = {};",
         serde_json::to_string(&bridge).expect("bridge config must serialize")
     );
-    let window = WebviewWindowBuilder::new(
-        app,
-        label,
-        WebviewUrl::App(format!("index.html?surface={surface}").into()),
-    )
-    .title(format!("WeatherFlow {surface}"))
-    .initialization_script(initialization_script)
-    .inner_size(width, height)
-    .decorations(!transparent)
-    .transparent(transparent)
-    .always_on_top(policy.always_on_top)
-    .resizable(policy.resizable)
-    .skip_taskbar(policy.skip_taskbar)
-    .build()?;
+    let window = WebviewWindowBuilder::new(app, label, surface_url(surface))
+        .title(format!("WeatherFlow {surface}"))
+        .initialization_script(initialization_script)
+        .inner_size(width, height)
+        .decorations(!transparent)
+        .transparent(transparent)
+        .always_on_top(policy.always_on_top)
+        .resizable(policy.resizable)
+        .skip_taskbar(policy.skip_taskbar)
+        .build()?;
     if surface == "cockpit" {
         let app_handle = app.clone();
         window.on_window_event(move |event| {
@@ -162,6 +174,65 @@ fn choose_workspace_directory() -> Result<Option<String>, String> {
     Ok((!path.is_empty()).then_some(path))
 }
 
+fn connector_url_is_allowed(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    if url.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    host == "composio.dev" || host.ends_with(".composio.dev")
+}
+
+#[tauri::command]
+fn open_connector_url(url: String) -> Result<(), String> {
+    if !connector_url_is_allowed(&url) {
+        return Err("connector URL is outside the approved Composio HTTPS boundary".to_owned());
+    }
+    Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn credential_set(
+    provider: credentials::CredentialProvider,
+    secret: String,
+    state: tauri::State<'_, Mutex<credentials::CredentialBrokerServer>>,
+) -> Result<credentials::CredentialStatus, String> {
+    state
+        .lock()
+        .map_err(|_| "credential_unavailable".to_owned())?
+        .set(provider, &secret)
+}
+
+#[tauri::command]
+fn credential_delete(
+    provider: credentials::CredentialProvider,
+    state: tauri::State<'_, Mutex<credentials::CredentialBrokerServer>>,
+) -> Result<credentials::CredentialStatus, String> {
+    state
+        .lock()
+        .map_err(|_| "credential_unavailable".to_owned())?
+        .delete(provider)
+}
+
+#[tauri::command]
+fn credential_status(
+    provider: credentials::CredentialProvider,
+    state: tauri::State<'_, Mutex<credentials::CredentialBrokerServer>>,
+) -> Result<credentials::CredentialStatus, String> {
+    state
+        .lock()
+        .map_err(|_| "credential_unavailable".to_owned())?
+        .status(provider)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -182,8 +253,12 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            let credential_server = credentials::CredentialBrokerServer::start_native()
+                .map_err(std::io::Error::other)?;
             let supervisor =
-                supervisor::DaemonSupervisor::start(app.handle()).map_err(std::io::Error::other)?;
+                supervisor::DaemonSupervisor::start(app.handle(), credential_server.config())
+                    .map_err(std::io::Error::other)?;
+            app.manage(Mutex::new(credential_server));
             app.manage(Mutex::new(supervisor));
             show_or_create(
                 app.handle(),
@@ -193,6 +268,7 @@ pub fn run() {
                 STARTUP_SIZE.1,
                 true,
             )?;
+            #[cfg(not(debug_assertions))]
             supervisor::monitor(app.handle().clone());
             // A previously installed WeatherFlow build may still own the shortcut.
             // The desktop must remain usable through the Companion in that case.
@@ -206,6 +282,10 @@ pub fn run() {
             close_capsule,
             open_cockpit,
             choose_workspace_directory,
+            open_connector_url,
+            credential_set,
+            credential_delete,
+            credential_status,
             supervisor::daemon_bridge,
             supervisor::restart_daemon,
             activity::sample_activity_metadata
@@ -216,7 +296,44 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{SurfacePolicy, CAPSULE_SIZE, SHORTCUT_SURFACE, STARTUP_SIZE, STARTUP_SURFACE};
+    use super::{
+        connector_url_is_allowed, surface_url, SurfacePolicy, CAPSULE_SIZE, SHORTCUT_SURFACE,
+        STARTUP_SIZE, STARTUP_SURFACE,
+    };
+    use tauri::WebviewUrl;
+
+    #[test]
+    fn debug_surfaces_load_the_live_vite_frontend() {
+        match surface_url("cockpit") {
+            WebviewUrl::External(url) => {
+                assert_eq!(url.as_str(), "http://localhost:1421/?surface=cockpit")
+            }
+            other => panic!("debug surface must be external, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connector_browser_handoff_only_allows_composio_https_hosts() {
+        assert!(connector_url_is_allowed(
+            "https://connect.composio.dev/link/opaque"
+        ));
+        assert!(connector_url_is_allowed("https://composio.dev/connect"));
+        assert!(!connector_url_is_allowed(
+            "http://connect.composio.dev/link/opaque"
+        ));
+        assert!(!connector_url_is_allowed(
+            "https://composio.dev.evil.example/link"
+        ));
+        assert!(!connector_url_is_allowed("file:///tmp/secret"));
+    }
+
+    #[test]
+    fn debug_python_reloader_is_not_competed_by_the_desktop_monitor() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains(
+            "#[cfg(not(debug_assertions))]\n            supervisor::monitor(app.handle().clone());"
+        ));
+    }
 
     #[test]
     fn startup_and_shortcut_never_auto_open_cockpit() {

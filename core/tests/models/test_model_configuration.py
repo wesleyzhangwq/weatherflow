@@ -13,6 +13,7 @@ from weatherflow.models import (
     ModelConfigurationService,
     ModelProvider,
     OpenAICompatibleAdapter,
+    ProviderModel,
     provider_presets,
 )
 from weatherflow.storage import Database
@@ -31,6 +32,9 @@ class FakeKeyring:
     def set_password(self, service: str, username: str, password: str) -> None:
         self.values[(service, username)] = password
 
+    def delete_password(self, service: str, username: str) -> None:
+        self.values.pop((service, username), None)
+
 
 class LockedKeyring(FakeKeyring):
     def get_password(self, service: str, username: str) -> str | None:
@@ -45,7 +49,20 @@ def model_transport(*, status: int = 200):
             return httpx.Response(status, json={"error": {"message": SECRET}})
         return httpx.Response(
             200,
-            json={"data": [{"id": "MiniMax-M3"}, {"id": "deepseek-v4-flash"}]},
+            json={
+                "data": [
+                    {"id": "MiniMax-M3"},
+                    {"id": "MiniMax-M2.7"},
+                    {"id": "MiniMax-M2.7-highspeed"},
+                    {"id": "MiniMax-M2.5"},
+                    {"id": "MiniMax-M2.5-highspeed"},
+                    {"id": "MiniMax-M2.1"},
+                    {"id": "MiniMax-M2.1-highspeed"},
+                    {"id": "MiniMax-M2"},
+                    {"id": "deepseek-v4-flash"},
+                    {"id": "retired-model"},
+                ]
+            },
         )
 
     return httpx.MockTransport(handler)
@@ -90,17 +107,19 @@ async def test_validated_minimax_configuration_persists_reference_only(
 ) -> None:
     backend = FakeKeyring()
     database, workspace, ledger, store, service = await setup(tmp_path, backend)
+    reference = CredentialRef(provider="minimax", name="api_key")
+    store.set(reference, SECRET)
 
     configuration = await service.configure_minimax(
         workspace_id=workspace.id,
-        api_key=SECRET,
         model="MiniMax-M3",
         base_url="https://api.minimax.test/v1/",
     )
 
     assert configuration.provider is ModelProvider.MINIMAX
     assert configuration.base_url == "https://api.minimax.test/v1"
-    assert configuration.credential_ref == CredentialRef(provider="minimax", name="api_key")
+    assert configuration.credential_ref.provider == "minimax"
+    assert configuration.credential_ref.name == "api_key"
     assert isinstance(service.adapter(configuration), MiniMaxAdapter)
     assert store.resolve(configuration.credential_ref) == SECRET
     async with database.connect() as connection:
@@ -116,23 +135,48 @@ async def test_validated_minimax_configuration_persists_reference_only(
     assert events[-1].type == "model.configuration_changed"
 
 
-async def test_invalid_key_is_not_stored_or_activated(tmp_path: Path) -> None:
+async def test_invalid_key_is_not_activated_and_service_does_not_mutate_store(
+    tmp_path: Path,
+) -> None:
     backend = FakeKeyring()
-    _, workspace, _, _, service = await setup(tmp_path, backend, status=401)
+    _, workspace, _, store, service = await setup(tmp_path, backend, status=401)
+    store.set(CredentialRef(provider="minimax", name="api_key"), SECRET)
 
     with pytest.raises(MiniMaxAuthenticationError):
         await service.configure_minimax(
             workspace_id=workspace.id,
-            api_key=SECRET,
             model="MiniMax-M3",
             base_url="https://api.minimax.test/v1",
         )
 
-    assert backend.values == {}
+    assert backend.values == {("ai.weatherflow.minimax", "api_key"): SECRET}
     assert await service.repository.get(workspace.id) is None
 
 
-def test_mainland_provider_presets_expose_editable_https_endpoints() -> None:
+async def test_reconfiguration_keeps_fixed_reference_and_never_mutates_store(
+    tmp_path: Path,
+) -> None:
+    backend = FakeKeyring()
+    _, workspace, _, store, service = await setup(tmp_path, backend)
+    reference = CredentialRef(provider="minimax", name="api_key")
+    store.set(reference, SECRET)
+    first = await service.configure_minimax(
+        workspace_id=workspace.id,
+        model="MiniMax-M3",
+        base_url="https://api.minimax.test/v1",
+    )
+
+    second = await service.configure_minimax(
+        workspace_id=workspace.id,
+        model="MiniMax-M3",
+        base_url="https://api.minimax.test/v1",
+    )
+
+    assert second.credential_ref == first.credential_ref == reference
+    assert backend.values == {("ai.weatherflow.minimax", "api_key"): SECRET}
+
+
+def test_mainland_provider_presets_expose_current_official_agent_models() -> None:
     presets = {preset.provider: preset for preset in provider_presets()}
 
     assert set(presets) == {
@@ -145,10 +189,105 @@ def test_mainland_provider_presets_expose_editable_https_endpoints() -> None:
         ModelProvider.STEPFUN,
     }
     assert presets[ModelProvider.DEEPSEEK].default_model == "deepseek-v4-flash"
+    assert presets[ModelProvider.MINIMAX].suggested_models[:3] == (
+        "MiniMax-M3",
+        "MiniMax-M2.7",
+        "MiniMax-M2.7-highspeed",
+    )
+    assert presets[ModelProvider.MINIMAX].suggested_models[-3:] == (
+        "MiniMax-M2.1",
+        "MiniMax-M2.1-highspeed",
+        "MiniMax-M2",
+    )
+    assert presets[ModelProvider.MOONSHOT].suggested_models[:3] == (
+        "kimi-k2.7-code",
+        "kimi-k2.7-code-highspeed",
+        "kimi-k2.6",
+    )
+    assert presets[ModelProvider.QWEN].suggested_models == (
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-flash",
+    )
+    assert presets[ModelProvider.ZHIPU].default_model == "glm-5.2"
+    assert presets[ModelProvider.STEPFUN].suggested_models == (
+        "step-3.7-flash",
+        "step-3.5-flash-2603",
+        "step-3.5-flash",
+    )
     assert (
         presets[ModelProvider.QWEN].base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     assert all(preset.base_url.startswith("https://") for preset in presets.values())
+
+
+async def test_first_party_catalog_keeps_only_documented_maintained_models(
+    tmp_path: Path,
+) -> None:
+    backend = FakeKeyring()
+    _, _, _, store, service = await setup(tmp_path, backend)
+    store.set(CredentialRef(provider="minimax", name="api_key"), SECRET)
+
+    catalog = await service.available_models(ModelProvider.MINIMAX)
+
+    assert catalog.provider is ModelProvider.MINIMAX
+    assert catalog.source == "provider"
+    assert catalog.models == (
+        ProviderModel(id="MiniMax-M3"),
+        ProviderModel(id="MiniMax-M2.7"),
+        ProviderModel(id="MiniMax-M2.7-highspeed"),
+        ProviderModel(id="MiniMax-M2.5"),
+        ProviderModel(id="MiniMax-M2.5-highspeed"),
+        ProviderModel(id="MiniMax-M2.1"),
+        ProviderModel(id="MiniMax-M2.1-highspeed"),
+        ProviderModel(id="MiniMax-M2"),
+    )
+
+
+async def test_siliconflow_catalog_uses_live_text_models_for_the_key(
+    tmp_path: Path,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        assert request.url.params.get("type") == "text"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "Qwen/Qwen3.5-32B"},
+                    {"id": "deepseek-ai/DeepSeek-V4-Flash"},
+                ]
+            },
+        )
+
+    backend = FakeKeyring()
+    _, _, _, store, service = await setup(tmp_path, backend)
+    service.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    store.set(CredentialRef(provider="siliconflow", name="api_key"), SECRET)
+
+    catalog = await service.available_models(ModelProvider.SILICONFLOW)
+
+    assert catalog.models == (
+        ProviderModel(id="Qwen/Qwen3.5-32B"),
+        ProviderModel(id="deepseek-ai/DeepSeek-V4-Flash"),
+    )
+
+
+async def test_minimax_m2_models_are_selectable_with_continuation_support(
+    tmp_path: Path,
+) -> None:
+    backend = FakeKeyring()
+    _, workspace, _, store, service = await setup(tmp_path, backend)
+    store.set(CredentialRef(provider="minimax", name="api_key"), SECRET)
+
+    configured = await service.configure(
+        workspace_id=workspace.id,
+        provider=ModelProvider.MINIMAX,
+        model="MiniMax-M2.7",
+        base_url="https://api.minimax.test/v1",
+    )
+
+    assert configured.model == "MiniMax-M2.7"
 
 
 async def test_generic_provider_configuration_uses_shared_compatible_adapter(
@@ -156,11 +295,11 @@ async def test_generic_provider_configuration_uses_shared_compatible_adapter(
 ) -> None:
     backend = FakeKeyring()
     database, workspace, ledger, store, service = await setup(tmp_path, backend)
+    store.set(CredentialRef(provider="deepseek", name="api_key"), SECRET)
 
     configuration = await service.configure(
         workspace_id=workspace.id,
         provider=ModelProvider.DEEPSEEK,
-        api_key=SECRET,
         model="deepseek-v4-flash",
         base_url="https://api.minimax.test/v1",
     )
@@ -175,10 +314,10 @@ async def test_generic_provider_configuration_uses_shared_compatible_adapter(
 
 async def test_status_stays_available_when_keychain_access_is_denied(tmp_path: Path) -> None:
     backend = FakeKeyring()
-    _, workspace, _, _, service = await setup(tmp_path, backend)
+    _, workspace, _, store, service = await setup(tmp_path, backend)
+    store.set(CredentialRef(provider="minimax", name="api_key"), SECRET)
     await service.configure_minimax(
         workspace_id=workspace.id,
-        api_key=SECRET,
         model="MiniMax-M3",
         base_url="https://api.minimax.test/v1",
     )

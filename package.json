@@ -4,6 +4,7 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev:app": "python3 tools/dev/run_app.py",
+    "dev:signing:setup": "bash tools/dev/setup_dev_codesign.sh",
     "dev:web": "pnpm --filter weatherflow-desktop dev",
     "model:configure": "uv run --package weatherflow-core weatherflow configure-minimax --model MiniMax-M3",
     "model:configure:cn": "uv run --package weatherflow-core weatherflow configure-minimax --model MiniMax-M3 --base-url https://api.minimaxi.com/v1",

@@ -54,4 +54,23 @@ describe("Capsule", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("先在控制台选择项目");
     expect(client.createRun).not.toHaveBeenCalled();
   });
+
+  it("does not submit while a Chinese input method is composing", async () => {
+    const createRun = vi.fn().mockResolvedValue({ id: "run-1" });
+    const client = { createRun } as unknown as WeatherFlowClient;
+    render(<Capsule client={client} workspaceId="w1" onAccepted={() => undefined} onCancel={() => undefined} />);
+    const input = screen.getByLabelText("告诉 WeatherFlow 要做什么");
+
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: "你好" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 229, isComposing: true });
+    fireEvent.submit(input.closest("form")!);
+
+    await Promise.resolve();
+    expect(createRun).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(input);
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(createRun).toHaveBeenCalledOnce());
+  });
 });

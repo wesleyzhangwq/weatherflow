@@ -26,4 +26,26 @@ describe("WeatherFlowClient", () => {
   it("keeps the browser fallback explicit for non-Tauri development", () => {
     expect(bridgeConfig()).toEqual({ baseUrl: "http://127.0.0.1:8765" });
   });
+
+  it("authenticates event sockets without putting the token in the logged URL", () => {
+    const opened: { url?: string; protocols?: string[] } = {};
+    class Socket {
+      onmessage = null;
+      onclose = null;
+
+      constructor(url: URL, protocols?: string[]) {
+        opened.url = url.toString();
+        opened.protocols = protocols;
+      }
+    }
+    vi.stubGlobal("WebSocket", Socket);
+    const client = new WeatherFlowClient({ baseUrl: "http://127.0.0.1:9000", token: "secret" });
+
+    client.events(null, vi.fn(), vi.fn());
+
+    expect(opened.url).toBe("ws://127.0.0.1:9000/v1/events");
+    expect(opened.url).not.toContain("secret");
+    expect(opened.protocols).toEqual(["weatherflow-v1", "weatherflow-auth.secret"]);
+    vi.unstubAllGlobals();
+  });
 });

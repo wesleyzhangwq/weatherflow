@@ -7,6 +7,7 @@ from weatherflow.extensions.credentials import (
     CredentialUnavailableError,
     KeyringCredentialStore,
     MappingCredentialStore,
+    NativeCredentialResolver,
     WritableCredentialStore,
 )
 from weatherflow.extensions.installer import (
@@ -34,6 +35,7 @@ __all__ = [
     "KeyringCredentialStore",
     "InstalledPackage",
     "MappingCredentialStore",
+    "NativeCredentialResolver",
     "WritableCredentialStore",
     "PackageFile",
     "PackageInstaller",

@@ -32,8 +32,12 @@ bounded connection surface for GitHub, Gmail, and Google Calendar.
 - [x] Generalize the provider adapter without creating a second turn loop.
 - [x] Add visible presets for MiniMax, DeepSeek, Moonshot/Kimi, Alibaba Model
   Studio/Qwen, Zhipu GLM, SiliconFlow, and StepFun.
-- [x] Expose model name and HTTPS API endpoint in settings; store API keys only
-  in Keychain and verify before activation.
+- [x] Configure each provider key once, combine maintained official catalogs
+  with credential-scoped availability, and expose manual model switching in
+  both conversation and Settings without automatic routing.
+- [x] Keep the primary UI on fixed official HTTPS endpoints, store API keys only
+  through the native credential boundary, and visibly fail closed for models
+  that require hidden-reasoning replay.
 
 ## Task 5: Connector state and auto-fetch core
 
@@ -43,11 +47,12 @@ bounded connection surface for GitHub, Gmail, and Google Calendar.
 - [ ] Implement provider-neutral connector protocols, local derived snapshots,
   background scheduling, manual sync, and event-ledger audit summaries.
 
-## Task 6: First-party adapters and Cockpit connection UX
+## Task 6: Brokered adapters and Cockpit connection UX
 
-- [ ] Implement GitHub device/CLI authorization and bounded notification fetch.
-- [ ] Implement Google desktop OAuth loopback for Gmail metadata and Calendar
-  events once the OAuth client configuration is present.
+- [ ] Implement Composio Direct/BYO-key with a scoped Keychain-backed project
+  key, v3 Connect Link, authoritative state polling, and no legacy API fallback.
+- [ ] Implement bounded GitHub, Gmail metadata/snippet, and Google Calendar
+  fetchers through fixed, versioned Composio actions.
 - [ ] Add one-click browser handoff, status polling, toggles, manual refresh, and
   actionable setup errors to Cockpit.
 

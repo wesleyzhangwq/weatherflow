@@ -1,15 +1,22 @@
+use crate::credentials::{random_token, CredentialBrokerConfig};
 use serde::Serialize;
+#[cfg(debug_assertions)]
+use std::io::Write;
 #[cfg(not(debug_assertions))]
 use std::net::TcpListener;
-use std::{sync::Mutex, time::Duration};
-use tauri::{AppHandle, Manager};
+#[cfg(debug_assertions)]
+use std::net::{SocketAddr, TcpStream};
+use std::sync::Mutex;
+use std::time::Duration;
+use tauri::AppHandle;
+#[cfg(not(debug_assertions))]
+use tauri::Manager;
 #[cfg(not(debug_assertions))]
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
-#[cfg(not(debug_assertions))]
-use uuid::Uuid;
 
 #[cfg(debug_assertions)]
 const DEVELOPMENT_PORT: u16 = 8765;
+#[cfg(any(not(debug_assertions), test))]
 const INITIAL_HEALTH_GRACE: Duration = Duration::from_secs(5);
 
 enum DaemonChild {
@@ -41,18 +48,31 @@ pub struct BridgeConfig {
     pub token: String,
 }
 
+#[derive(Serialize)]
+struct DesktopBootstrap<'a> {
+    version: u8,
+    bridge_token: &'a str,
+    credential_socket: &'a std::path::Path,
+    credential_token: &'a str,
+}
+
 pub struct DaemonSupervisor {
     child: Option<DaemonChild>,
     pub bridge: BridgeConfig,
+    credential_bootstrap: CredentialBrokerConfig,
     failures: u32,
 }
 
 impl DaemonSupervisor {
-    pub fn start(app: &AppHandle) -> Result<Self, String> {
-        let (child, bridge) = spawn_sidecar(app)?;
+    pub fn start(
+        app: &AppHandle,
+        credential_bootstrap: CredentialBrokerConfig,
+    ) -> Result<Self, String> {
+        let (child, bridge) = spawn_sidecar(app, &credential_bootstrap)?;
         Ok(Self {
             child: Some(child),
             bridge,
+            credential_bootstrap,
             failures: 0,
         })
     }
@@ -61,7 +81,7 @@ impl DaemonSupervisor {
         if let Some(child) = self.child.take() {
             child.kill();
         }
-        let (child, bridge) = spawn_sidecar(app)?;
+        let (child, bridge) = spawn_sidecar(app, &self.credential_bootstrap)?;
         self.child = Some(child);
         self.bridge = bridge;
         self.failures = self.failures.saturating_add(1);
@@ -77,21 +97,24 @@ impl Drop for DaemonSupervisor {
     }
 }
 
-fn spawn_sidecar(app: &AppHandle) -> Result<(DaemonChild, BridgeConfig), String> {
+fn spawn_sidecar(
+    app: &AppHandle,
+    credential_bootstrap: &CredentialBrokerConfig,
+) -> Result<(DaemonChild, BridgeConfig), String> {
     #[cfg(debug_assertions)]
-    let (port, token) = (DEVELOPMENT_PORT, String::new());
+    let port = DEVELOPMENT_PORT;
     #[cfg(not(debug_assertions))]
-    let (port, token) = {
+    let port = {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
         let port = listener
             .local_addr()
             .map_err(|error| error.to_string())?
             .port();
         drop(listener);
-        let token = Uuid::new_v4().to_string();
-        (port, token)
+        port
     };
-    let child = spawn_core(app, port, &token)?;
+    let token = random_token()?;
+    let child = spawn_core(app, port, &token, credential_bootstrap)?;
     Ok((
         child,
         BridgeConfig {
@@ -101,32 +124,92 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(DaemonChild, BridgeConfig), String>
     ))
 }
 
+fn bootstrap_message(
+    bridge_token: &str,
+    credential_bootstrap: &CredentialBrokerConfig,
+) -> Result<Vec<u8>, String> {
+    let mut message = serde_json::to_vec(&DesktopBootstrap {
+        version: 1,
+        bridge_token,
+        credential_socket: &credential_bootstrap.socket_path,
+        credential_token: credential_bootstrap.bootstrap_token(),
+    })
+    .map_err(|_| "desktop_bootstrap_unavailable".to_owned())?;
+    message.push(b'\n');
+    Ok(message)
+}
+
 #[cfg(debug_assertions)]
-fn spawn_core(_app: &AppHandle, port: u16, _token: &str) -> Result<DaemonChild, String> {
+fn spawn_core(
+    _app: &AppHandle,
+    port: u16,
+    token: &str,
+    credential_bootstrap: &CredentialBrokerConfig,
+) -> Result<DaemonChild, String> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .map_err(|error| format!("cannot resolve WeatherFlow source root: {error}"))?;
-    let child = std::process::Command::new("uv")
+    wait_for_development_port(port)?;
+    let mut child = std::process::Command::new("uv")
         .current_dir(root)
         .args(development_daemon_args(port))
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn()
         .map_err(|error| format!("cannot start live Python core through uv: {error}"))?;
+    let result = child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "desktop_bootstrap_unavailable".to_owned())?
+        .write_all(&bootstrap_message(token, credential_bootstrap)?);
+    if result.is_err() {
+        let _ = child.kill();
+        return Err("desktop_bootstrap_unavailable".to_owned());
+    }
     Ok(DaemonChild::Development(child))
 }
 
+#[cfg(debug_assertions)]
+fn wait_for_development_port(port: u16) -> Result<(), String> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    for _ in 0..100 {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(20)).is_err() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Err("development_daemon_port_unavailable".to_owned())
+}
+
 #[cfg(not(debug_assertions))]
-fn spawn_core(app: &AppHandle, port: u16, token: &str) -> Result<DaemonChild, String> {
+fn spawn_core(
+    app: &AppHandle,
+    port: u16,
+    token: &str,
+    credential_bootstrap: &CredentialBrokerConfig,
+) -> Result<DaemonChild, String> {
     let command = app
         .shell()
         .sidecar("weatherflow-core")
         .map_err(|error| error.to_string())?
-        .args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
-        .env("WF_BRIDGE_TOKEN", token);
-    let (_events, child) = command.spawn().map_err(|error| error.to_string())?;
+        .args([
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--desktop-bootstrap-stdin",
+        ]);
+    let (_events, mut child) = command.spawn().map_err(|error| error.to_string())?;
+    if child
+        .write(&bootstrap_message(token, credential_bootstrap)?)
+        .is_err()
+    {
+        let _ = child.kill();
+        return Err("desktop_bootstrap_unavailable".to_owned());
+    }
     Ok(DaemonChild::Bundled(child))
 }
 
@@ -142,17 +225,19 @@ fn development_daemon_args(port: u16) -> Vec<String> {
         "127.0.0.1",
         "--port",
         &port.to_string(),
-        "--reload",
+        "--desktop-bootstrap-stdin",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect()
 }
 
+#[cfg(any(not(debug_assertions), test))]
 pub fn restart_delay(failures: u32) -> Duration {
     Duration::from_millis((500_u64.saturating_mul(2_u64.saturating_pow(failures))).min(5_000))
 }
 
+#[cfg(not(debug_assertions))]
 pub fn monitor(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::new();
@@ -190,6 +275,7 @@ pub fn monitor(app: AppHandle) {
     });
 }
 
+#[cfg(not(debug_assertions))]
 async fn tokio_sleep(duration: Duration) {
     tauri::async_runtime::spawn_blocking(move || std::thread::sleep(duration))
         .await
@@ -227,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_app_starts_the_live_python_core() {
+    fn debug_app_starts_the_python_core_with_private_stdin_bootstrap() {
         assert_eq!(DEVELOPMENT_PORT, 8765);
         assert_eq!(
             development_daemon_args(DEVELOPMENT_PORT),
@@ -241,7 +327,7 @@ mod tests {
                 "127.0.0.1",
                 "--port",
                 "8765",
-                "--reload",
+                "--desktop-bootstrap-stdin",
             ]
         );
     }

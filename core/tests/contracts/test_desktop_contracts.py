@@ -61,6 +61,32 @@ def test_daemon_supervisor_uses_ephemeral_port_and_memory_token() -> None:
     supervisor = (ROOT / "desktop/src-tauri/src/supervisor.rs").read_text()
 
     assert 'TcpListener::bind("127.0.0.1:0")' in supervisor
-    assert 'env("WF_BRIDGE_TOKEN"' in supervisor
+    assert "DesktopBootstrap" in supervisor
+    assert "bridge_token" in supervisor
+    assert 'env("WF_BRIDGE_TOKEN"' not in supervisor
     assert "restart_delay" in supervisor
     assert "5_000" in supervisor
+
+
+def test_native_credential_boundary_is_directional_and_private() -> None:
+    rust = (ROOT / "desktop/src-tauri/src/credentials.rs").read_text()
+    lib = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
+    supervisor = (ROOT / "desktop/src-tauri/src/supervisor.rs").read_text()
+    native = (ROOT / "desktop/src/native.ts").read_text()
+
+    assert "UnixListener" in rust
+    assert "0o600" in rust
+    assert "Resolve" in rust
+    assert "CredentialProvider" in rust
+    assert "credential_set" in lib
+    assert "credential_delete" in lib
+    assert "credential_status" in lib
+    assert "credential_get" not in lib
+    assert "credential_resolve" not in lib
+    assert "credential_bootstrap" in supervisor
+    assert ".write(" in supervisor
+    assert 'env("WF_CREDENTIAL' not in supervisor
+    assert 'invoke<CredentialStatus>("credential_set"' in native
+    assert 'invoke<CredentialStatus>("credential_delete"' in native
+    assert 'invoke<CredentialStatus>("credential_status"' in native
+    assert '"credential_get"' not in native

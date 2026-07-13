@@ -4,6 +4,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from weatherflow.capabilities.models import ToolSpec
+from weatherflow.continuations.models import ProviderAssistantMessage, ProviderContinuation
 
 
 class LeafDelegationError(ValueError):
@@ -67,6 +68,13 @@ ModelTurn = Annotated[
 ]
 
 
+class ModelCompletion(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    turn: ModelTurn
+    continuation: ProviderAssistantMessage | None = None
+
+
 class AgentDefinition(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -90,6 +98,11 @@ class ModelRequest(BaseModel):
     agent: AgentDefinition
     messages: tuple[AgentMessage, ...]
     tools: tuple[ToolSpec, ...]
+    provider_continuations: tuple[ProviderContinuation, ...] = Field(
+        default=(),
+        exclude=True,
+        repr=False,
+    )
 
 
 class CompactWorkerResult(BaseModel):
