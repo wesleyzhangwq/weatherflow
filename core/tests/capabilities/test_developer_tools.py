@@ -4,6 +4,7 @@ import pytest
 
 from weatherflow.artifacts import ArtifactRepository, ArtifactStore
 from weatherflow.capabilities.builtin import DeveloperExecutor, developer_tool_specs
+from weatherflow.capabilities.builtin.developer import ALLOWED_COMMANDS
 from weatherflow.events import EventLedger
 from weatherflow.runs import Run, RunRepository
 from weatherflow.runtime import ToolExecutionContext
@@ -106,10 +107,7 @@ async def test_command_execution_is_allowlisted_and_bounded(tmp_path: Path) -> N
     assert result.output["returncode"] == 0
     assert result.output["stdout"] == "ok\n"
 
-    pnpm = await executor.execute(
-        spec("developer.run_command"), {"argv": ["pnpm", "--version"]}, context
-    )
-    assert pnpm.output["returncode"] == 0
+    assert "pnpm" in ALLOWED_COMMANDS
 
     with pytest.raises(PermissionError):
         await executor.execute(

@@ -14,7 +14,11 @@ from weatherflow.connectors.models import (
 )
 from weatherflow.connectors.repository import ConnectorRepository
 from weatherflow.events import Actor, Event, EventLedger, Sensitivity
-from weatherflow.extensions import CredentialRef, CredentialStore
+from weatherflow.extensions import (
+    CredentialRef,
+    CredentialStore,
+    CredentialUnavailableError,
+)
 
 COMPOSIO_CREDENTIAL = CredentialRef(provider="composio", name="project_api_key")
 
@@ -56,7 +60,7 @@ class ConnectorService:
     def configured(self) -> bool:
         try:
             return self.credential_store.resolve(COMPOSIO_CREDENTIAL) is not None
-        except RuntimeError:
+        except CredentialUnavailableError:
             return False
 
     async def configure(self) -> None:

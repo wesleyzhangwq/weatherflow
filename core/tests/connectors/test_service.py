@@ -12,7 +12,11 @@ from weatherflow.connectors import (
     SourceItem,
 )
 from weatherflow.events import EventLedger
-from weatherflow.extensions import CredentialRef, KeyringCredentialStore
+from weatherflow.extensions import (
+    CredentialRef,
+    CredentialUnavailableError,
+    KeyringCredentialStore,
+)
 from weatherflow.storage import Database
 from weatherflow.workspaces import Workspace, WorkspaceRepository
 
@@ -114,6 +118,19 @@ async def test_configure_handoff_and_authoritative_activation(tmp_path: Path) ->
         "connector.handoff_started",
         "connector.activated",
     ]
+
+
+async def test_unavailable_keyring_keeps_background_connectors_disabled(
+    tmp_path: Path,
+) -> None:
+    class UnavailableStore:
+        def resolve(self, reference: CredentialRef) -> str | None:
+            raise CredentialUnavailableError(reference.key)
+
+    _, _, _, _, _, service = await setup(tmp_path)
+    service.credential_store = UnavailableStore()
+
+    assert service.configured() is False
 
 
 async def test_disconnect_revokes_remote_and_clears_local_derived_data(tmp_path: Path) -> None:
