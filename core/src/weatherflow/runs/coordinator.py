@@ -1,9 +1,14 @@
 import aiosqlite
 
 from weatherflow.events import Actor, Event, EventLedger
-from weatherflow.runs.models import Run, RunStatus
+from weatherflow.runs.models import Run, RunBudget, RunStatus
 from weatherflow.runs.repository import RunNotFoundError, RunRepository
+from weatherflow.sessions import ConversationSessionRepository
 from weatherflow.storage import Database
+
+
+class RunIdempotencyConflict(RuntimeError):
+    pass
 
 
 class RunCoordinator:
@@ -12,10 +17,12 @@ class RunCoordinator:
         database: Database,
         repository: RunRepository,
         ledger: EventLedger,
+        sessions: ConversationSessionRepository | None = None,
     ) -> None:
         self.database = database
         self.repository = repository
         self.ledger = ledger
+        self.sessions = sessions
 
     async def create_run(
         self,
@@ -23,22 +30,59 @@ class RunCoordinator:
         client_request_id: str,
         user_intent: str,
         workspace_id: str,
+        session_id: str | None = None,
+        budget: RunBudget | None = None,
     ) -> Run:
         existing = await self.repository.get_by_client_request_id(client_request_id)
         if existing is not None:
+            self._require_idempotency_scope(
+                existing,
+                workspace_id=workspace_id,
+                session_id=session_id,
+            )
             return existing
         run = Run.new(
             client_request_id=client_request_id,
             user_intent=user_intent,
             workspace_id=workspace_id,
+            session_id=session_id,
+            budget=budget,
         )
         async with self.database.transaction() as connection:
             existing = await self.repository.get_by_client_request_id_in(
                 connection, client_request_id
             )
             if existing is not None:
+                self._require_idempotency_scope(
+                    existing,
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                )
                 return existing
+            if session_id is not None:
+                if self.sessions is None:
+                    raise LookupError(session_id)
+                await self.sessions.require_workspace_in(
+                    connection,
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                )
             await self.repository.create_in(connection, run)
+            if session_id is not None:
+                assert self.sessions is not None
+                await self.sessions.touch_for_run_in(
+                    connection,
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                    observed_at=run.updated_at,
+                )
+            payload = {
+                "client_request_id": client_request_id,
+                "workspace_id": workspace_id,
+                "status": run.status.value,
+            }
+            if session_id is not None:
+                payload["session_id"] = session_id
             await self.ledger.append_in(
                 connection,
                 Event.new(
@@ -47,14 +91,20 @@ class RunCoordinator:
                     stream_kind="run",
                     stream_id=run.id,
                     correlation_id=run.id,
-                    payload={
-                        "client_request_id": client_request_id,
-                        "workspace_id": workspace_id,
-                        "status": run.status.value,
-                    },
+                    payload=payload,
                 ),
             )
         return run
+
+    @staticmethod
+    def _require_idempotency_scope(
+        existing: Run,
+        *,
+        workspace_id: str,
+        session_id: str | None,
+    ) -> None:
+        if existing.workspace_id != workspace_id or existing.session_id != session_id:
+            raise RunIdempotencyConflict(existing.client_request_id)
 
     async def transition(
         self,

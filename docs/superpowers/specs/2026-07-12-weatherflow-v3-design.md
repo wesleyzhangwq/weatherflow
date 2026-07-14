@@ -262,6 +262,7 @@ run_id
 client_request_id
 user_intent
 workspace_id
+session_id (optional)
 status
 version
 created_at / updated_at
@@ -274,7 +275,37 @@ result_summary
 error_class / error_message
 ```
 
-`client_request_id` provides idempotency for desktop, CLI, and MCP retries.
+`client_request_id` provides idempotency for desktop, CLI, and MCP retries. Its
+first accepted Run binds the key to that Run's Workspace and optional
+conversation session. A retry with a different Workspace or session is a typed
+conflict and must never return the pre-existing Run.
+
+#### 6.1.1 Conversation sessions
+
+The Cockpit groups related Runs in durable, Workspace-scoped conversation
+sessions. A session has a user-editable title, a pin flag, timestamps, and a
+derived latest Run reference. Sessions may be created before their first Run.
+New Runs may reference one session; Runs created before this contract or from
+non-conversation clients may keep a null session reference and remain fully
+accessible.
+
+Creating or attaching a Run moves its session to the top of the recent list.
+Pinned sessions sort before unpinned sessions. Rename and pin operations affect
+only presentation metadata: they cannot change Run state, frozen model or
+connector routes, capability snapshots, Trust decisions, or Workspace scopes.
+Every mutation carries the owning `workspace_id`; a mismatched identity is
+reported as not found. Listing Runs by `session_id` likewise requires and
+validates the owning `workspace_id` before returning any rows.
+
+Deleting a session is an explicit privacy deletion rather than a presentation
+detach. The request carries the owning `workspace_id` and a mismatch fails
+closed as not found. The daemon first stops its known background tasks for the
+session, then one SQLite transaction removes the session, its Runs, Actions,
+Approvals, checkpoints/quarantine, frozen capability/model/connector routes,
+provider continuations, artifact manifests, and the full causal event subtrees
+owned by those Runs. Content-addressed artifact bytes are removed after commit
+only when no surviving Run in the same Workspace still references the digest.
+No deletion-completed event may retain the deleted session or Run identity.
 
 ### 6.2 Run state machine
 
@@ -329,11 +360,13 @@ message structures into domain data.
 MiniMax's OpenAI-compatible Chat Completions API remains the default production
 provider, with `MiniMax-M3` as the default model. The curated production set is
 MiniMax, DeepSeek, Moonshot/Kimi, Alibaba Model Studio/Qwen, Zhipu GLM,
-SiliconFlow, and StepFun. Provider adapters translate domain messages, frozen `ToolSpec`
-schemas, usage, final text, tool calls, and bounded leaf delegation at the
-provider boundary. Canonical dotted tool IDs receive deterministic provider-
-safe aliases and map back before the runtime sees a `ModelTurn`; an unknown
-alias fails closed.
+SiliconFlow, StepFun, OpenAI, and Anthropic. OpenAI uses its first-party
+Responses API with server-side response storage disabled; Anthropic uses its
+first-party versioned Messages API. Provider adapters translate domain
+messages, frozen `ToolSpec` schemas, usage, final text, tool calls, and bounded
+leaf delegation at the provider boundary. Canonical dotted tool IDs receive
+deterministic provider-safe aliases and map back before the runtime sees a
+`ModelTurn`; an unknown alias fails closed.
 
 Per-Workspace SQLite configuration owns only provider, model, HTTPS base URL,
 version, and `credential_ref`. The MiniMax API key lives in macOS Keychain and
@@ -346,6 +379,29 @@ endpoint, while the typed core contract retains deliberate override support for
 compatible regional or Workspace endpoints. Endpoint customization never
 widens tools, scopes, or authority. The renderer can set, delete, and inspect
 presence for a provider key but cannot read it back.
+
+OpenAI and Anthropic maintained-model suggestions are intersected with the
+credential-scoped first-party Models API before selection, as for the existing
+curated providers. OpenAI Responses requests replay exact response output items
+needed by a later function-call turn. Anthropic Messages requests replay the
+exact assistant content blocks needed by a later `tool_result`, including any
+provider signature. Those opaque wire records use the same encrypted,
+retention-bounded provider-continuation owner described below and never enter
+the normalized transcript, prompt text, events, logs, memory, or artifacts.
+
+Model-cost accounting is based on provider-reported token usage and an exact,
+versioned price entry for the frozen provider, model, and billing origin. The
+MiniMax catalog version `minimax-paygo-2026-07-14` records the official global
+pay-as-you-go equivalent for maintained M3 and M2.x models. It intentionally
+does not assume cache discounts, subscription-plan allocation, or a custom
+OpenAI-compatible endpoint, so the estimate remains conservative and
+auditable rather than pretending to reproduce an account invoice.
+
+If a Run has a finite `max_cost_usd`, unknown model pricing, a custom billing
+origin, or missing provider usage is an `UNKNOWN` cost state rather than zero.
+After the provider turn that reveals this state, SharedTurnLoop fails closed
+before dispatching tools or committing a terminal result. Checkpoints retain
+the pricing-catalog version and whether cumulative cost is known.
 
 One provider key may expose multiple language models. WeatherFlow intersects
 first-party providers' official maintained allowlists with the models actually
@@ -414,11 +470,37 @@ never reconstructs or retries the provider turn without it.
 
 - Persist after every model turn.
 - Persist a proposed side effect before requesting approval.
+- Only a Trust Policy `ALLOW` decision may execute without a durable Action.
+  `SANDBOX` decisions, including workspace writes and command execution, first
+  persist an Action and system authorization, then execute through the same
+  ActionExecutionCoordinator used by approval-gated side effects. The effect
+  and policy decision define this boundary; tool names do not.
 - Give every side-effecting tool call an `action_id` and idempotency metadata.
+  Provider call IDs are not assumed unique: the durable identity binds the Run,
+  persisted model step, batch position, frozen tool, and canonical arguments.
+  Reusing the same idempotency key for a different Run, tool, effect, or argument
+  set fails closed.
 - Persist the execution result before advancing the Run.
+- If a recovered Action is already `SUCCEEDED` while its Observation is absent
+  from the checkpoint, append the persisted Action result as that Observation
+  and continue without invoking the executor again.
 - If process death occurs between external execution and result persistence,
   mark the Run `NEEDS_REVIEW` unless the tool has a verified idempotent status
   check.
+- If timeout or cancellation occurs after a sandboxed or approved executor has
+  started, durably move both Action and Run to `NEEDS_REVIEW` before returning
+  or propagating cancellation. Cancelling `asyncio.to_thread` only cancels its
+  awaiter; it does not prove that the underlying thread or process stopped.
+- Validate every executor result against the frozen `ToolSpec.output_schema`
+  with JSON Schema Draft 2020-12 before constructing a Tool Observation. An
+  empty schema explicitly accepts any object for compatibility. For `ALLOW`
+  tools, a mismatch becomes a value-free `invalid_tool_output` Observation;
+  the rejected value is absent from checkpoints, events, and model context.
+- For `SANDBOX` and `APPROVE` tools, validate output while the Action is still
+  `EXECUTING`. A mismatch moves Action and Run to `NEEDS_REVIEW` without
+  persisting the returned value. Recovery revalidates any historical
+  `SUCCEEDED` Action result before using it; an invalid result is cleared,
+  enters `NEEDS_REVIEW`, and is never re-executed.
 - Approval timeout suspends the Run; it does not fail or execute the action.
 
 ## 7. Rhythm Intelligence
@@ -556,8 +638,14 @@ contain human-state-to-weather logic.
 
 The Cockpit left navigation keeps conversation, Runs, and status weather as the
 primary product surfaces. A labeled Tools section contains Automations, Skills,
-MCP Servers, LLM Models, and Composio. Settings contains system, privacy, and
+MCP Servers, LLM Models, and OAuth. Settings contains appearance, system, privacy, and
 diagnostic preferences rather than duplicating those tool configuration pages.
+
+Cockpit appearance is a shell-local preference, not Python domain state. The
+user may choose `system`, `light`, or `dark`; the preference is stored under the
+fixed `weatherflow.theme` key, applied before React renders, and `system` tracks
+macOS appearance changes. Theme state never enters Runs, events, memory,
+checkpoints, artifacts, prompts, or daemon configuration.
 
 ### 8.2 Status-weather presentation
 
@@ -620,6 +708,11 @@ and notarization.
 - Bind only to loopback on a random available port.
 - Authenticate every request with a per-launch random token handed to Tauri in
   memory.
+- The product renderer always resolves the native `daemon_bridge` command,
+  including in development. A shell that cannot obtain the authenticated bridge
+  fails closed; it never falls back to an unauthenticated endpoint. Isolated
+  browser tests may inject an explicit bridge configuration, but there is no
+  automatic browser fallback in product startup.
 - Use HTTP for commands and snapshots.
 - Use WebSocket for ordered typed events.
 - Carry WebSocket authentication in a negotiated `Sec-WebSocket-Protocol`
@@ -642,6 +735,10 @@ GET  /v1/runs
 GET  /v1/runs/{run_id}
 POST /v1/runs/{run_id}/cancel
 GET  /v1/runs/{run_id}/timeline
+GET  /v1/sessions
+POST /v1/sessions
+PATCH /v1/sessions/{session_id}
+DELETE /v1/sessions/{session_id}
 GET  /v1/approvals
 POST /v1/approvals/{approval_id}/decision
 GET  /v1/artifacts/{artifact_id}
@@ -683,7 +780,13 @@ Skills and MCP Servers are administered per Workspace. Install and enable
 controls show source, version, requested capabilities, and health. Renderer
 clients send only fixed catalog identifiers and user-owned Workspace choices;
 they never supply executable commands, arbitrary package URLs, secret values,
-or authority annotations.
+or authority annotations. An install request returns `needs_approval` after
+persisting a dedicated Run, Action, and Approval. Only the later persisted user
+decision may move that Action to execution; a `confirm` boolean or synthesized
+authorization id has no authority. Unknown, expired, or cross-Workspace
+decisions fail closed. Recovery never retries an approved or executing install:
+an executing Action is moved to `NEEDS_REVIEW`, while an approved-but-not-started
+Action waits for another explicit user decision.
 
 ## 9. Capability Plane and Trust Plane
 
@@ -706,7 +809,10 @@ live under WeatherFlow's internal root. Presets define their executable and safe
 arguments in Python; the renderer can select a preset and bounded Workspace
 options only. Enabling a preset discovers and normalizes its tools for future
 Runs. Disabling it closes the transport and removes it from future capability
-resolution without mutating frozen Run snapshots.
+resolution without mutating frozen Run snapshots. A healthy enabled preset
+contributes its catalog-fixed `mcp:{preset}:use` scope only as an effective input
+to that future snapshot resolution. It does not mutate durable Workspace grants,
+and discovery metadata or MCP annotations cannot select or expand the scope.
 
 ### 9.2 ToolSpec
 
@@ -765,10 +871,15 @@ A Workspace owns:
 - default budgets;
 - active session grants.
 
-The first-party connector set is intentionally fixed to GitHub, Gmail, and
-Google Calendar. Connection requires explicit user action. Read-only automatic
-fetch may run silently after connection, at a bounded interval chosen by the
-user. It can never authorize external writes or widen a Run's frozen tools.
+The first production connector slice is intentionally fixed to GitHub, Gmail,
+and Google Calendar; later curated OAuth catalog entries follow the same
+identity and credential-isolation contract without inheriting capability.
+Connection requires explicit user action. Read-only automatic fetch may run
+silently only for an entry whose backend definition explicitly supports it, at
+a bounded interval chosen by the user. Conversation access is a separate
+explicit grant (`disabled`, `read`, or `read_write`) and is unavailable until
+the toolkit has fixed reviewed WeatherFlow ToolSpecs. Neither connection nor
+automatic fetch can authorize external writes or widen an already-frozen Run.
 
 A Workspace is an authority boundary, not merely a working directory.
 
@@ -793,8 +904,9 @@ The execution layer repeats policy checks even if the model never saw the tool.
 - A Credential Broker resolves `credential_ref` and signs/injects requests at
   the transport boundary.
 - The fixed desktop provider enum is `minimax`, `deepseek`, `moonshot`, `qwen`,
-  `zhipu`, `siliconflow`, `stepfun`, and `composio`. No renderer, daemon request,
-  Skill, MCP server, or model output may select an arbitrary Keychain item name.
+  `zhipu`, `siliconflow`, `stepfun`, `openai`, `anthropic`, and `composio`. No
+  renderer, daemon request, Skill, MCP server, or model output may select an
+  arbitrary Keychain item name.
 - Tauri exposes only `set(provider, secret)`, `delete(provider)`, and
   `status(provider)` to renderer code. It never exposes a renderer `get` command.
 - Python exposes no credential mutation. Its native desktop Credential Broker
@@ -950,13 +1062,42 @@ data deletion.
   at Composio.
 - Managed OAuth uses Composio v3 Connect Link and authoritative connected-
   account state. Handoff creation is not connection completion.
-- When a fixed toolkit has no Auth Config yet, WeatherFlow creates one with
-  Composio-managed auth and `restrict_to_following_tools` set to that connector's
-  approved read actions. This setup does not add a model-visible capability.
+- Before creating an Auth Config, WeatherFlow reads the project-scoped v3.1
+  toolkit record and inspects `composio_managed_auth_schemes`. It may create a
+  Composio-managed Auth Config only when that list is non-empty and the local
+  connector definition has a non-empty reviewed action allowlist.
+  `restrict_to_following_tools` is always present and non-empty. Otherwise the
+  connection requires an existing user-provided Auth Config and fails closed
+  with a typed result. This setup does not add a model-visible capability.
 - Only a curated, version-pinned read surface is eligible for automatic fetch.
   A generic Composio execute tool is never exposed to the model.
+- Every reviewed Composio action also owns an explicit output projection. Only
+  named useful fields cross into the normalized Observation; unknown nested
+  fields are dropped, credential-shaped values in approved text fields are
+  redacted, and HTTP(S) URLs lose user info, query parameters, and fragments.
+  Output filtering never relies on a blacklist of provider field names.
+- Conversation tools use canonical WeatherFlow ToolSpec IDs. A new Run freezes
+  both those specs and an opaque connector route containing the account identity
+  and conversation-grant revision. Execution rechecks the current binding,
+  account state, exact frozen identity, grant revision, scope, ToolSpec version,
+  and Trust decision. Reconnection or revocation makes the old Run fail closed.
+- A leaf Worker may inherit a Composio route only for reviewed read-only tools
+  actually present in its frozen child capability snapshot. The child route is
+  copied from the parent Run after rechecking Workspace ownership, account
+  identity, grant revision, binding tool allowlist, and scopes. No matching child
+  tool means no route; connector writes remain excluded from Worker snapshots.
+- Conversation reads execute as `network_read`. Drafting/sending, issue/task
+  mutation, calendar writes, and destructive actions persist a normal Action and
+  enter Approval before the broker receives any execution request.
 - Connected identity, OAuth scope, Workspace scope, Tool visibility, execution
   authority, and Approval remain separate checks.
+- The v3 directory contains GitHub, Gmail, Google Calendar, Slack, Notion,
+  Google Drive, Google Sheets, Outlook, OneDrive, Microsoft Teams, Linear,
+  Jira, Confluence, Dropbox, GitLab, Discord, Trello, Asana, Airtable, and
+  ClickUp. Only the first three support production automatic fetch and
+  conversation ToolSpecs in this phase. Every other entry is catalog/identity
+  only until its own fixed ToolSpecs, scopes, Trust tests, and executor are
+  reviewed; the UI and API must expose that distinction.
 
 Broader email and messaging integrations, Composio Triggers, and a WeatherFlow
 cloud proxy remain deferred. Any future connector must be added as a Pack/MCP
@@ -1094,7 +1235,9 @@ must judge policy, state transition, provenance, and recovery contracts.
 - WebSocket reconnect does not silently lose final Run state.
 - There are zero unapproved `external_write`, `install`, or `destructive`
   actions under the supervised profile.
-- Duplicate `client_request_id` or `action_id` never causes duplicate execution.
+- Duplicate `client_request_id` or `action_id` never causes duplicate execution;
+  a `client_request_id` reused across Workspace or session boundaries fails
+  closed instead of returning the original Run.
 - Low-confidence or expired human state projects to `mixed` rather than a false
   precise weather state.
 
@@ -1174,7 +1317,10 @@ execution path to bypass the Run Coordinator.
     resolve only at their transport boundary.
 18. Automations submit ordinary Runs and cannot execute capabilities directly.
 19. Skill and MCP catalog installation is explicit, immutable per installed
-    snapshot or pinned preset, and never grants authority.
+    snapshot or pinned preset, and never grants authority. Every install uses a
+    durable Action/Approval pair; renderer confirmation flags and fabricated
+    authorization ids are not accepted, and interrupted execution never retries
+    automatically.
 
 ## 18. Design completion criteria
 

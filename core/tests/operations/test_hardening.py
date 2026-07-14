@@ -33,7 +33,7 @@ async def test_diagnostic_export_is_explicit_local_bounded_and_redacted(
     metrics = await container.diagnostics.metrics(workspace.id)
     exported = await container.diagnostics.export(workspace.id)
 
-    assert metrics.run_counts["succeeded"] == 1
+    assert metrics.run_counts["waiting_user"] == 1
     assert exported.path.is_relative_to(Path(workspace.internal_root))
     assert exported.path.name == "diagnostic.json"
     payload = exported.path.read_text()
@@ -42,7 +42,7 @@ async def test_diagnostic_export_is_explicit_local_bounded_and_redacted(
     parsed = json.loads(payload)
     assert parsed["schema_version"] == "1"
     assert parsed["upload_attempted"] is False
-    assert parsed["metrics"]["run_counts"]["succeeded"] == 1
+    assert parsed["metrics"]["run_counts"]["waiting_user"] == 1
     timeline = await container.ledger.list_correlation(workspace.id, limit=1000)
     assert any(event.type == "diagnostics.exported" for event in timeline)
     assert run.id not in payload or len(payload) < 100_000

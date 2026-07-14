@@ -3,7 +3,6 @@ import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import (
     FastAPI,
@@ -24,10 +23,12 @@ from weatherflow.api.schemas import (
     AutomationCreateRequest,
     AutomationUpdateRequest,
     ConnectorConfigureResponse,
+    ConnectorConversationAccessRequest,
     ConnectorDisconnectRequest,
     ConnectorSettingsRequest,
     DesktopSnapshot,
     HealthResponse,
+    MCPInstallRequest,
     MCPMutationRequest,
     MCPPresetView,
     ModelConfigurationResponse,
@@ -36,6 +37,9 @@ from weatherflow.api.schemas import (
     OnboardingCompleteRequest,
     ResetConfirmRequest,
     RunCreateRequest,
+    SessionCreateRequest,
+    SessionUpdateRequest,
+    SkillInstallRequest,
     SkillMutationRequest,
     SystemStatus,
     VersionedRequest,
@@ -63,8 +67,6 @@ from weatherflow.connectors import (
 from weatherflow.events import Event, UnknownEventCursor
 from weatherflow.extensions import SkillCatalogEntry, SkillCatalogError
 from weatherflow.mcp import (
-    MCPInstallationError,
-    MCPInstallAuthorization,
     MCPNotInstalledError,
     MCPPresetUnavailableError,
     UnknownMCPPresetError,
@@ -76,6 +78,9 @@ from weatherflow.models import (
 )
 from weatherflow.operations import (
     DiagnosticExport,
+    InstallationApprovalRequest,
+    InstallationBoundaryError,
+    InstallationRequestError,
     LocalMetrics,
     OnboardingState,
     ResetCategory,
@@ -85,7 +90,12 @@ from weatherflow.operations import (
     SecurityScanner,
 )
 from weatherflow.rhythm import CurrentRhythm, RhythmInsights, RhythmInsightsService, RhythmSignal
-from weatherflow.runs import InvalidTransitionError, Run, RunStatus
+from weatherflow.runs import InvalidTransitionError, Run, RunIdempotencyConflict, RunStatus
+from weatherflow.sessions import (
+    ConversationSession,
+    SessionNotFoundError,
+    SessionVersionConflict,
+)
 from weatherflow.trust import (
     ApprovalAlreadyDecided,
     ApprovalBundle,
@@ -112,7 +122,7 @@ def create_app(
         finally:
             service = application.state.container
             if service is not None:
-                await service.stop_background()
+                await service.close()
             application.state.lifespan_active = False
 
     app = FastAPI(title="WeatherFlow Core", version=__version__, lifespan=lifespan)
@@ -132,6 +142,7 @@ def create_app(
             ComposioErrorCode.NOT_FOUND: 404,
             ComposioErrorCode.TRANSPORT: 503,
             ComposioErrorCode.UPSTREAM: 502,
+            ComposioErrorCode.AUTH_CONFIG_REQUIRED: 409,
         }
         return JSONResponse(
             status_code=status_by_code[error.code],
@@ -206,9 +217,23 @@ def create_app(
                 user_intent=request.user_intent,
                 client_request_id=request.client_request_id,
                 workspace_id=request.workspace_id,
+                session_id=request.session_id,
                 context_run_id=request.context_run_id,
                 execute=False,
             )
+        except SessionNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "session_not_found", "session_id": str(error)},
+            ) from error
+        except RunIdempotencyConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "client_request_conflict",
+                    "client_request_id": str(error),
+                },
+            ) from error
         except LookupError as error:
             raise HTTPException(
                 status_code=404,
@@ -234,9 +259,99 @@ def create_app(
         return stored
 
     @app.get("/v1/runs", response_model=list[Run])
-    async def list_runs(workspace_id: str | None = None, limit: int = 50) -> list[Run]:
+    async def list_runs(
+        workspace_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 50,
+    ) -> list[Run]:
         service = await runtime()
-        return await service.runs.list_recent(limit=limit, workspace_id=workspace_id)
+        if session_id is not None:
+            if workspace_id is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "workspace_required"},
+                )
+            await selected_workspace(service, workspace_id)
+            session = await service.sessions.get_for_workspace(session_id, workspace_id)
+            if session is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "session_not_found", "session_id": session_id},
+                )
+        return await service.runs.list_recent(
+            limit=limit,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+
+    @app.get("/v1/sessions", response_model=list[ConversationSession])
+    async def list_sessions(
+        workspace_id: str,
+        limit: int = 200,
+    ) -> list[ConversationSession]:
+        service = await runtime()
+        await selected_workspace(service, workspace_id)
+        return await service.sessions.list(workspace_id, limit=limit)
+
+    @app.post(
+        "/v1/sessions",
+        response_model=ConversationSession,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_session(request: SessionCreateRequest) -> ConversationSession:
+        service = await runtime()
+        await selected_workspace(service, request.workspace_id)
+        session = ConversationSession.new(
+            workspace_id=request.workspace_id,
+            title=request.title,
+        )
+        await service.sessions.create(session)
+        return session
+
+    @app.patch("/v1/sessions/{session_id}", response_model=ConversationSession)
+    async def update_session(
+        session_id: str,
+        request: SessionUpdateRequest,
+        workspace_id: str,
+    ) -> ConversationSession:
+        service = await runtime()
+        await selected_workspace(service, workspace_id)
+        current = await service.sessions.get_for_workspace(session_id, workspace_id)
+        if current is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "session_not_found", "session_id": session_id},
+            )
+        try:
+            return await service.sessions.update(
+                session_id,
+                workspace_id=workspace_id,
+                expected_version=current.version,
+                title=request.title,
+                pinned=request.pinned,
+            )
+        except SessionNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "session_not_found", "session_id": session_id},
+            ) from error
+        except SessionVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "session_version_conflict", "session_id": session_id},
+            ) from error
+
+    @app.delete("/v1/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_session(session_id: str, workspace_id: str) -> None:
+        service = await runtime()
+        await selected_workspace(service, workspace_id)
+        try:
+            await service.delete_session(session_id, workspace_id=workspace_id)
+        except SessionNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "session_not_found", "session_id": session_id},
+            ) from error
 
     @app.get("/v1/workspaces", response_model=list[Workspace])
     async def list_workspaces() -> list[Workspace]:
@@ -413,30 +528,31 @@ def create_app(
                 detail={"code": "skill_catalog_unavailable"},
             ) from error
 
-    @app.post("/v1/skills/{skill_id}/install", response_model=SkillCatalogEntry)
+    @app.post(
+        "/v1/skills/{skill_id}/install",
+        response_model=InstallationApprovalRequest,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
     async def install_skill(
         skill_id: str,
-        request: SkillMutationRequest,
-    ) -> SkillCatalogEntry:
+        request: SkillInstallRequest,
+    ) -> InstallationApprovalRequest:
         service = await runtime()
-        await selected_workspace(service, request.workspace_id)
-        if not request.confirm:
-            raise HTTPException(status_code=422, detail={"code": "confirmation_required"})
+        workspace = await selected_workspace(service, request.workspace_id)
         try:
-            await service.skill_catalog.install_for_workspace(
-                skill_id,
-                workspace_id=request.workspace_id,
+            return await service.installation_approvals.request_skill(
+                skill_id=skill_id,
+                workspace=workspace,
                 expected_workspace_version=request.expected_workspace_version,
+                client_request_id=request.client_request_id,
             )
-            entries = await service.skill_catalog.list_for_workspace(request.workspace_id)
         except WorkspaceVersionConflict as error:
             raise HTTPException(
                 status_code=409,
                 detail={"code": "workspace_version_conflict"},
             ) from error
-        except (SkillCatalogError, ValueError) as error:
+        except (SkillCatalogError, InstallationRequestError, ValueError) as error:
             raise HTTPException(status_code=422, detail={"code": "skill_invalid"}) from error
-        return next(entry for entry in entries if entry.id == skill_id)
 
     @app.delete("/v1/skills/{skill_id}", response_model=SkillCatalogEntry)
     async def uninstall_skill(
@@ -488,22 +604,22 @@ def create_app(
         await selected_workspace(service, workspace_id)
         return await mcp_catalog_views(service, workspace_id)
 
-    @app.post("/v1/mcp/{preset_id}/install", response_model=MCPPresetView)
+    @app.post(
+        "/v1/mcp/{preset_id}/install",
+        response_model=InstallationApprovalRequest,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
     async def install_mcp_preset(
         preset_id: str,
-        request: MCPMutationRequest,
-    ) -> MCPPresetView:
+        request: MCPInstallRequest,
+    ) -> InstallationApprovalRequest:
         service = await runtime()
         workspace = await selected_workspace(service, request.workspace_id)
-        if not request.confirm:
-            raise HTTPException(status_code=422, detail={"code": "confirmation_required"})
         try:
-            await service.mcp_management.install(
-                preset_id,
-                workspace=service._mcp_workspace_context(workspace),
-                authorization=MCPInstallAuthorization(
-                    approved_action_id=f"user-confirmed:{uuid4()}"
-                ),
+            return await service.installation_approvals.request_mcp(
+                preset_id=preset_id,
+                workspace=workspace,
+                client_request_id=request.client_request_id,
             )
         except UnknownMCPPresetError as error:
             raise HTTPException(status_code=404, detail={"code": "mcp_preset_not_found"}) from error
@@ -512,13 +628,6 @@ def create_app(
                 status_code=422,
                 detail={"code": "mcp_preset_unavailable"},
             ) from error
-        except MCPInstallationError as error:
-            raise HTTPException(status_code=503, detail={"code": "mcp_install_failed"}) from error
-        return next(
-            item
-            for item in await mcp_catalog_views(service, workspace.id)
-            if item.preset_id == preset_id
-        )
 
     @app.post("/v1/mcp/{preset_id}/enable", response_model=MCPPresetView)
     async def enable_mcp_preset(
@@ -624,14 +733,37 @@ def create_app(
     async def decide_approval(approval_id: str, request: ApprovalDecisionRequest) -> ApprovalBundle:
         service = await runtime()
         try:
-            bundle = await service.approval_coordinator.decide(
-                approval_id=approval_id,
-                expected_version=request.expected_version,
-                approved=request.decision == "approve",
-                decided_by="user",
-                rationale=request.rationale,
-            )
+            approval = await service.approvals.get(approval_id)
+            action = await service.actions.get(approval.action_id) if approval else None
+            if action is not None and await service.installation_approvals.is_managed_install(
+                action
+            ):
+                if request.workspace_id is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"code": "workspace_required"},
+                    )
+                bundle = await service.installation_approvals.decide(
+                    approval_id=approval_id,
+                    expected_version=request.expected_version,
+                    approved=request.decision == "approve",
+                    workspace_id=request.workspace_id,
+                    rationale=request.rationale,
+                )
+            else:
+                bundle = await service.approval_coordinator.decide(
+                    approval_id=approval_id,
+                    expected_version=request.expected_version,
+                    approved=request.decision == "approve",
+                    decided_by="user",
+                    rationale=request.rationale,
+                )
         except LookupError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "approval_not_found", "approval_id": approval_id},
+            ) from error
+        except InstallationBoundaryError as error:
             raise HTTPException(
                 status_code=404,
                 detail={"code": "approval_not_found", "approval_id": approval_id},
@@ -641,7 +773,9 @@ def create_app(
                 status_code=409,
                 detail={"code": "approval_already_decided", "approval_id": approval_id},
             ) from error
-        if request.resume:
+        if request.resume and not await service.installation_approvals.is_managed_install(
+            bundle.action
+        ):
             await service.resume_run(bundle.run.id)
             action = await service.actions.get(bundle.action.id)
             approval = await service.approvals.get(bundle.approval.id)
@@ -875,7 +1009,44 @@ def create_app(
             raise HTTPException(
                 status_code=409, detail={"code": "connector_not_connected"}
             ) from error
+        except PermissionError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "connector_auto_fetch_unsupported"},
+            ) from error
         return Response(status_code=204)
+
+    @app.post(
+        "/v1/connectors/{connector}/conversation-access",
+        response_model=ConnectorStatus,
+    )
+    async def update_connector_conversation_access(
+        connector: ConnectorKind,
+        request: ConnectorConversationAccessRequest,
+        workspace_id: str | None = None,
+    ) -> ConnectorStatus:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        try:
+            await service.connector_service.update_conversation_access(
+                workspace.id,
+                connector,
+                request.conversation_access,
+            )
+        except LookupError as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "connector_not_connected"}
+            ) from error
+        except PermissionError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "connector_reauthorization_required"},
+            ) from error
+        return next(
+            status
+            for status in await service.connector_service.statuses(workspace.id)
+            if status.connector is connector
+        )
 
     @app.post("/v1/connectors/{connector}/sync", response_model=ConnectorSnapshot)
     async def sync_connector(
@@ -892,12 +1063,15 @@ def create_app(
 
     @app.post("/v1/connectors/{connector}/disconnect", status_code=204)
     async def disconnect_connector(
-        connector: ConnectorKind, request: ConnectorDisconnectRequest
+        connector: ConnectorKind,
+        request: ConnectorDisconnectRequest,
+        workspace_id: str | None = None,
     ) -> Response:
         if not request.confirm:
             raise HTTPException(status_code=409, detail={"code": "explicit_confirmation_required"})
         service = await runtime()
-        await service.connector_service.disconnect(connector)
+        workspace = await selected_workspace(service, workspace_id)
+        await service.connector_service.disconnect(workspace.id, connector)
         return Response(status_code=204)
 
     @app.get("/v1/onboarding", response_model=OnboardingState)

@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@icons-pack/react-simple-icons": "13.13.0",
     "@phosphor-icons/react": "^2.1.10",
     "@tauri-apps/api": "^2.8.0",
     "react": "^19.1.1",

@@ -409,4 +409,246 @@ MIGRATIONS = (
             ON mcp_connections(enabled, workspace_id, preset_id);
         """,
     ),
+    Migration(
+        version=18,
+        sql="""
+        CREATE TABLE run_connector_routes (
+            run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            external_account_id TEXT NOT NULL,
+            conversation_grant_revision INTEGER NOT NULL,
+            bound_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, connector),
+            CHECK(conversation_grant_revision >= 1)
+        );
+        CREATE INDEX idx_run_connector_routes_workspace
+            ON run_connector_routes(workspace_id, bound_at, run_id);
+        """,
+    ),
+    Migration(
+        version=19,
+        sql="""
+        CREATE TABLE conversation_sessions (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1)),
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_conversation_sessions_workspace
+            ON conversation_sessions(workspace_id, pinned DESC, updated_at DESC, id DESC);
+
+        ALTER TABLE runs ADD COLUMN session_id TEXT
+            REFERENCES conversation_sessions(id) ON DELETE SET NULL;
+        CREATE INDEX idx_runs_session
+            ON runs(session_id, updated_at DESC, id DESC);
+        """,
+    ),
+    Migration(
+        version=20,
+        sql="""
+        CREATE TABLE connector_account_migration_map (
+            old_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            new_id TEXT NOT NULL UNIQUE,
+            PRIMARY KEY(old_id, workspace_id)
+        );
+
+        INSERT INTO connector_account_migration_map(old_id, workspace_id, new_id)
+        SELECT
+            ownership.account_id,
+            ownership.workspace_id,
+            CASE
+                WHEN ownership.workspace_id = (
+                    SELECT MIN(candidate.workspace_id)
+                    FROM (
+                        SELECT account_id, workspace_id FROM connector_bindings
+                        UNION
+                        SELECT account_id, workspace_id FROM connection_attempts
+                        UNION
+                        SELECT account_id, workspace_id FROM run_connector_routes
+                    ) AS candidate
+                    WHERE candidate.account_id = ownership.account_id
+                ) THEN ownership.account_id
+                ELSE ownership.account_id || '__wfws__' || ownership.workspace_id
+            END
+        FROM (
+            SELECT account_id, workspace_id FROM connector_bindings
+            UNION
+            SELECT account_id, workspace_id FROM connection_attempts
+            UNION
+            SELECT account_id, workspace_id FROM run_connector_routes
+        ) AS ownership;
+
+        CREATE TABLE connector_accounts_v20 (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            external_account_id TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, connector, id)
+        );
+
+        INSERT INTO connector_accounts_v20(
+            id, workspace_id, connector, external_account_id, phase, config,
+            version, created_at, updated_at
+        )
+        SELECT
+            mapping.new_id,
+            mapping.workspace_id,
+            account.connector,
+            account.external_account_id,
+            account.phase,
+            json_set(
+                account.config,
+                '$.id', mapping.new_id,
+                '$.workspace_id', mapping.workspace_id
+            ),
+            account.version,
+            account.created_at,
+            account.updated_at
+        FROM connector_account_migration_map AS mapping
+        JOIN connector_accounts AS account ON account.id = mapping.old_id;
+
+        CREATE TABLE connection_attempts_v20 (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            config TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(workspace_id, connector, account_id)
+                REFERENCES connector_accounts_v20(workspace_id, connector, id)
+                ON DELETE CASCADE
+        );
+
+        INSERT INTO connection_attempts_v20(
+            id, workspace_id, connector, account_id, phase, expires_at,
+            config, created_at, updated_at
+        )
+        SELECT
+            attempt.id,
+            attempt.workspace_id,
+            attempt.connector,
+            mapping.new_id,
+            attempt.phase,
+            attempt.expires_at,
+            json_set(attempt.config, '$.account_id', mapping.new_id),
+            attempt.created_at,
+            attempt.updated_at
+        FROM connection_attempts AS attempt
+        JOIN connector_account_migration_map AS mapping
+          ON mapping.old_id = attempt.account_id
+         AND mapping.workspace_id = attempt.workspace_id;
+
+        CREATE TABLE connector_bindings_v20 (
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            auto_fetch_enabled INTEGER NOT NULL,
+            next_sync_at TEXT NOT NULL,
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(workspace_id, connector),
+            FOREIGN KEY(workspace_id, connector, account_id)
+                REFERENCES connector_accounts_v20(workspace_id, connector, id)
+                ON DELETE CASCADE
+        );
+
+        INSERT INTO connector_bindings_v20(
+            workspace_id, connector, account_id, enabled, auto_fetch_enabled,
+            next_sync_at, config, version, created_at, updated_at
+        )
+        SELECT
+            binding.workspace_id,
+            binding.connector,
+            mapping.new_id,
+            binding.enabled,
+            binding.auto_fetch_enabled,
+            binding.next_sync_at,
+            json_set(binding.config, '$.account_id', mapping.new_id),
+            binding.version,
+            binding.created_at,
+            binding.updated_at
+        FROM connector_bindings AS binding
+        JOIN connector_account_migration_map AS mapping
+          ON mapping.old_id = binding.account_id
+         AND mapping.workspace_id = binding.workspace_id;
+
+        UPDATE run_connector_routes
+        SET account_id = (
+            SELECT mapping.new_id
+            FROM connector_account_migration_map AS mapping
+            WHERE mapping.old_id = run_connector_routes.account_id
+              AND mapping.workspace_id = run_connector_routes.workspace_id
+        )
+        WHERE EXISTS (
+            SELECT 1
+            FROM connector_account_migration_map AS mapping
+            WHERE mapping.old_id = run_connector_routes.account_id
+              AND mapping.workspace_id = run_connector_routes.workspace_id
+        );
+
+        CREATE UNIQUE INDEX idx_runs_id_workspace
+            ON runs(id, workspace_id);
+
+        CREATE TABLE run_connector_routes_v20 (
+            run_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            external_account_id TEXT NOT NULL,
+            conversation_grant_revision INTEGER NOT NULL,
+            bound_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, connector),
+            FOREIGN KEY(run_id, workspace_id)
+                REFERENCES runs(id, workspace_id) ON DELETE CASCADE,
+            CHECK(conversation_grant_revision >= 1)
+        );
+
+        INSERT INTO run_connector_routes_v20(
+            run_id, workspace_id, connector, account_id,
+            external_account_id, conversation_grant_revision, bound_at
+        )
+        SELECT
+            run_id, workspace_id, connector, account_id,
+            external_account_id, conversation_grant_revision, bound_at
+        FROM run_connector_routes;
+
+        DROP TABLE run_connector_routes;
+        DROP TABLE connection_attempts;
+        DROP TABLE connector_bindings;
+        DROP TABLE connector_accounts;
+
+        ALTER TABLE connector_accounts_v20 RENAME TO connector_accounts;
+        ALTER TABLE connection_attempts_v20 RENAME TO connection_attempts;
+        ALTER TABLE connector_bindings_v20 RENAME TO connector_bindings;
+        ALTER TABLE run_connector_routes_v20 RENAME TO run_connector_routes;
+
+        CREATE INDEX idx_connector_accounts_workspace_connector
+            ON connector_accounts(workspace_id, connector, updated_at DESC, id DESC);
+        CREATE INDEX idx_connection_attempts_connector
+            ON connection_attempts(workspace_id, connector, created_at DESC, id DESC);
+        CREATE INDEX idx_connector_bindings_due
+            ON connector_bindings(enabled, auto_fetch_enabled, next_sync_at);
+        CREATE INDEX idx_run_connector_routes_workspace
+            ON run_connector_routes(workspace_id, bound_at, run_id);
+
+        DROP TABLE connector_account_migration_map;
+        """,
+    ),
 )

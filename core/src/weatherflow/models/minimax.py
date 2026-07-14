@@ -16,6 +16,11 @@ from weatherflow.extensions import (
     CredentialRef,
     CredentialUnavailableError,
 )
+from weatherflow.models.pricing import (
+    PRICING_CATALOG_VERSION,
+    ModelTokenPrice,
+    resolve_token_price,
+)
 from weatherflow.runtime import (
     AgentMessage,
     DelegationTurn,
@@ -25,6 +30,7 @@ from weatherflow.runtime import (
     ModelRequest,
     ModelTurn,
     ModelUsage,
+    ToolCallBatchTurn,
     ToolCallTurn,
 )
 
@@ -78,6 +84,14 @@ class OpenAICompatibleAdapter:
         self.max_completion_tokens = max_completion_tokens
         self.timeout_seconds = timeout_seconds
         self.client = client or httpx.AsyncClient()
+        self.token_price = resolve_token_price(
+            provider=provider,
+            model=model,
+            base_url=normalized_url,
+        )
+        self.pricing_catalog_version = (
+            PRICING_CATALOG_VERSION if self.token_price is not None else None
+        )
         self.continuation_provider = (
             provider if provider == "minimax" and model.startswith("MiniMax-M2") else None
         )
@@ -210,7 +224,8 @@ class OpenAICompatibleAdapter:
                 "role": "system",
                 "content": (
                     f"{request.agent.system_prompt}\n\n"
-                    "Call at most one tool per turn. Never invent a tool name. "
+                    "You may call multiple independent tools in one turn. "
+                    "Never invent a tool name. "
                     "Every tool call must include every field listed in the function's "
                     "JSON Schema required array.\n\n"
                     "The runtime-selected model identity is trusted metadata: "
@@ -276,6 +291,32 @@ class OpenAICompatibleAdapter:
                         }
                     ],
                 }
+            if isinstance(parsed, ToolCallBatchTurn):
+                tool_calls = []
+                for index, call in enumerate(parsed.calls):
+                    function_name = tool_to_name.get(call.tool_id)
+                    if function_name is None:
+                        raise MiniMaxResponseError("tool history is outside the frozen snapshot")
+                    fingerprint = hashlib.sha256(f"{message.content}:{index}".encode()).hexdigest()[
+                        :12
+                    ]
+                    generated_id = f"wf-{fingerprint}"
+                    tool_calls.append(
+                        {
+                            "id": call.call_id or generated_id,
+                            "type": "function",
+                            "function": {
+                                "name": function_name,
+                                "arguments": json.dumps(
+                                    call.arguments,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ),
+                            },
+                        }
+                    )
+                return {"role": "assistant", "content": None, "tool_calls": tool_calls}
         if message.role is MessageRole.TOOL:
             function_name = tool_to_name.get(message.name or "")
             if function_name is None or message.tool_call_id is None:
@@ -302,7 +343,7 @@ class OpenAICompatibleAdapter:
         message = choices[0].get("message")
         if not isinstance(message, dict):
             raise MiniMaxResponseError("model provider returned no assistant message")
-        usage = _usage(response.get("usage"))
+        usage = _usage(response.get("usage"), self.token_price)
         provider_message = deepcopy(message)
         provider_message.setdefault("role", "assistant")
 
@@ -315,45 +356,54 @@ class OpenAICompatibleAdapter:
                     model=self.continuation_model or self.model,
                     payload=provider_message,
                 )
-                if isinstance(turn, ToolCallTurn | DelegationTurn)
+                if isinstance(turn, ToolCallTurn | ToolCallBatchTurn | DelegationTurn)
                 else None
             )
             return ModelCompletion(turn=turn, continuation=continuation)
 
         calls = message.get("tool_calls")
         if calls:
-            if not isinstance(calls, list) or len(calls) != 1:
-                raise MiniMaxResponseError("model provider returned multiple tool calls")
-            call = calls[0]
-            function = call.get("function") if isinstance(call, dict) else None
-            if not isinstance(function, dict):
-                raise MiniMaxResponseError("model provider returned an invalid tool call")
-            name = function.get("name")
-            arguments = _arguments(function.get("arguments"))
-            if name == DELEGATE_FUNCTION:
-                try:
-                    return completed(
-                        DelegationTurn(
+            if not isinstance(calls, list) or not 1 <= len(calls) <= 8:
+                raise MiniMaxResponseError("model provider returned an invalid tool call count")
+            parsed_calls: list[ToolCallTurn] = []
+            delegation: DelegationTurn | None = None
+            for call in calls:
+                function = call.get("function") if isinstance(call, dict) else None
+                if not isinstance(function, dict):
+                    raise MiniMaxResponseError("model provider returned an invalid tool call")
+                name = function.get("name")
+                arguments = _arguments(function.get("arguments"))
+                if name == DELEGATE_FUNCTION:
+                    if len(calls) != 1:
+                        raise MiniMaxResponseError(
+                            "delegation cannot be mixed with a tool-call batch"
+                        )
+                    try:
+                        delegation = DelegationTurn(
                             agent_id=arguments["agent_id"],
                             task=arguments["task"],
                             usage=usage,
                         )
+                    except (KeyError, TypeError, ValueError) as error:
+                        raise MiniMaxResponseError(
+                            "model provider returned invalid delegation"
+                        ) from error
+                    continue
+                tool = name_to_tool.get(str(name))
+                if tool is None:
+                    raise MiniMaxResponseError("model provider returned an unknown function")
+                parsed_calls.append(
+                    ToolCallTurn(
+                        call_id=str(call.get("id")) if call.get("id") else None,
+                        tool_id=tool.tool_id,
+                        arguments=arguments,
                     )
-                except (KeyError, TypeError, ValueError) as error:
-                    raise MiniMaxResponseError(
-                        "model provider returned invalid delegation"
-                    ) from error
-            tool = name_to_tool.get(str(name))
-            if tool is None:
-                raise MiniMaxResponseError("model provider returned an unknown function")
-            return completed(
-                ToolCallTurn(
-                    call_id=str(call.get("id")) if call.get("id") else None,
-                    tool_id=tool.tool_id,
-                    arguments=arguments,
-                    usage=usage,
                 )
-            )
+            if delegation is not None:
+                return completed(delegation)
+            if len(parsed_calls) == 1:
+                return completed(parsed_calls[0].model_copy(update={"usage": usage}))
+            return completed(ToolCallBatchTurn(calls=tuple(parsed_calls), usage=usage))
         content = message.get("content")
         if not isinstance(content, str):
             raise MiniMaxResponseError("model provider returned neither text nor a tool call")
@@ -436,10 +486,17 @@ def _assistant_turn(content: str) -> ModelTurn | None:
         value = json.loads(content)
     except ValueError:
         return None
-    if not isinstance(value, dict) or value.get("kind") != "tool_call":
+    if not isinstance(value, dict) or value.get("kind") not in {
+        "tool_call",
+        "tool_call_batch",
+    }:
         return None
     try:
-        return ToolCallTurn.model_validate(value)
+        return (
+            ToolCallTurn.model_validate(value)
+            if value.get("kind") == "tool_call"
+            else ToolCallBatchTurn.model_validate(value)
+        )
     except ValueError:
         return None
 
@@ -449,7 +506,11 @@ def _assistant_requires_continuation(content: str) -> bool:
         value = json.loads(content)
     except ValueError:
         return False
-    return isinstance(value, dict) and value.get("kind") in {"tool_call", "delegation"}
+    return isinstance(value, dict) and value.get("kind") in {
+        "tool_call",
+        "tool_call_batch",
+        "delegation",
+    }
 
 
 def _arguments(value: Any) -> dict[str, Any]:
@@ -462,10 +523,31 @@ def _arguments(value: Any) -> dict[str, Any]:
     return parsed
 
 
-def _usage(value: Any) -> ModelUsage:
+def _usage(value: Any, token_price: ModelTokenPrice | None) -> ModelUsage:
     if not isinstance(value, dict):
         return ModelUsage()
+    if "prompt_tokens" not in value or "completion_tokens" not in value:
+        return ModelUsage()
+    input_tokens = value["prompt_tokens"]
+    output_tokens = value["completion_tokens"]
+    if (
+        not isinstance(input_tokens, int)
+        or isinstance(input_tokens, bool)
+        or not isinstance(output_tokens, int)
+        or isinstance(output_tokens, bool)
+    ):
+        return ModelUsage()
+    if input_tokens < 0 or output_tokens < 0:
+        return ModelUsage()
     return ModelUsage(
-        input_tokens=max(0, int(value.get("prompt_tokens") or 0)),
-        output_tokens=max(0, int(value.get("completion_tokens") or 0)),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=(
+            token_price.estimate_usd(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+            if token_price is not None
+            else None
+        ),
     )

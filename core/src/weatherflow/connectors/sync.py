@@ -45,10 +45,12 @@ class ConnectorSyncService:
         self.timezone = timezone
 
     async def sync(self, workspace_id: str, connector: ConnectorKind) -> ConnectorSnapshot:
+        if not CONNECTOR_DEFINITIONS[connector].auto_fetch_supported:
+            raise LookupError(f"automatic fetch unsupported: {connector.value}")
         binding = await self.repository.get_binding(workspace_id, connector)
         if binding is None or not binding.enabled:
             raise LookupError(f"connector binding unavailable: {connector.value}")
-        account = await self.repository.get_account_by_id(binding.account_id)
+        account = await self.repository.get_account_by_id(workspace_id, binding.account_id)
         if account is None or account.phase is not ConnectionPhase.ACTIVE:
             raise LookupError(f"connector account unavailable: {connector.value}")
         observed = self.now()
@@ -149,11 +151,12 @@ class ConnectorSyncService:
                     "include_payload": False,
                 },
             )
-        else:
+        elif connector is ConnectorKind.GOOGLE_CALENDAR:
             data = await self.gateway.execute_read_action(
                 action=definition.read_actions[0],
                 connected_account_id=connected_account_id,
                 arguments={
+                    "calendarId": "primary",
                     "timeMin": observed.isoformat(),
                     "timeMax": (observed + timedelta(days=14)).isoformat(),
                     "singleEvents": True,
@@ -161,6 +164,8 @@ class ConnectorSyncService:
                     "maxResults": 50,
                 },
             )
+        else:
+            raise LookupError(f"automatic fetch unsupported: {connector.value}")
         return [
             item
             for raw in _item_rows(data)[:100]

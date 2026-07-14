@@ -11,6 +11,7 @@ class LoopStatus(StrEnum):
     FAILED = "failed"
     NEEDS_REVIEW = "needs_review"
     PAUSED = "paused"
+    WAITING_USER = "waiting_user"
 
 
 class LoopOutcome(BaseModel):

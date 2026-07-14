@@ -13,8 +13,20 @@ def tool_values() -> dict[str, object]:
     return {
         "tool_id": "files.write",
         "description": "Write a file inside the workspace",
-        "input_schema": {"type": "object", "required": ["path"]},
-        "output_schema": {"type": "object"},
+        "input_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "output_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"written": {"type": "boolean"}},
+            "required": ["written"],
+            "additionalProperties": False,
+        },
         "effect": "workspace_write",
         "required_scopes": ["workspace:write"],
         "idempotency": "key",
@@ -59,4 +71,16 @@ def test_unknown_effect_is_rejected() -> None:
     values["effect"] = "mystery"
 
     with pytest.raises(ValidationError):
+        ToolSpec.model_validate(values)
+
+
+@pytest.mark.parametrize("field", ["input_schema", "output_schema"])
+def test_invalid_draft_2020_12_tool_schema_is_rejected(field: str) -> None:
+    values = tool_values()
+    values[field] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "definitely-not-a-json-type",
+    }
+
+    with pytest.raises(ValidationError, match="Draft 2020-12"):
         ToolSpec.model_validate(values)

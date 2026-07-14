@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,11 +39,15 @@ from weatherflow.config import Settings
 from weatherflow.connectors import (
     COMPOSIO_CREDENTIAL,
     ComposioGateway,
+    ComposioToolExecutor,
+    ConnectionPhase,
+    ConnectorBinding,
     ConnectorGateway,
     ConnectorKind,
     ConnectorRepository,
     ConnectorService,
     ConnectorSyncService,
+    composio_tool_specs,
 )
 from weatherflow.continuations import (
     ContinuationCipher,
@@ -76,7 +81,12 @@ from weatherflow.models import (
     ModelProvider,
     RunModelRouteRepository,
 )
-from weatherflow.operations import DiagnosticsService, OnboardingService, PrivacyService
+from weatherflow.operations import (
+    DiagnosticsService,
+    InstallationApprovalService,
+    OnboardingService,
+    PrivacyService,
+)
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime import (
@@ -97,6 +107,7 @@ from weatherflow.runtime import (
     WorkerCoordinator,
     builtin_worker_definitions,
 )
+from weatherflow.sessions import ConversationSessionDeletion, ConversationSessionRepository
 from weatherflow.storage import Database
 from weatherflow.trust import (
     ActionRepository,
@@ -121,10 +132,12 @@ class RuntimeContainer:
     default_workspace: Workspace
     ledger: EventLedger
     runs: RunRepository
+    sessions: ConversationSessionRepository
     run_coordinator: RunCoordinator
     actions: ActionRepository
     approvals: ApprovalRepository
     approval_coordinator: ApprovalCoordinator
+    installation_approvals: InstallationApprovalService
     snapshots: CapabilitySnapshotRepository
     capability_coordinator: CapabilitySnapshotCoordinator
     checkpoints: RunCheckpointRepository
@@ -161,6 +174,8 @@ class RuntimeContainer:
     background_tasks: dict[str, asyncio.Task[LoopOutcome]]
     connector_sync_task: asyncio.Task[None] | None = None
     background_started: bool = False
+    background_closing: bool = False
+    background_closed: bool = False
 
     @classmethod
     async def create(
@@ -202,7 +217,8 @@ class RuntimeContainer:
 
         ledger = EventLedger(database)
         runs = RunRepository(database)
-        run_coordinator = RunCoordinator(database, runs, ledger)
+        sessions = ConversationSessionRepository(database)
+        run_coordinator = RunCoordinator(database, runs, ledger, sessions=sessions)
         actions = ActionRepository(database)
         approvals = ApprovalRepository(database)
         policy = SupervisedPolicy()
@@ -308,10 +324,18 @@ class RuntimeContainer:
         )
         if use_builtin_pack_resolution:
             resolved_catalog.register(package_install_tool_spec())
+            for tool in composio_tool_specs():
+                resolved_catalog.register(tool)
         resolved_model = model or EchoModelAdapter()
         use_configured_model_routing = model is None
         executors = ToolExecutorRegistry()
         if use_builtin_pack_resolution:
+            composio_executor = ComposioToolExecutor(
+                repository=connector_repository,
+                gateway=resolved_connector_gateway,
+            )
+            for tool in composio_tool_specs():
+                executors.register(tool.tool_id, composio_executor)
             install_executor = PackageInstallExecutor(
                 database=database,
                 workspaces=workspaces,
@@ -361,6 +385,17 @@ class RuntimeContainer:
             ledger=ledger,
             policy=policy,
         )
+        installation_approvals = InstallationApprovalService(
+            workspaces=workspaces,
+            runs=runs,
+            run_coordinator=run_coordinator,
+            actions=actions,
+            approvals=approvals,
+            approval_coordinator=approval_coordinator,
+            action_execution=action_execution,
+            skill_catalog=skill_catalog,
+            mcp_management=mcp_management,
+        )
         workers = WorkerCoordinator(
             database=database,
             runs=runs,
@@ -372,6 +407,7 @@ class RuntimeContainer:
             checkpoints=checkpoints,
             definitions=builtin_worker_definitions(),
             model_routes=(model_configurations if use_configured_model_routing else None),
+            connector_routes=connector_repository,
         )
         loop = SharedTurnLoop(
             database=database,
@@ -422,10 +458,12 @@ class RuntimeContainer:
             default_workspace=default_workspace,
             ledger=ledger,
             runs=runs,
+            sessions=sessions,
             run_coordinator=run_coordinator,
             actions=actions,
             approvals=approvals,
             approval_coordinator=approval_coordinator,
+            installation_approvals=installation_approvals,
             snapshots=snapshots,
             capability_coordinator=capability_coordinator,
             checkpoints=checkpoints,
@@ -462,6 +500,7 @@ class RuntimeContainer:
             background_tasks={},
         )
         container_ref = container
+        await container.installation_approvals.recover_executing()
         await container._audit_startup_recovery()
         return container
 
@@ -508,6 +547,7 @@ class RuntimeContainer:
         include_connector_sync: bool = True,
         include_automation_scheduler: bool = True,
     ) -> None:
+        self._require_background_open()
         if self.background_started:
             if include_automation_scheduler:
                 await self.automation_scheduler.start()
@@ -516,7 +556,9 @@ class RuntimeContainer:
             return
         self.background_started = True
         for workspace in await self.workspaces.list_all():
+            self._require_background_open()
             await self._restore_workspace_mcp(workspace)
+        self._require_background_open()
         if include_automation_scheduler:
             await self.automation_scheduler.start()
         recoverable = {
@@ -526,26 +568,75 @@ class RuntimeContainer:
             RunStatus.PAUSED,
         }
         for run in await self.runs.list_recent(limit=1000):
+            self._require_background_open()
             if run.status in recoverable:
+                if await self.installation_approvals.action_for_run(run.id) is not None:
+                    continue
                 self.schedule_run(run.id)
         if include_connector_sync:
             self.start_connector_background()
 
     async def stop_background(self) -> None:
+        if self.background_closed:
+            await self.await_background()
+            return
+        if self.background_closing:
+            await self.await_background()
+            return
+        self.background_closing = True
+        try:
+            await self._shutdown_background()
+        finally:
+            self.background_closing = False
+
+    async def close(self) -> None:
+        """Permanently stop this runtime and await every daemon-owned Run task."""
+
+        if self.background_closed:
+            await self.await_background()
+            return
+        self.background_closed = True
+        self.background_closing = True
+        try:
+            await self._shutdown_background()
+        finally:
+            self.background_closing = False
+
+    async def _shutdown_background(self) -> None:
         self.background_started = False
         await self.automation_scheduler.stop()
-        await self.mcp_management.close()
         connector_task = self.connector_sync_task
         self.connector_sync_task = None
-        tasks = [*self.background_tasks.values()]
-        if connector_task is not None:
-            tasks.append(connector_task)
+        tasks = set(self.background_tasks.values())
+        if connector_task is not None and not connector_task.done():
+            connector_task.cancel()
         for task in tasks:
             if not task.done():
                 task.cancel()
-        if tasks:
+        await self.await_background()
+        if connector_task is not None:
+            await asyncio.gather(connector_task, return_exceptions=True)
+        # Tool clients are a dependency of Run execution, so they are closed only
+        # after every tracked Run has completed its cancellation cleanup.
+        await self.mcp_management.close()
+
+    async def await_background(self) -> None:
+        """Wait until all currently and subsequently tracked Run tasks finish."""
+
+        while True:
+            for run_id, task in tuple(self.background_tasks.items()):
+                if task.done() and self.background_tasks.get(run_id) is task:
+                    self.background_tasks.pop(run_id, None)
+            tasks = set(self.background_tasks.values())
+            if not tasks:
+                return
             await asyncio.gather(*tasks, return_exceptions=True)
-        self.background_tasks.clear()
+
+    def _require_background_open(self) -> None:
+        if self.background_closed:
+            raise RuntimeError("runtime container is closed")
+        if self.background_closing:
+            raise RuntimeError("runtime container is closing")
 
     async def enable_mcp(self, preset_id: str, workspace: Workspace) -> MCPConnectionState:
         state = await self.mcp_management.enable(
@@ -583,6 +674,7 @@ class RuntimeContainer:
         )
 
     def start_connector_background(self) -> asyncio.Task[None] | None:
+        self._require_background_open()
         if not self.connector_service.configured():
             return None
         if self.connector_sync_task is not None and not self.connector_sync_task.done():
@@ -598,6 +690,7 @@ class RuntimeContainer:
             await asyncio.sleep(30)
 
     def schedule_run(self, run_id: str) -> asyncio.Task[LoopOutcome]:
+        self._require_background_open()
         existing = self.background_tasks.get(run_id)
         if existing is not None and not existing.done():
             return existing
@@ -608,7 +701,8 @@ class RuntimeContainer:
         self.background_tasks[run_id] = task
 
         def finished(completed: asyncio.Task[LoopOutcome]) -> None:
-            self.background_tasks.pop(run_id, None)
+            if self.background_tasks.get(run_id) is completed:
+                self.background_tasks.pop(run_id, None)
             if not completed.cancelled():
                 completed.exception()
 
@@ -640,6 +734,39 @@ class RuntimeContainer:
             await self.provider_continuations.delete_run_in(connection, run.id)
         return cancelled
 
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> ConversationSessionDeletion:
+        workspace = await self.workspaces.get(workspace_id)
+        if workspace is None:
+            raise LookupError(workspace_id)
+        known_run_ids = await self.sessions.list_run_ids(
+            session_id,
+            workspace_id=workspace_id,
+        )
+        for run_id in known_run_ids:
+            await self.cancel_background_run(run_id)
+        deletion = await self.sessions.delete(session_id, workspace_id=workspace_id)
+        for run_id in deletion.run_ids:
+            if run_id not in known_run_ids:
+                await self.cancel_background_run(run_id)
+        artifact_root = await asyncio.to_thread(Path(workspace.artifact_root).resolve)
+        for blob in deletion.artifacts:
+            if await self.sessions.artifact_digest_in_use(
+                blob.digest,
+                workspace_id=workspace_id,
+            ):
+                continue
+            target = await asyncio.to_thread(
+                lambda relative_path=blob.relative_path: (artifact_root / relative_path).resolve()
+            )
+            if target.is_relative_to(artifact_root):
+                await asyncio.to_thread(target.unlink, missing_ok=True)
+        return deletion
+
     async def wait_for_background_run(
         self,
         run_id: str,
@@ -649,6 +776,7 @@ class RuntimeContainer:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         terminal = {
             RunStatus.WAITING_APPROVAL,
+            RunStatus.WAITING_USER,
             RunStatus.NEEDS_REVIEW,
             RunStatus.SUCCEEDED,
             RunStatus.FAILED,
@@ -738,6 +866,7 @@ class RuntimeContainer:
         user_intent: str,
         client_request_id: str | None = None,
         workspace_id: str | None = None,
+        session_id: str | None = None,
         context_run_id: str | None = None,
         execute: bool = True,
     ) -> tuple[Run, LoopOutcome | None]:
@@ -753,17 +882,27 @@ class RuntimeContainer:
             context_run = await self.runs.get(context_run_id)
             if context_run is None or context_run.workspace_id != workspace.id:
                 raise LookupError(context_run_id)
-        requested_tool_ids = await self._requested_tool_ids(workspace)
+        connector_bindings = await self._active_conversation_bindings(workspace.id)
+        requested_tool_ids = await self._requested_tool_ids(
+            workspace, connector_bindings=connector_bindings
+        )
         run = await self.run_coordinator.create_run(
             client_request_id=client_request_id or str(uuid4()),
             user_intent=user_intent,
             workspace_id=workspace.id,
+            session_id=session_id,
+            budget=workspace.default_budget,
         )
         if self.use_configured_model_routing:
             await self.model_configurations.bind_run(
                 run_id=run.id,
                 workspace_id=workspace.id,
             )
+        await self.connector_repository.freeze_run_routes(
+            run_id=run.id,
+            workspace_id=workspace.id,
+            bindings=connector_bindings,
+        )
         unavailable = sorted(
             tool_id
             for tool_id in requested_tool_ids
@@ -798,12 +937,15 @@ class RuntimeContainer:
         if run.rhythm_snapshot_id is None:
             run = await self._bind_rhythm_context(run, workspace, context_run=context_run)
         if await self.snapshots.get_by_run_id(run.id) is None:
+            effective_workspace = await self._workspace_with_capability_grants(
+                workspace, connector_bindings
+            )
             frozen = await self.capability_coordinator.freeze_for_run(
                 run_id=run.id,
                 expected_run_version=run.version,
                 catalog=self.catalog,
-                catalog_revision="weatherflow-v3-p4",
-                workspace=workspace,
+                catalog_revision="weatherflow-v3-composio-tools-v1",
+                workspace=effective_workspace,
                 requested_tool_ids=requested_tool_ids,
             )
             run = frozen.run
@@ -826,6 +968,10 @@ class RuntimeContainer:
         workspace = await self.workspaces.get(run.workspace_id)
         if workspace is None:
             raise LookupError(run.workspace_id)
+        connector_bindings = await self._active_conversation_bindings(workspace.id)
+        effective_workspace = await self._workspace_with_capability_grants(
+            workspace, connector_bindings
+        )
         try:
             checkpoint = await self.checkpoints.get(run.id)
         except CheckpointCorruptionError:
@@ -866,7 +1012,7 @@ class RuntimeContainer:
         connector_context = checkpoint.state.get("connector_context", []) if checkpoint else []
         outcome = await self.loop.run(
             run_id=run.id,
-            workspace=workspace,
+            workspace=effective_workspace,
             agent=AgentDefinition(
                 agent_id="orchestrator",
                 system_prompt=self._orchestrator_prompt(
@@ -948,6 +1094,11 @@ class RuntimeContainer:
                     "items": [item.model_dump(mode="json") for item in snapshot.items[:5]],
                 }
             )
+        prior_messages: tuple[AgentMessage, ...] = ()
+        if context_run is not None:
+            prior_checkpoint = await self.checkpoints.get(context_run.id)
+            if prior_checkpoint is not None:
+                prior_messages = self._project_follow_up_context(prior_checkpoint.transcript)
         state = {
             "rhythm_snapshot": current.snapshot.model_dump(mode="json"),
             "rhythm_policy": current.policy.model_dump(mode="json"),
@@ -993,6 +1144,7 @@ class RuntimeContainer:
                             )[:4_000],
                         )
                     )
+                    transcript.extend(prior_messages)
                 transcript.append(
                     AgentMessage(
                         role=MessageRole.USER,
@@ -1019,6 +1171,40 @@ class RuntimeContainer:
                 ),
             )
         return updated
+
+    @staticmethod
+    def _project_follow_up_context(
+        transcript: tuple[AgentMessage, ...],
+        *,
+        max_messages: int = 40,
+        max_chars: int = 24_000,
+    ) -> tuple[AgentMessage, ...]:
+        """Carry conversational history without replaying prior tool authority."""
+
+        selected: list[AgentMessage] = []
+        used = 0
+        for message in reversed(transcript):
+            if message.role not in {MessageRole.USER, MessageRole.ASSISTANT}:
+                continue
+            if message.role is MessageRole.ASSISTANT:
+                try:
+                    structured = json.loads(message.content)
+                except (TypeError, ValueError):
+                    structured = None
+                if isinstance(structured, dict) and structured.get("kind") in {
+                    "tool_call",
+                    "tool_call_batch",
+                    "delegation",
+                }:
+                    continue
+            remaining = max_chars - used
+            if remaining <= 0 or len(selected) >= max_messages:
+                break
+            content = message.content[-remaining:]
+            selected.append(AgentMessage(role=message.role, content=content, name=message.name))
+            used += len(content)
+        selected.reverse()
+        return tuple(selected)
 
     @staticmethod
     def _orchestrator_prompt(
@@ -1062,7 +1248,12 @@ class RuntimeContainer:
             )
         return prompt[:12_000]
 
-    async def _requested_tool_ids(self, workspace: Workspace) -> frozenset[str]:
+    async def _requested_tool_ids(
+        self,
+        workspace: Workspace,
+        *,
+        connector_bindings: tuple[ConnectorBinding, ...] | None = None,
+    ) -> frozenset[str]:
         if not self.use_builtin_pack_resolution:
             return frozenset(tool.tool_id for tool in self.catalog.all())
         installed = set(workspace.installed_packs)
@@ -1083,10 +1274,61 @@ class RuntimeContainer:
             raise UnknownCapabilityPackError(sorted(unresolved)[0])
         selected.add("extensions.install")
         selected.update(tool.tool_id for tool in self.mcp_management.active_tools(workspace.id))
+        bindings = (
+            connector_bindings
+            if connector_bindings is not None
+            else await self._active_conversation_bindings(workspace.id)
+        )
+        for binding in bindings:
+            selected.update(binding.conversation_tool_ids)
         return frozenset(selected)
 
+    async def _active_conversation_bindings(
+        self, workspace_id: str
+    ) -> tuple[ConnectorBinding, ...]:
+        active: list[ConnectorBinding] = []
+        for binding in await self.connector_repository.list_bindings(workspace_id):
+            if not binding.enabled or not binding.conversation_tool_ids:
+                continue
+            account = await self.connector_repository.get_account_by_id(
+                workspace_id, binding.account_id
+            )
+            if (
+                account is None
+                or account.phase is not ConnectionPhase.ACTIVE
+                or account.connector is not binding.connector
+            ):
+                continue
+            active.append(binding)
+        return tuple(active)
+
+    async def _workspace_with_capability_grants(
+        self,
+        workspace: Workspace,
+        bindings: tuple[ConnectorBinding, ...],
+    ) -> Workspace:
+        from weatherflow.connectors.tools import COMPOSIO_TOOLS_BY_ID
+
+        scopes = set(workspace.granted_scopes)
+        scopes.update(await self.mcp_management.effective_scopes(workspace.id))
+        for binding in bindings:
+            for tool_id in binding.conversation_tool_ids:
+                definition = COMPOSIO_TOOLS_BY_ID.get(tool_id)
+                if (
+                    definition is not None
+                    and definition.connector is binding.connector
+                    and definition.required_scope in binding.granted_scopes
+                ):
+                    scopes.add(definition.required_scope)
+        return workspace.model_copy(update={"granted_scopes": frozenset(scopes)})
+
     async def _audit_startup_recovery(self) -> None:
-        terminal = {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
+        terminal = {
+            RunStatus.WAITING_USER,
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }
         for run in await self.runs.list_recent(limit=1000):
             if run.status in terminal:
                 continue

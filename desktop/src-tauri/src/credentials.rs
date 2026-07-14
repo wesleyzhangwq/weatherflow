@@ -23,6 +23,8 @@ pub enum CredentialProvider {
     Zhipu,
     Siliconflow,
     Stepfun,
+    Openai,
+    Anthropic,
     Composio,
     ProviderContinuations,
 }
@@ -37,6 +39,8 @@ impl CredentialProvider {
             Self::Zhipu => "ai.weatherflow.zhipu",
             Self::Siliconflow => "ai.weatherflow.siliconflow",
             Self::Stepfun => "ai.weatherflow.stepfun",
+            Self::Openai => "ai.weatherflow.openai",
+            Self::Anthropic => "ai.weatherflow.anthropic",
             Self::Composio => "ai.weatherflow.composio",
             Self::ProviderContinuations => "ai.weatherflow.provider_continuations",
         }
@@ -450,6 +454,21 @@ mod tests {
                 .unwrap()
                 .key_present
         );
+    }
+
+    #[test]
+    fn foreign_model_providers_are_fixed_renderer_accessible_keychain_items() {
+        let backend = Arc::new(MemoryBackend::default());
+        let path = broker_socket_path();
+        let server = CredentialBrokerServer::start(backend, path).unwrap();
+
+        for provider in [CredentialProvider::Openai, CredentialProvider::Anthropic] {
+            let status = server.set(provider, "provider-secret").unwrap();
+            assert_eq!(status.provider, provider);
+            assert!(status.key_present);
+            assert!(server.status(provider).unwrap().key_present);
+            assert!(!server.delete(provider).unwrap().key_present);
+        }
     }
 
     #[test]

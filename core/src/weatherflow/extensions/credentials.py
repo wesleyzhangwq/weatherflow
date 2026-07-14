@@ -16,6 +16,8 @@ NATIVE_CREDENTIAL_NAMES = {
     "zhipu": "api_key",
     "siliconflow": "api_key",
     "stepfun": "api_key",
+    "openai": "api_key",
+    "anthropic": "api_key",
     "composio": "project_api_key",
     "provider_continuations": "encryption_key_v1",
 }

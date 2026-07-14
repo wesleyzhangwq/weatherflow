@@ -102,6 +102,8 @@ async def test_provider_catalog_and_generic_configuration_api(
         "zhipu",
         "siliconflow",
         "stepfun",
+        "openai",
+        "anthropic",
     }
     assert response.status_code == 200
     request_schema = openapi.json()["components"]["schemas"]["ModelConfigureRequest"]

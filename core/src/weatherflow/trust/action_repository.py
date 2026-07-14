@@ -56,6 +56,27 @@ class ActionRepository:
         async with self.database.connect() as connection:
             return await self.get_by_idempotency_key_in(connection, value)
 
+    async def get_by_run_id(self, run_id: str) -> Action | None:
+        async with self.database.connect() as connection:
+            row = await (
+                await connection.execute(
+                    "SELECT * FROM actions WHERE run_id = ? ORDER BY created_at, id LIMIT 1",
+                    (run_id,),
+                )
+            ).fetchone()
+        return self._from_row(row) if row else None
+
+    async def list_all(self, *, status: ActionStatus | None = None) -> list[Action]:
+        query = "SELECT * FROM actions"
+        parameters: tuple[str, ...] = ()
+        if status is not None:
+            query += " WHERE status = ?"
+            parameters = (status.value,)
+        query += " ORDER BY created_at, id"
+        async with self.database.connect() as connection:
+            rows = await (await connection.execute(query, parameters)).fetchall()
+        return [self._from_row(row) for row in rows]
+
     async def get_by_idempotency_key_in(
         self, connection: aiosqlite.Connection, value: str
     ) -> Action | None:

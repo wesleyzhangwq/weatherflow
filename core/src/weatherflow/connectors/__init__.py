@@ -1,4 +1,5 @@
 from weatherflow.connectors.composio import (
+    COMPOSIO_ACTION_VERSIONS,
     ComposioErrorCode,
     ComposioGateway,
     ComposioGatewayError,
@@ -16,6 +17,9 @@ from weatherflow.connectors.models import (
     ConnectorKind,
     ConnectorSnapshot,
     ConnectorStatus,
+    ConversationAccess,
+    OAuthSetup,
+    RunConnectorRoute,
     SourceItem,
 )
 from weatherflow.connectors.repository import ConnectorRepository
@@ -25,8 +29,15 @@ from weatherflow.connectors.service import (
     ConnectorService,
 )
 from weatherflow.connectors.sync import ConnectorSyncService
+from weatherflow.connectors.tools import (
+    COMPOSIO_TOOL_DEFINITIONS,
+    ComposioToolExecutor,
+    composio_tool_ids,
+    composio_tool_specs,
+)
 
 __all__ = [
+    "COMPOSIO_ACTION_VERSIONS",
     "CONNECTOR_DEFINITIONS",
     "COMPOSIO_CREDENTIAL",
     "ComposioErrorCode",
@@ -34,8 +45,11 @@ __all__ = [
     "ComposioRemoteAccount",
     "ComposioGateway",
     "ComposioGatewayError",
+    "ComposioToolExecutor",
+    "COMPOSIO_TOOL_DEFINITIONS",
     "ConnectionAttempt",
     "ConnectionPhase",
+    "ConversationAccess",
     "ConnectHandoff",
     "ConnectorAccount",
     "ConnectorBinding",
@@ -45,7 +59,11 @@ __all__ = [
     "ConnectorRepository",
     "ConnectorSnapshot",
     "ConnectorStatus",
+    "OAuthSetup",
+    "RunConnectorRoute",
     "ConnectorService",
     "ConnectorSyncService",
     "SourceItem",
+    "composio_tool_ids",
+    "composio_tool_specs",
 ]

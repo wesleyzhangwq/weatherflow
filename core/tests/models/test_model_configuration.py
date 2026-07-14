@@ -1,18 +1,22 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
 
 from weatherflow.events import EventLedger
-from weatherflow.extensions import CredentialRef, KeyringCredentialStore
+from weatherflow.extensions import CredentialBroker, CredentialRef, KeyringCredentialStore
 from weatherflow.models import (
+    AnthropicMessagesAdapter,
     MiniMaxAdapter,
     MiniMaxAuthenticationError,
+    ModelConfiguration,
     ModelConfigurationRepository,
     ModelConfigurationService,
     ModelProvider,
     OpenAICompatibleAdapter,
+    OpenAIResponsesAdapter,
     ProviderModel,
     provider_presets,
 )
@@ -187,6 +191,8 @@ def test_mainland_provider_presets_expose_current_official_agent_models() -> Non
         ModelProvider.ZHIPU,
         ModelProvider.SILICONFLOW,
         ModelProvider.STEPFUN,
+        ModelProvider.OPENAI,
+        ModelProvider.ANTHROPIC,
     }
     assert presets[ModelProvider.DEEPSEEK].default_model == "deepseek-v4-flash"
     assert presets[ModelProvider.MINIMAX].suggested_models[:3] == (
@@ -219,6 +225,19 @@ def test_mainland_provider_presets_expose_current_official_agent_models() -> Non
         presets[ModelProvider.QWEN].base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     assert all(preset.base_url.startswith("https://") for preset in presets.values())
+    assert presets[ModelProvider.OPENAI].base_url == "https://api.openai.com/v1"
+    assert presets[ModelProvider.OPENAI].suggested_models[:3] == (
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    )
+    assert presets[ModelProvider.ANTHROPIC].base_url == "https://api.anthropic.com/v1"
+    assert presets[ModelProvider.ANTHROPIC].suggested_models == (
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001",
+    )
 
 
 async def test_first_party_catalog_keeps_only_documented_maintained_models(
@@ -310,6 +329,39 @@ async def test_generic_provider_configuration_uses_shared_compatible_adapter(
     events = await ledger.list_stream("workspace", workspace.id, limit=100)
     assert SECRET not in "".join(event.model_dump_json() for event in events)
     assert (await ModelConfigurationRepository(database).get(workspace.id)) == configuration
+
+
+async def test_openai_and_anthropic_use_their_official_wire_adapters(tmp_path: Path) -> None:
+    backend = FakeKeyring()
+    _, workspace, _, store, service = await setup(tmp_path, backend)
+
+    store.set(CredentialRef(provider="openai", name="api_key"), SECRET)
+    openai = service._adapter(
+        ModelConfiguration(
+            workspace_id=workspace.id,
+            provider=ModelProvider.OPENAI,
+            model="gpt-5.6-terra",
+            base_url="https://api.openai.com/v1",
+            credential_ref=CredentialRef(provider="openai", name="api_key"),
+            updated_at=datetime.now(UTC),
+        ),
+        CredentialBroker(store),
+    )
+    assert isinstance(openai, OpenAIResponsesAdapter)
+
+    store.set(CredentialRef(provider="anthropic", name="api_key"), SECRET)
+    anthropic = service._adapter(
+        ModelConfiguration(
+            workspace_id=workspace.id,
+            provider=ModelProvider.ANTHROPIC,
+            model="claude-sonnet-5",
+            base_url="https://api.anthropic.com/v1",
+            credential_ref=CredentialRef(provider="anthropic", name="api_key"),
+            updated_at=datetime.now(UTC),
+        ),
+        CredentialBroker(store),
+    )
+    assert isinstance(anthropic, AnthropicMessagesAdapter)
 
 
 async def test_status_stays_available_when_keychain_access_is_denied(tmp_path: Path) -> None:

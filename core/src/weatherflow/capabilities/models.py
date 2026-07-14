@@ -1,7 +1,9 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ToolEffect(StrEnum):
@@ -41,3 +43,12 @@ class ToolSpec(BaseModel):
     source: str = Field(min_length=1)
     source_version: str = Field(min_length=1)
     health: ToolHealth = ToolHealth.AVAILABLE
+
+    @field_validator("input_schema", "output_schema")
+    @classmethod
+    def require_valid_draft_2020_12_schema(cls, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            Draft202012Validator.check_schema(value)
+        except SchemaError as error:
+            raise ValueError("tool schema must be valid JSON Schema Draft 2020-12") from error
+        return value

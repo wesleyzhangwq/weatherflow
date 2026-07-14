@@ -22,6 +22,7 @@ from weatherflow.runtime import (
     MessageRole,
     ModelCompletion,
     ModelRequest,
+    ToolCallBatchTurn,
     ToolCallTurn,
 )
 
@@ -83,6 +84,17 @@ def m2_adapter(handler, model: str = "MiniMax-M2.7") -> MiniMaxAdapter:
     )
 
 
+def official_adapter(handler, model: str) -> MiniMaxAdapter:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return MiniMaxAdapter(
+        broker=CredentialBroker(MappingCredentialStore({"minimax.api_key": SECRET})),
+        credential_ref=CredentialRef(provider="minimax", name="api_key"),
+        model=model,
+        base_url="https://api.minimax.io/v1",
+        client=client,
+    )
+
+
 async def test_final_text_and_usage_are_provider_neutral() -> None:
     async def handler(http_request: httpx.Request) -> httpx.Response:
         assert http_request.url == "https://api.minimax.test/v1/chat/completions"
@@ -94,7 +106,7 @@ async def test_final_text_and_usage_are_provider_neutral() -> None:
         assert body["messages"][0]["content"].startswith(
             "Complete the explicit goal without widening authority."
         )
-        assert "at most one tool" in body["messages"][0]["content"]
+        assert "multiple independent tools" in body["messages"][0]["content"]
         assert body["messages"][1]["role"] == "user"
         assert all("developer.read_file" != tool["function"]["name"] for tool in body["tools"])
         return httpx.Response(
@@ -111,6 +123,86 @@ async def test_final_text_and_usage_are_provider_neutral() -> None:
         content="Done",
         usage={"input_tokens": 12, "output_tokens": 4},
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("MiniMax-M3", 0.0000015),
+        ("MiniMax-M2.7", 0.0000015),
+        ("MiniMax-M2.7-highspeed", 0.000003),
+        ("MiniMax-M2.5", 0.0000015),
+        ("MiniMax-M2.5-highspeed", 0.000003),
+        ("MiniMax-M2.1", 0.0000015),
+        ("MiniMax-M2.1-highspeed", 0.000003),
+        ("MiniMax-M2", 0.0000015),
+    ],
+)
+async def test_official_minimax_models_report_paygo_equivalent_cost(
+    model: str,
+    expected_cost: float,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    completion = await official_adapter(handler, model).complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.input_tokens == 1
+    assert turn.usage.output_tokens == 1
+    assert turn.usage.cost_usd == pytest.approx(expected_cost)
+
+
+async def test_custom_minimax_origin_does_not_assume_official_pricing() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+            },
+        )
+
+    turn = await adapter(handler).complete(request())
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.cost_usd is None
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {},
+        {"prompt_tokens": 1.5, "completion_tokens": 1},
+        {"prompt_tokens": -1, "completion_tokens": 1},
+    ],
+)
+async def test_official_minimax_invalid_usage_does_not_assume_zero_cost(
+    usage: dict[str, object],
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": usage,
+            },
+        )
+
+    adapter = official_adapter(handler, model="MiniMax-M3")
+    turn = await adapter.complete(request())
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.input_tokens == 0
+    assert turn.usage.output_tokens == 0
+    assert turn.usage.cost_usd is None
 
 
 async def test_generic_compatible_provider_omits_minimax_only_fields() -> None:
@@ -174,6 +266,65 @@ async def test_dotted_tool_ids_round_trip_through_safe_function_names() -> None:
         call_id="call-1",
         tool_id="developer.read_file",
         arguments={"path": "README.md"},
+    )
+
+
+async def test_multiple_provider_tool_calls_become_one_ordered_batch() -> None:
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        body = json.loads(http_request.content)
+        function_name = next(
+            tool["function"]["name"]
+            for tool in body["tools"]
+            if tool["function"]["description"] == "Read a scoped file"
+        )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call-a",
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_name,
+                                        "arguments": '{"path":"A.md"}',
+                                    },
+                                },
+                                {
+                                    "id": "call-b",
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_name,
+                                        "arguments": '{"path":"B.md"}',
+                                    },
+                                },
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 3},
+            },
+        )
+
+    turn = await adapter(handler).complete(request())
+
+    assert turn == ToolCallBatchTurn(
+        calls=(
+            ToolCallTurn(
+                call_id="call-a",
+                tool_id="developer.read_file",
+                arguments={"path": "A.md"},
+            ),
+            ToolCallTurn(
+                call_id="call-b",
+                tool_id="developer.read_file",
+                arguments={"path": "B.md"},
+            ),
+        ),
+        usage={"input_tokens": 8, "output_tokens": 3},
     )
 
 

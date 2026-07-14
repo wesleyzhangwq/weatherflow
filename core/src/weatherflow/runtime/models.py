@@ -53,6 +53,14 @@ class ToolCallTurn(BaseModel):
     usage: ModelUsage = ModelUsage()
 
 
+class ToolCallBatchTurn(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["tool_call_batch"] = "tool_call_batch"
+    calls: tuple[ToolCallTurn, ...] = Field(min_length=1, max_length=8)
+    usage: ModelUsage = ModelUsage()
+
+
 class DelegationTurn(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -63,7 +71,7 @@ class DelegationTurn(BaseModel):
 
 
 ModelTurn = Annotated[
-    FinalTurn | ToolCallTurn | DelegationTurn,
+    FinalTurn | ToolCallTurn | ToolCallBatchTurn | DelegationTurn,
     Field(discriminator="kind"),
 ]
 

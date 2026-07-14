@@ -61,11 +61,22 @@ export interface RhythmInsights {
 export interface Run {
   id: string;
   workspace_id: string;
+  session_id?: string | null;
   user_intent: string;
   status: RunStatus;
   result_summary: string | null;
   error_class?: string | null;
   error_message?: string | null;
+  updated_at: string;
+}
+
+export interface Session {
+  id: string;
+  workspace_id: string;
+  title: string;
+  pinned: boolean;
+  latest_run_id: string | null;
+  created_at: string;
   updated_at: string;
 }
 
@@ -92,6 +103,14 @@ export interface Approval {
   version: number;
   tool_id: string;
   effect: string;
+  preview: Record<string, unknown>;
+}
+export interface InstallApprovalRequest {
+  status: "needs_approval";
+  action_id: string;
+  approval_id: string;
+  approval_version: number;
+  run_id: string;
   preview: Record<string, unknown>;
 }
 export interface LedgerEvent { id: string; type: string; recorded_at: string; payload: Record<string, unknown> }
@@ -126,15 +145,26 @@ export interface ModelConfigurationResponse { configuration: { workspace_id: str
 export interface ResetPreview { category: string; count: number }
 export interface ResetResult { category: string; deleted_count: number }
 export interface DiagnosticExport { path: string; sha256: string; size_bytes: number }
-export type ConnectorKind = "github" | "gmail" | "google_calendar";
+export type ConnectorKind =
+  | "github" | "gmail" | "google_calendar" | "slack" | "notion"
+  | "google_drive" | "google_sheets" | "outlook" | "one_drive"
+  | "microsoft_teams" | "linear" | "jira" | "confluence" | "dropbox"
+  | "gitlab" | "discord" | "trello" | "asana" | "airtable" | "clickup";
 export type ConnectionPhase = "waiting_user" | "active" | "expired" | "error" | "revoked";
+export type ConnectorConversationAccess = "disabled" | "read" | "read_write";
+export type OAuthSetup = "managed" | "bring_your_own" | "unknown";
 export interface ConnectorStatus {
   connector: ConnectorKind;
   label: string;
+  category: string;
+  toolkit: string;
+  oauth_setup: OAuthSetup;
   phase: ConnectionPhase | null;
   configured: boolean;
   connected: boolean;
   display_name: string | null;
+  auto_fetch_supported: boolean;
+  conversation_tools_supported: boolean;
   auto_fetch_enabled: boolean;
   interval_minutes: number;
   last_sync_at: string | null;
@@ -142,6 +172,8 @@ export interface ConnectorStatus {
   last_error_code: string | null;
   attempt_id: string | null;
   attempt_expires_at: string | null;
+  conversation_access: ConnectorConversationAccess;
+  allowed_tool_ids: string[];
 }
 export interface ConnectHandoff { attempt_id: string; connect_url: string; expires_at: string }
 export interface ConnectionAttempt {

@@ -1,6 +1,6 @@
 """Durable Run contracts and deterministic transitions."""
 
-from weatherflow.runs.coordinator import RunCoordinator
+from weatherflow.runs.coordinator import RunCoordinator, RunIdempotencyConflict
 from weatherflow.runs.models import InvalidTransitionError, Run, RunBudget, RunStatus
 from weatherflow.runs.repository import (
     DuplicateRunError,
@@ -15,6 +15,7 @@ __all__ = [
     "Run",
     "RunBudget",
     "RunCoordinator",
+    "RunIdempotencyConflict",
     "RunNotFoundError",
     "RunRepository",
     "RunStatus",

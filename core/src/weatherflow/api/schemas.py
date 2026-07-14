@@ -1,10 +1,11 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from weatherflow.automations import ScheduleSpec
 from weatherflow.capabilities import ToolEffect
+from weatherflow.connectors import ConversationAccess
 from weatherflow.models import ModelConfiguration, ModelProvider, ModelStatus, ProviderPreset
 from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import Run
@@ -26,8 +27,29 @@ class RunCreateRequest(BaseModel):
     user_intent: str
     client_request_id: str | None = None
     workspace_id: str
+    session_id: str | None = None
     context_run_id: str | None = None
     execute: bool = False
+
+
+class SessionCreateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    workspace_id: str
+    title: str = Field(default="新对话", min_length=1, max_length=160)
+
+
+class SessionUpdateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    pinned: bool | None = None
+
+    @model_validator(mode="after")
+    def has_update(self) -> "SessionUpdateRequest":
+        if self.title is None and self.pinned is None:
+            raise ValueError("at least one session field must be updated")
+        return self
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -38,10 +60,11 @@ class WorkspaceCreateRequest(BaseModel):
 
 
 class ApprovalDecisionRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision: Literal["approve", "deny"]
     expected_version: int
+    workspace_id: str | None = None
     rationale: str | None = None
     resume: bool = True
 
@@ -122,6 +145,12 @@ class ConnectorSettingsRequest(BaseModel):
     interval_minutes: int = Field(ge=15, le=1440)
 
 
+class ConnectorConversationAccessRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    conversation_access: ConversationAccess
+
+
 class ConnectorDisconnectRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -161,11 +190,26 @@ class SkillMutationRequest(BaseModel):
     confirm: bool = False
 
 
+class SkillInstallRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_id: str
+    expected_workspace_version: int = Field(ge=0)
+    client_request_id: str = Field(min_length=1, max_length=200)
+
+
 class MCPMutationRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     workspace_id: str
     confirm: bool = False
+
+
+class MCPInstallRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_id: str
+    client_request_id: str = Field(min_length=1, max_length=200)
 
 
 class MCPPresetView(BaseModel):

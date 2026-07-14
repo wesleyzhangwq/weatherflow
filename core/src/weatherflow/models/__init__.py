@@ -1,5 +1,12 @@
 """Provider adapters for WeatherFlow's provider-neutral model protocol."""
 
+from weatherflow.models.anthropic import (
+    AnthropicAuthenticationError,
+    AnthropicError,
+    AnthropicMessagesAdapter,
+    AnthropicResponseError,
+    AnthropicRetryableError,
+)
 from weatherflow.models.configuration import (
     ModelConfiguration,
     ModelConfigurationRepository,
@@ -21,6 +28,13 @@ from weatherflow.models.minimax import (
     MiniMaxRetryableError,
     OpenAICompatibleAdapter,
 )
+from weatherflow.models.openai import (
+    OpenAIAuthenticationError,
+    OpenAIError,
+    OpenAIResponseError,
+    OpenAIResponsesAdapter,
+    OpenAIRetryableError,
+)
 
 __all__ = [
     "MiniMaxAdapter",
@@ -29,6 +43,16 @@ __all__ = [
     "MiniMaxResponseError",
     "MiniMaxRetryableError",
     "OpenAICompatibleAdapter",
+    "OpenAIResponsesAdapter",
+    "OpenAIError",
+    "OpenAIAuthenticationError",
+    "OpenAIResponseError",
+    "OpenAIRetryableError",
+    "AnthropicMessagesAdapter",
+    "AnthropicError",
+    "AnthropicAuthenticationError",
+    "AnthropicResponseError",
+    "AnthropicRetryableError",
     "ModelConfiguration",
     "ModelConfigurationRepository",
     "ModelConfigurationService",

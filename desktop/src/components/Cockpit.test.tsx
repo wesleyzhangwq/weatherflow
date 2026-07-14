@@ -68,7 +68,7 @@ it("groups user-managed agent facilities under the Tools navigation", async () =
   expect(screen.getByRole("button", { name: "Skills" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "MCP Server" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "LLM 模型" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Composio" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "OAuth" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "连接" })).not.toBeInTheDocument();
 });
 
@@ -88,7 +88,7 @@ it("shows explicit operational detail and handles approval", async () => {
   expect(await screen.findByText("Ship release")).toBeInTheDocument();
   expect(await screen.findByText("release.md")).toBeInTheDocument();
   fireEvent.click(await screen.findByRole("button", { name: "批准" }));
-  await waitFor(() => expect(client.decide).toHaveBeenCalledWith("a1", "approve", 0));
+  await waitFor(() => expect(client.decide).toHaveBeenCalledWith("a1", "approve", 0, "w1"));
   fireEvent.click(screen.getByRole("button", { name: "设置" }));
   expect(screen.getByText("等待本机行为授权")).toBeInTheDocument();
 });
@@ -107,6 +107,29 @@ it("requires review then a second explicit click before behavior reset", async (
   expect(client.reset).not.toHaveBeenCalled();
   fireEvent.click(await screen.findByRole("button", { name: "删除 3 条行为记录" }));
   await waitFor(() => expect(client.reset).toHaveBeenCalledWith("behavior", undefined));
+});
+
+it("lets the user switch and persist the desktop theme from Settings", async () => {
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+      model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+  expect(screen.getByRole("radiogroup", { name: "界面主题" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("radio", { name: "深色" }));
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(screen.getByRole("radio", { name: "深色" })).toHaveAttribute("aria-checked", "true");
+
+  fireEvent.click(screen.getByRole("radio", { name: "浅色" }));
+  expect(document.documentElement.dataset.theme).toBe("light");
 });
 
 describe("Cockpit lifecycle", () => {
@@ -143,6 +166,8 @@ it("shows provider switches and enables a provider after one key configuration",
     modelProviders: vi.fn().mockResolvedValue([
       { provider: "minimax", label: "MiniMax", base_url: "https://api.minimaxi.com/v1", default_model: "MiniMax-M3", suggested_models: ["MiniMax-M3", "MiniMax-M2.7"] },
       { provider: "deepseek", label: "DeepSeek", base_url: "https://api.deepseek.com", default_model: "deepseek-v4-flash", suggested_models: ["deepseek-v4-flash", "deepseek-v4-pro"] },
+      { provider: "openai", label: "OpenAI", base_url: "https://api.openai.com/v1", default_model: "gpt-5.6-terra", suggested_models: ["gpt-5.6-terra"] },
+      { provider: "anthropic", label: "Anthropic", base_url: "https://api.anthropic.com/v1", default_model: "claude-sonnet-5", suggested_models: ["claude-sonnet-5"] },
     ]),
     providerModels: vi.fn().mockResolvedValue({ provider: "deepseek", models: [{ id: "deepseek-v4-flash", selectable: true, compatibility: "agent_ready", note: null }, { id: "deepseek-v4-pro", selectable: true, compatibility: "agent_ready", note: null }], source: "provider" }),
     configureModel,
@@ -153,6 +178,8 @@ it("shows provider switches and enables a provider after one key configuration",
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
   fireEvent.click(screen.getByRole("button", { name: "LLM 模型" }));
   const deepseek = await screen.findByRole("switch", { name: "DeepSeek" });
+  expect(screen.getByRole("switch", { name: "OpenAI" })).toHaveAttribute("aria-checked", "false");
+  expect(screen.getByRole("switch", { name: "Anthropic" })).toHaveAttribute("aria-checked", "false");
   expect(deepseek).toHaveAttribute("aria-checked", "false");
   fireEvent.click(deepseek);
 
@@ -258,7 +285,7 @@ it("allows MiniMax M2 models backed by encrypted provider continuations", async 
   credentialStatus.mockRestore();
 });
 
-it("configures Composio and exposes only the three approved read connectors", async () => {
+it("configures the OAuth broker and exposes backend-approved connectors", async () => {
   const setCredential = vi.spyOn(nativeCredentials, "set").mockResolvedValue({ provider: "composio", key_present: true });
   const configureConnectors = vi.fn().mockResolvedValue({ configured: true });
   const connectConnector = vi.fn().mockResolvedValue({
@@ -299,20 +326,21 @@ it("configures Composio and exposes only the three approved read connectors", as
   const opened = vi.fn();
   window.addEventListener("weatherflow:open_connector_url", opened);
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
-  fireEvent.click(screen.getByRole("button", { name: "Composio" }));
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
 
-  expect(await screen.findByText("Composio Direct 连接")).toBeInTheDocument();
-  expect(screen.getByText("GitHub")).toBeInTheDocument();
-  expect(screen.getByText("Gmail")).toBeInTheDocument();
-  expect(screen.getByText("Google Calendar")).toBeInTheDocument();
-  expect(screen.queryByText("Slack")).not.toBeInTheDocument();
+  expect(await screen.findByText("连接你的常用服务")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "查看 GitHub" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "查看 Gmail" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "查看 Google Calendar" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "查看 Slack" })).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("Composio Project API Key"), { target: { value: "cmp_live_secret" } });
   fireEvent.click(screen.getByRole("button", { name: "验证并保存连接密钥" }));
   await waitFor(() => expect(configureConnectors).toHaveBeenCalledWith());
   expect(setCredential).toHaveBeenCalledWith("composio", "cmp_live_secret");
 
-  fireEvent.click(await screen.findByRole("button", { name: "连接 GitHub" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看 GitHub" }));
+  fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
   await waitFor(() => expect(connectConnector).toHaveBeenCalledWith("github", "w1"));
   expect(opened).toHaveBeenCalled();
   window.removeEventListener("weatherflow:open_connector_url", opened);
@@ -351,12 +379,60 @@ it("resumes authoritative polling for a pending connector after the view reopens
   } as unknown as WeatherFlowClient;
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
-  fireEvent.click(screen.getByRole("button", { name: "Composio" }));
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
   await act(async () => { await Promise.resolve(); });
+  fireEvent.click(screen.getByRole("button", { name: "查看 GitHub" }));
   expect(screen.getByRole("button", { name: "连接 GitHub" })).toBeDisabled();
   await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
   expect(connectorAttempt).toHaveBeenCalledWith("attempt-pending");
   vi.useRealTimers();
+});
+
+it("lets the user explicitly grant connector tools to conversations", async () => {
+  const updateConnectorConversationAccess = vi.fn().mockResolvedValue({});
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    connectors: vi.fn().mockResolvedValue([
+      {
+        connector: "github", label: "GitHub", phase: "active", configured: true, connected: true,
+        display_name: "wesz", auto_fetch_enabled: true, interval_minutes: 60, last_sync_at: null,
+        next_sync_at: null, last_error_code: null, attempt_id: null, attempt_expires_at: null,
+        conversation_access: "read", allowed_tool_ids: ["composio.github.search_issues"],
+      },
+      {
+        connector: "gmail", label: "Gmail", phase: null, configured: true, connected: false,
+        display_name: null, auto_fetch_enabled: false, interval_minutes: 60, last_sync_at: null,
+        next_sync_at: null, last_error_code: null, attempt_id: null, attempt_expires_at: null,
+        conversation_access: "disabled", allowed_tool_ids: [],
+      },
+      {
+        connector: "google_calendar", label: "Google Calendar", phase: null, configured: true, connected: false,
+        display_name: null, auto_fetch_enabled: false, interval_minutes: 60, last_sync_at: null,
+        next_sync_at: null, last_error_code: null, attempt_id: null, attempt_expires_at: null,
+        conversation_access: "disabled", allowed_tool_ids: [],
+      },
+    ]),
+    updateConnectorConversationAccess,
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看 GitHub" }));
+
+  expect(await screen.findByRole("group", { name: "GitHub 对话使用权限" })).toBeInTheDocument();
+  expect(screen.getByText("执行前逐次向你确认。", { exact: false })).toBeInTheDocument();
+  expect(screen.getByText("已允许 1 个固定工具")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("radio", { name: "读取并提议操作" }));
+
+  await waitFor(() => expect(updateConnectorConversationAccess).toHaveBeenCalledWith("github", "read_write", "w1"));
 });
 
 it("keeps human weather separate from the current agent task in the conversation header", async () => {
@@ -376,6 +452,136 @@ it("keeps human weather separate from the current agent task in the conversation
 
   expect(await screen.findByLabelText("人的状态天气")).toHaveTextContent("微晴 · 稳定");
   expect(screen.getByLabelText("智能体任务状态")).toHaveTextContent("等待批准");
+});
+
+it("shows searchable pinned and recent sessions and selects each latest run", async () => {
+  const firstRun = { ...snapshot.latest_run!, id: "run-first", session_id: "session-first", user_intent: "整理发布计划", status: "succeeded" as const };
+  const pinnedRun = { ...snapshot.latest_run!, id: "run-pinned", session_id: "session-pinned", user_intent: "检查今天邮件", status: "succeeded" as const, updated_at: "2026-07-14T02:00:00Z" };
+  const pinnedEarlierRun = { ...snapshot.latest_run!, id: "run-pinned-earlier", session_id: "session-pinned", user_intent: "整理昨天邮件", status: "succeeded" as const, updated_at: "2026-07-14T01:00:00Z" };
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([pinnedRun, pinnedEarlierRun, firstRun]),
+    sessions: vi.fn().mockResolvedValue([
+      { id: "session-first", workspace_id: "w1", title: "发布计划", pinned: false, latest_run_id: "run-first", created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T02:00:00Z" },
+      { id: "session-pinned", workspace_id: "w1", title: "每日简报", pinned: true, latest_run_id: "run-pinned", created_at: "2026-07-13T01:00:00Z", updated_at: "2026-07-13T02:00:00Z" },
+    ]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+
+  expect(await screen.findByRole("button", { name: "打开会话：每日简报" })).toHaveAttribute("aria-current", "true");
+  expect(screen.getByText("检查今天邮件")).toBeInTheDocument();
+  expect(screen.getByText("整理昨天邮件")).toBeInTheDocument();
+  expect(screen.queryByText("整理发布计划")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "整理发布计划，已完成" }));
+  fireEvent.click(screen.getByRole("button", { name: "对话" }));
+  expect(screen.getByRole("button", { name: "打开会话：发布计划" })).toHaveAttribute("aria-current", "true");
+
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜索对话" }), { target: { value: "发布" } });
+  expect(screen.queryByRole("button", { name: "打开会话：每日简报" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "打开会话：发布计划" }));
+  expect(await screen.findByText("整理发布计划")).toBeInTheDocument();
+});
+
+it("persists an automatic title after the first message in a new session", async () => {
+  const session = { id: "session-new", workspace_id: "w1", title: "新对话", pinned: false, latest_run_id: null, created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T01:00:00Z" };
+  const accepted = { ...snapshot.latest_run!, id: "run-new", session_id: "session-new", user_intent: "帮我复盘这周项目", status: "queued" as const };
+  const updateSession = vi.fn().mockResolvedValue({ ...session, title: "帮我复盘这周项目", latest_run_id: "run-new" });
+  const createRun = vi.fn().mockResolvedValue(accepted);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]), sessions: vi.fn().mockResolvedValue([session]),
+    updateSession, createRun,
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  expect(await screen.findByRole("button", { name: "打开会话：新对话" })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("对话输入"), { target: { value: "帮我复盘这周项目" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(updateSession).toHaveBeenCalledWith("session-new", "w1", { title: "帮我复盘这周项目" }));
+  expect(await screen.findByRole("button", { name: "打开会话：帮我复盘这周项目" })).toBeInTheDocument();
+});
+
+it("creates, renames, pins, and sends from a durable session", async () => {
+  const session = { id: "session-new", workspace_id: "w1", title: "新对话", pinned: false, latest_run_id: null, created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T01:00:00Z" };
+  const renamed = { ...session, title: "项目复盘" };
+  const pinned = { ...renamed, pinned: true };
+  const accepted = { ...snapshot.latest_run!, id: "run-new", user_intent: "复盘这周项目", status: "queued" as const };
+  const createSession = vi.fn().mockResolvedValue(session);
+  const updateSession = vi.fn()
+    .mockResolvedValueOnce(renamed)
+    .mockResolvedValueOnce(pinned);
+  const createRun = vi.fn().mockResolvedValue(accepted);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]), sessions: vi.fn().mockResolvedValue([]),
+    createSession, updateSession, createRun,
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(await screen.findByRole("button", { name: "新对话" }));
+  await waitFor(() => expect(createSession).toHaveBeenCalledWith("w1"));
+  expect(screen.getByText("说出你真正想完成的事")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "会话选项：新对话" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "重命名" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "重命名会话" }), { target: { value: "项目复盘" } });
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "重命名会话" }), { key: "Enter" });
+  await waitFor(() => expect(updateSession).toHaveBeenCalledWith("session-new", "w1", { title: "项目复盘" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "会话选项：项目复盘" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+  await waitFor(() => expect(updateSession).toHaveBeenCalledWith("session-new", "w1", { pinned: true }));
+
+  fireEvent.change(screen.getByLabelText("对话输入"), { target: { value: "复盘这周项目" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(createRun).toHaveBeenCalledWith("复盘这周项目", expect.any(String), "w1", null, "session-new"));
+});
+
+it("requires a second explicit action before permanently deleting a conversation", async () => {
+  const doomed = { id: "session-old", workspace_id: "w1", title: "旧对话", pinned: false, latest_run_id: "run-old", version: 0, created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T02:00:00Z" };
+  const remaining = { id: "session-next", workspace_id: "w1", title: "保留对话", pinned: false, latest_run_id: "run-next", version: 0, created_at: "2026-07-13T01:00:00Z", updated_at: "2026-07-13T02:00:00Z" };
+  const runs = [
+    { ...snapshot.latest_run!, id: "run-old", session_id: doomed.id, user_intent: "删除我", status: "succeeded" as const },
+    { ...snapshot.latest_run!, id: "run-next", session_id: remaining.id, user_intent: "留下我", status: "succeeded" as const },
+  ];
+  const deleteSession = vi.fn().mockResolvedValue(undefined);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue(runs), sessions: vi.fn().mockResolvedValue([doomed, remaining]),
+    deleteSession, timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(await screen.findByRole("button", { name: "会话选项：旧对话" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "删除对话" }));
+
+  expect(deleteSession).not.toHaveBeenCalled();
+  expect(screen.getByText("这个对话及其任务记录会从本机永久删除。")) .toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "永久删除旧对话" }));
+
+  await waitFor(() => expect(deleteSession).toHaveBeenCalledWith("session-old", "w1"));
+  expect(screen.queryByRole("button", { name: "打开会话：旧对话" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开会话：保留对话" })).toHaveAttribute("aria-current", "true");
 });
 
 it("explains why sending is unavailable until a workspace is selected", async () => {

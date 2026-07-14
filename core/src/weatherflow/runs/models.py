@@ -81,6 +81,7 @@ class Run(BaseModel):
     client_request_id: str
     user_intent: str
     workspace_id: str
+    session_id: str | None = None
     status: RunStatus
     version: int
     created_at: datetime
@@ -101,15 +102,21 @@ class Run(BaseModel):
         client_request_id: str,
         user_intent: str,
         workspace_id: str,
+        session_id: str | None = None,
+        budget: RunBudget | None = None,
     ) -> "Run":
         now = datetime.now(UTC)
-        return cls(
+        values = dict(
             id=str(ULID()),
             client_request_id=client_request_id,
             user_intent=user_intent,
             workspace_id=workspace_id,
+            session_id=session_id,
             status=RunStatus.QUEUED,
             version=0,
             created_at=now,
             updated_at=now,
         )
+        if budget is not None:
+            values["budget"] = budget
+        return cls.model_validate(values)

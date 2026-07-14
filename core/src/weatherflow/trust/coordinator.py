@@ -67,6 +67,7 @@ class ApprovalCoordinator:
     ) -> ApprovalBundle:
         existing = await self.actions.get_by_idempotency_key(idempotency_key)
         if existing is not None:
+            self._require_matching_identity(existing, run_id, tool, arguments)
             return await self._bundle(existing)
         decision = self.policy.evaluate(tool, workspace)
         if decision.kind is not DecisionKind.APPROVE:
@@ -85,6 +86,7 @@ class ApprovalCoordinator:
         async with self.database.transaction() as connection:
             existing = await self.actions.get_by_idempotency_key_in(connection, idempotency_key)
             if existing is not None:
+                self._require_matching_identity(existing, run_id, tool, arguments)
                 return await self._bundle_in(connection, existing)
             prior = await self.ledger.list_stream_in(connection, "run", run_id)
             await self.actions.create_in(connection, action)
@@ -123,6 +125,92 @@ class ApprovalCoordinator:
                 expected_version=expected_run_version,
             )
         return ApprovalBundle(action=action, approval=approval, run=updated_run)
+
+    async def authorize_sandboxed(
+        self,
+        *,
+        run_id: str,
+        tool: ToolSpec,
+        workspace: Workspace,
+        arguments: dict[str, Any],
+        idempotency_key: str,
+        preview: dict[str, Any],
+    ) -> Action:
+        decision = self.policy.evaluate(tool, workspace)
+        if decision.kind is not DecisionKind.SANDBOX:
+            raise ApprovalPolicyError(
+                f"tool {tool.tool_id} received {decision.kind.value}, not sandbox"
+            )
+        existing = await self.actions.get_by_idempotency_key(idempotency_key)
+        if existing is not None:
+            self._require_matching_identity(existing, run_id, tool, arguments)
+            return existing
+        proposed = Action.new(
+            run_id=run_id,
+            tool_id=tool.tool_id,
+            arguments=arguments,
+            effect=tool.effect,
+            idempotency_key=idempotency_key,
+            preview=preview,
+        )
+        async with self.database.transaction() as connection:
+            existing = await self.actions.get_by_idempotency_key_in(
+                connection,
+                idempotency_key,
+            )
+            if existing is not None:
+                self._require_matching_identity(existing, run_id, tool, arguments)
+                return existing
+            await self.actions.create_in(connection, proposed)
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="action.proposed",
+                    actor=Actor.AGENT,
+                    stream_kind="action",
+                    stream_id=proposed.id,
+                    correlation_id=run_id,
+                    payload={
+                        "tool_id": tool.tool_id,
+                        "effect": tool.effect.value,
+                        "idempotency_key": idempotency_key,
+                        "preview": preview,
+                    },
+                ),
+            )
+            authorized = await self.actions.transition_in(
+                connection,
+                proposed.id,
+                ActionStatus.APPROVED,
+                proposed.version,
+            )
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="action.sandbox_authorized",
+                    actor=Actor.SYSTEM,
+                    stream_kind="action",
+                    stream_id=proposed.id,
+                    correlation_id=run_id,
+                    payload={"tool_id": tool.tool_id, "policy": decision.kind.value},
+                ),
+            )
+        return authorized
+
+    @staticmethod
+    def _require_matching_identity(
+        action: Action,
+        run_id: str,
+        tool: ToolSpec,
+        arguments: dict[str, Any],
+    ) -> None:
+        if (
+            action.run_id != run_id
+            or action.tool_id != tool.tool_id
+            or action.effect is not tool.effect
+            or action.arguments != arguments
+        ):
+            raise ApprovalStateError("idempotency key identity mismatch")
 
     async def _bundle(self, action: Action) -> ApprovalBundle:
         approval = await self.approvals.get_by_action_id(action.id)

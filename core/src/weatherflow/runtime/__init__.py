@@ -20,6 +20,7 @@ from weatherflow.runtime.models import (
     ModelRequest,
     ModelTurn,
     ModelUsage,
+    ToolCallBatchTurn,
     ToolCallTurn,
     ToolExecutionContext,
     ToolExecutionResult,
@@ -27,6 +28,7 @@ from weatherflow.runtime.models import (
 from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopStatus
 from weatherflow.runtime.protocols import (
     ModelAdapter,
+    ModelConfigurationRequiredError,
     ModelResolver,
     ModelRouteBinder,
     ModelRouteUnavailableError,
@@ -73,6 +75,7 @@ __all__ = [
     "MessageRole",
     "ModelCompletion",
     "ModelAdapter",
+    "ModelConfigurationRequiredError",
     "ModelResolver",
     "ModelRouteBinder",
     "ModelRouteUnavailableError",
@@ -83,6 +86,7 @@ __all__ = [
     "RunCheckpointRepository",
     "SharedTurnLoop",
     "ToolCallTurn",
+    "ToolCallBatchTurn",
     "ToolExecutionContext",
     "ToolExecutionResult",
     "ToolExecutor",

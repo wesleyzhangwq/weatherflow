@@ -1,23 +1,47 @@
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from weatherflow.connectors.models import ConnectionPhase, ConnectorKind
+from weatherflow.connectors.models import ConnectionPhase, ConnectorKind, OAuthSetup
 from weatherflow.extensions import CredentialBroker, CredentialRef
 
-# Reviewed against Composio's public toolkit catalog on 2026-07-14. Upgrades are
-# deliberate so an upstream schema change cannot silently alter automatic fetch.
-_PINNED_READ_ACTION_VERSIONS = {
-    "GITHUB_GET_THE_AUTHENTICATED_USER": "20260703_00",
-    "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260703_00",
-    "GMAIL_FETCH_EMAILS": "20260703_00",
-    "GOOGLECALENDAR_EVENTS_LIST": "20260703_00",
-}
+# Reviewed against Composio's public toolkit catalog on 2026-07-14. Every
+# provider action must name its frozen schema version explicitly. Upgrades are
+# deliberate so an upstream schema change cannot silently alter an existing
+# execution contract.
+COMPOSIO_ACTION_VERSIONS = MappingProxyType(
+    {
+        "GITHUB_GET_THE_AUTHENTICATED_USER": "20260703_00",
+        "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260703_00",
+        "GITHUB_GET_A_PULL_REQUEST": "20260703_00",
+        "GITHUB_LIST_BRANCHES": "20260703_00",
+        "GITHUB_CREATE_AN_ISSUE": "20260703_00",
+        "GITHUB_CREATE_A_PULL_REQUEST": "20260703_00",
+        "GMAIL_FETCH_EMAILS": "20260703_00",
+        "GMAIL_CREATE_EMAIL_DRAFT": "20260703_00",
+        "GMAIL_SEND_EMAIL": "20260703_00",
+        "GOOGLECALENDAR_EVENTS_LIST": "20260703_00",
+        "GOOGLECALENDAR_FIND_FREE_SLOTS": "20260703_00",
+        "GOOGLECALENDAR_CREATE_EVENT": "20260703_00",
+        "GOOGLECALENDAR_PATCH_EVENT": "20260703_00",
+        "GOOGLECALENDAR_DELETE_EVENT": "20260703_00",
+    }
+)
+
+_PINNED_READ_ACTION_VERSIONS = MappingProxyType(
+    {
+        "GITHUB_GET_THE_AUTHENTICATED_USER": "20260703_00",
+        "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260703_00",
+        "GMAIL_FETCH_EMAILS": "20260703_00",
+        "GOOGLECALENDAR_EVENTS_LIST": "20260703_00",
+    }
+)
 
 
 class ComposioErrorCode(StrEnum):
@@ -27,6 +51,7 @@ class ComposioErrorCode(StrEnum):
     NOT_FOUND = "not_found"
     TRANSPORT = "transport"
     UPSTREAM = "upstream"
+    AUTH_CONFIG_REQUIRED = "auth_config_required"
 
 
 class ComposioGatewayError(RuntimeError):
@@ -89,9 +114,21 @@ class ComposioGateway:
             params={"limit": "1"},
         )
 
+    async def oauth_setup(self, connector: ConnectorKind) -> OAuthSetup:
+        return await self._with_key(lambda key: self._toolkit_oauth_setup(key, connector))
+
     async def create_link(self, connector: ConnectorKind, *, user_id: str) -> ComposioLink:
         async def operation(key: str) -> ComposioLink:
             definition = _definition(connector)
+            metadata_error: ComposioGatewayError | None = None
+            try:
+                oauth_setup = await self._toolkit_oauth_setup(key, connector)
+            except ComposioGatewayError as error:
+                # A pre-existing Auth Config is still safe to use when toolkit
+                # metadata is temporarily unavailable. UNKNOWN may never create
+                # a new managed config.
+                oauth_setup = OAuthSetup.UNKNOWN
+                metadata_error = error
             auth_configs = await self._request(
                 key,
                 "GET",
@@ -104,17 +141,25 @@ class ComposioGateway:
             )
             auth_config_id = _first_identifier(auth_configs)
             if auth_config_id is None:
+                if metadata_error is not None:
+                    raise metadata_error
+                if oauth_setup is not OAuthSetup.MANAGED:
+                    raise ComposioGatewayError(ComposioErrorCode.AUTH_CONFIG_REQUIRED)
+                approved_actions = _approved_actions(connector)
+                if not approved_actions:
+                    raise ComposioGatewayError(ComposioErrorCode.AUTH_CONFIG_REQUIRED)
+                auth_config = {
+                    "type": "use_composio_managed_auth",
+                    "credentials": {},
+                    "restrict_to_following_tools": list(approved_actions),
+                }
                 created = await self._request(
                     key,
                     "POST",
                     "/api/v3/auth_configs",
                     json={
                         "toolkit": {"slug": definition},
-                        "auth_config": {
-                            "type": "use_composio_managed_auth",
-                            "credentials": {},
-                            "restrict_to_following_tools": list(_read_actions(connector)),
-                        },
+                        "auth_config": auth_config,
                     },
                 )
                 auth_config_id = _identifier(created)
@@ -135,6 +180,18 @@ class ComposioGateway:
             )
 
         return await self._with_key(operation)
+
+    async def _toolkit_oauth_setup(self, key: str, connector: ConnectorKind) -> OAuthSetup:
+        toolkit = _definition(connector)
+        payload = await self._request(
+            key,
+            "GET",
+            f"/api/v3.1/toolkits/{_safe_identifier(toolkit)}",
+        )
+        schemes = payload.get("composio_managed_auth_schemes")
+        if not isinstance(schemes, list):
+            return OAuthSetup.UNKNOWN
+        return OAuthSetup.MANAGED if schemes else OAuthSetup.BRING_YOUR_OWN
 
     async def get_account(self, account_id: str) -> ComposioRemoteAccount:
         payload = await self._with_key(
@@ -165,21 +222,41 @@ class ComposioGateway:
         version = _PINNED_READ_ACTION_VERSIONS.get(action)
         if version is None:
             raise ComposioGatewayError(ComposioErrorCode.INPUT)
+        return await self.execute_tool(
+            action=action,
+            version=version,
+            connected_account_id=connected_account_id,
+            arguments=arguments,
+        )
+
+    async def execute_tool(
+        self,
+        *,
+        action: str,
+        version: str,
+        connected_account_id: str,
+        arguments: dict[str, Any],
+    ) -> Any:
+        _safe_action(action)
+        expected_version = COMPOSIO_ACTION_VERSIONS.get(action)
+        if expected_version is None or version != expected_version:
+            raise ComposioGatewayError(ComposioErrorCode.INPUT)
+        safe_account_id = _safe_identifier(connected_account_id)
         payload = await self._with_key(
             lambda key: self._request(
                 key,
                 "POST",
                 f"/api/v3.1/tools/execute/{action}",
                 json={
-                    "connected_account_id": connected_account_id,
+                    "connected_account_id": safe_account_id,
                     "version": version,
                     "arguments": arguments,
                 },
             )
         )
-        if payload.get("successful") is False:
+        if payload.get("successful") is not True:
             raise ComposioGatewayError(ComposioErrorCode.UPSTREAM)
-        return payload.get("data", payload)
+        return payload.get("data", {})
 
     async def revoke(self, account_id: str) -> None:
         await self._with_key(
@@ -210,14 +287,14 @@ class ComposioGateway:
                 params=params,
                 json=json,
             )
-        except httpx.HTTPError as error:
-            raise ComposioGatewayError(ComposioErrorCode.TRANSPORT, retryable=True) from error
+        except httpx.HTTPError:
+            raise ComposioGatewayError(ComposioErrorCode.TRANSPORT, retryable=True) from None
         if not response.is_success:
             raise _status_error(response.status_code)
         try:
             payload = response.json()
-        except ValueError as error:
-            raise ComposioGatewayError(ComposioErrorCode.UPSTREAM) from error
+        except ValueError:
+            raise ComposioGatewayError(ComposioErrorCode.UPSTREAM) from None
         if not isinstance(payload, dict):
             raise ComposioGatewayError(ComposioErrorCode.UPSTREAM)
         return payload
@@ -229,10 +306,10 @@ def _definition(connector: ConnectorKind) -> str:
     return CONNECTOR_DEFINITIONS[connector].toolkit
 
 
-def _read_actions(connector: ConnectorKind) -> tuple[str, ...]:
+def _approved_actions(connector: ConnectorKind) -> tuple[str, ...]:
     from weatherflow.connectors.models import CONNECTOR_DEFINITIONS
 
-    return CONNECTOR_DEFINITIONS[connector].read_actions
+    return CONNECTOR_DEFINITIONS[connector].reviewed_auth_actions
 
 
 def _identifier(payload: dict[str, Any]) -> str | None:

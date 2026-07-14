@@ -43,7 +43,7 @@ ACTION_TRANSITIONS: dict[ActionStatus, frozenset[ActionStatus]] = {
     ActionStatus.EXECUTING: frozenset(
         {ActionStatus.SUCCEEDED, ActionStatus.FAILED, ActionStatus.NEEDS_REVIEW}
     ),
-    ActionStatus.SUCCEEDED: frozenset(),
+    ActionStatus.SUCCEEDED: frozenset({ActionStatus.NEEDS_REVIEW}),
     ActionStatus.FAILED: frozenset(),
     ActionStatus.NEEDS_REVIEW: frozenset(),
     ActionStatus.CANCELLED: frozenset(),

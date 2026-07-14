@@ -73,7 +73,7 @@ async def test_corrupt_checkpoint_is_quarantined_and_run_needs_review(
     assert any(event.type == "runtime.checkpoint_quarantined" for event in timeline)
 
 
-async def test_restart_audits_and_resumes_non_terminal_runs_in_background(
+async def test_restart_parks_recovered_run_when_model_is_not_configured(
     tmp_path: Path,
 ) -> None:
     first = await RuntimeContainer.create(Settings(data_dir=tmp_path))
@@ -88,7 +88,8 @@ async def test_restart_audits_and_resumes_non_terminal_runs_in_background(
     try:
         stored = await rebuilt.wait_for_background_run(run.id, timeout_seconds=1)
 
-        assert stored.status is RunStatus.SUCCEEDED
+        assert stored.status is RunStatus.WAITING_USER
+        assert stored.error_class == "ModelConfigurationRequired"
         events = await rebuilt.ledger.list_correlation(run.id, limit=1000)
         audit = [event for event in events if event.type == "runtime.startup_recovery_audited"]
         assert len(audit) == 1

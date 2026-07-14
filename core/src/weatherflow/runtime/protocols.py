@@ -18,12 +18,26 @@ class ModelRouteUnavailableError(LookupError):
     pass
 
 
+class ModelConfigurationRequiredError(ModelRouteUnavailableError):
+    pass
+
+
 class ModelResolver(Protocol):
     async def resolve(self, run_id: str) -> ModelAdapter | None: ...
 
 
 class ModelRouteBinder(Protocol):
     async def clone_run_route(
+        self,
+        *,
+        parent_run_id: str,
+        child_run_id: str,
+        workspace_id: str,
+    ) -> object: ...
+
+
+class ConnectorRouteBinder(Protocol):
+    async def clone_run_routes(
         self,
         *,
         parent_run_id: str,

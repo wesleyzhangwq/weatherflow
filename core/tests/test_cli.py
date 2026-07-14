@@ -170,8 +170,9 @@ def test_run_and_status_commands_use_durable_data_dir(tmp_path, capsys) -> None:
 
     assert exit_code == 0
     assert status_code == 0
-    assert stored["status"] == "succeeded"
-    assert stored["result_summary"] == "Echo: Explain WeatherFlow"
+    assert stored["status"] == "waiting_user"
+    assert stored["result_summary"] is None
+    assert stored["error_class"] == "ModelConfigurationRequired"
 
 
 def test_timeline_command_outputs_ordered_events(tmp_path, capsys) -> None:
@@ -183,11 +184,5 @@ def test_timeline_command_outputs_ordered_events(tmp_path, capsys) -> None:
 
     assert exit_code == 0
     assert timeline[0]["type"] == "run.created"
-    assert any(
-        event["type"] == "run.status_changed" and event["payload"].get("to") == "succeeded"
-        for event in timeline
-    )
-    assert [event["type"] for event in timeline[-2:]] == [
-        "rhythm.signal.task_behavior",
-        "rhythm.snapshot_derived",
-    ]
+    assert any(event["type"] == "runtime.model_configuration_required" for event in timeline)
+    assert timeline[-1]["type"] == "runtime.model_configuration_required"

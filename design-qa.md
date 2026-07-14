@@ -54,6 +54,43 @@ final result: passed
 
 ---
 
+# Conversation Sessions and OAuth Catalog Design QA
+
+- Source visual truth: `artifacts/design-qa/session-oauth/session-reference.png`, `artifacts/design-qa/session-oauth/oauth-reference.png`
+- Implementation URL: `http://localhost:1421/?surface=cockpit`
+- Implementation screenshots: `artifacts/design-qa/session-oauth/conversation-sessions.jpeg`, `artifacts/design-qa/session-oauth/oauth-catalog.jpeg`
+- Viewport: Chrome window `1224 x 768`
+- State: dark Cockpit, authorized `WeatherFlow QA` Workspace, renamed and pinned conversation, OAuth catalog with 20 services and no configured broker credential
+- Full-view comparisons: `artifacts/design-qa/session-oauth/session-comparison.jpg`, `artifacts/design-qa/session-oauth/oauth-comparison.jpg`
+
+## Findings
+
+No actionable P0, P1, or P2 visual findings remain.
+
+- Conversation management: the reference's search, new-conversation, selected-row, and compact history hierarchy is preserved in a dedicated secondary rail. WeatherFlow adds explicit pinned/recent grouping and a restrained overflow menu without competing with the primary chat surface.
+- Rename and pin: inline rename preserves list context; pinning moves the conversation into the `已置顶` group and adds a small pin glyph. Both actions remain discoverable from the row menu and keep the selected state visible.
+- OAuth information architecture: the former Composio-facing product label is replaced by `OAuth`. The broker name appears only in the advanced credential disclosure, while the main surface explains account authorization in user language.
+- OAuth catalog: all 20 requested services render with recognizable brand icons, a searchable grid, category filters, and explicit connection states. The grid remains compact enough to scan without copying OpenHuman's much larger unreviewed catalog.
+- Capability honesty: cards do not imply that OAuth alone grants agent authority. The service detail distinguishes connection availability, conversation tools, and auto-fetch support; unsupported fixed tools remain labelled as under review.
+- Accessibility: search, category toggles, service cards, conversation rows, row menus, rename fields, and navigation expose semantic roles and Chinese accessible names. The session rail and catalog remain keyboard reachable.
+
+## Primary interactions tested
+
+- Created a conversation in an authorized Workspace.
+- Renamed the conversation to `OAuth 连接改造` and confirmed the durable list update.
+- Pinned it and confirmed that it moved from `最近` to `已置顶`.
+- Opened the OAuth surface and verified all 20 services in the accessibility tree and visual grid.
+- Verified that the page reports the broker credential as advanced configuration and does not expose a generic Composio tool switch.
+
+## Follow-up polish
+
+- [P3] A native Tauri screenshot can remove Chrome's application chrome from future comparison artifacts; the current pass exercises the same responsive Cockpit DOM and live Python bridge at the production CORS origin.
+- [P3] Connected, waiting, managed-auth, and bring-your-own OAuth states are covered by component/contract tests; the final visual fixture intentionally shows the clean unconfigured state.
+
+final result: passed
+
+---
+
 # WeatherFlow Companion Refinement Design QA
 
 - Source visual truth: `artifacts/design-qa/companion/before-rest.png`

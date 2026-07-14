@@ -29,11 +29,11 @@ class RunRepository:
             await connection.execute(
                 """
                 INSERT INTO runs(
-                    id, client_request_id, user_intent, workspace_id, status,
+                    id, client_request_id, user_intent, workspace_id, session_id, status,
                     version, created_at, updated_at, rhythm_snapshot_id,
                     capability_snapshot_id, policy_profile, budget,
                     checkpoint_ref, result_summary, error_class, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._values(run),
             )
@@ -59,20 +59,23 @@ class RunRepository:
         *,
         limit: int = 50,
         workspace_id: str | None = None,
+        session_id: str | None = None,
     ) -> list[Run]:
         if limit < 1 or limit > 1000:
             raise ValueError("limit must be between 1 and 1000")
         async with self.database.connect() as connection:
-            if workspace_id is None:
-                query = "SELECT * FROM runs ORDER BY updated_at DESC, id DESC LIMIT ?"
-                parameters = (limit,)
-            else:
-                query = (
-                    "SELECT * FROM runs WHERE workspace_id = ? "
-                    "ORDER BY updated_at DESC, id DESC LIMIT ?"
-                )
-                parameters = (workspace_id, limit)
-            rows = await (await connection.execute(query, parameters)).fetchall()
+            clauses: list[str] = []
+            parameters: list[object] = []
+            if workspace_id is not None:
+                clauses.append("workspace_id = ?")
+                parameters.append(workspace_id)
+            if session_id is not None:
+                clauses.append("session_id = ?")
+                parameters.append(session_id)
+            where = " WHERE " + " AND ".join(clauses) if clauses else ""
+            query = "SELECT * FROM runs" + where + " ORDER BY updated_at DESC, id DESC LIMIT ?"
+            parameters.append(limit)
+            rows = await (await connection.execute(query, tuple(parameters))).fetchall()
         return [self._from_row(row) for row in rows]
 
     async def get_by_client_request_id_in(
@@ -186,6 +189,7 @@ class RunRepository:
             run.client_request_id,
             run.user_intent,
             run.workspace_id,
+            run.session_id,
             run.status.value,
             run.version,
             run.created_at.isoformat(),
@@ -208,6 +212,7 @@ class RunRepository:
                 "client_request_id": row["client_request_id"],
                 "user_intent": row["user_intent"],
                 "workspace_id": row["workspace_id"],
+                "session_id": row["session_id"],
                 "status": row["status"],
                 "version": row["version"],
                 "created_at": row["created_at"],

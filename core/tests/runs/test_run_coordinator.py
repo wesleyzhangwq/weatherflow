@@ -7,6 +7,7 @@ from weatherflow.events import Event, EventLedger
 from weatherflow.runs import (
     InvalidTransitionError,
     RunCoordinator,
+    RunIdempotencyConflict,
     RunRepository,
     RunStatus,
 )
@@ -46,6 +47,43 @@ async def test_create_run_is_idempotent_and_audited(tmp_path: Path) -> None:
         "workspace_id": "workspace-1",
         "status": "queued",
     }
+
+
+async def test_idempotency_key_cannot_cross_workspace_boundary(tmp_path: Path) -> None:
+    _, _, _ledger, coordinator = await make_coordinator(tmp_path)
+    first = await coordinator.create_run(
+        client_request_id="workspace-bound-request",
+        user_intent="Private workspace task",
+        workspace_id="workspace-1",
+    )
+
+    with pytest.raises(RunIdempotencyConflict):
+        await coordinator.create_run(
+            client_request_id="workspace-bound-request",
+            user_intent="Try another workspace",
+            workspace_id="workspace-2",
+        )
+
+    assert first.workspace_id == "workspace-1"
+
+
+async def test_idempotency_key_cannot_cross_session_boundary(tmp_path: Path) -> None:
+    _, _, _ledger, coordinator = await make_coordinator(tmp_path)
+    first = await coordinator.create_run(
+        client_request_id="session-bound-request",
+        user_intent="Workspace task",
+        workspace_id="workspace-1",
+    )
+
+    with pytest.raises(RunIdempotencyConflict):
+        await coordinator.create_run(
+            client_request_id="session-bound-request",
+            user_intent="Try another session",
+            workspace_id="workspace-1",
+            session_id="session-2",
+        )
+
+    assert first.session_id is None
 
 
 async def test_transition_is_versioned_and_audited(tmp_path: Path) -> None:

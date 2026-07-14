@@ -24,6 +24,8 @@ export type CredentialProvider =
   | "zhipu"
   | "siliconflow"
   | "stepfun"
+  | "openai"
+  | "anthropic"
   | "composio";
 
 export interface CredentialStatus {

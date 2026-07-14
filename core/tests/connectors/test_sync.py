@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from weatherflow.connectors import (
+    CONNECTOR_DEFINITIONS,
     ConnectorAccount,
     ConnectorBinding,
     ConnectorKind,
@@ -82,6 +83,7 @@ async def setup(tmp_path: Path, connector: ConnectorKind):
     repository = ConnectorRepository(database)
     now = datetime(2026, 7, 13, 5, tzinfo=UTC)
     account = ConnectorAccount.new(
+        workspace_id=workspace.id,
         connector=connector,
         external_account_id=f"ca_{connector.value}",
         credential_ref=CredentialRef(provider="composio", name="project_api_key"),
@@ -109,7 +111,9 @@ async def setup(tmp_path: Path, connector: ConnectorKind):
 async def test_fixed_read_fetchers_create_bounded_source_linked_snapshots(
     tmp_path: Path,
 ) -> None:
-    for connector in ConnectorKind:
+    for connector, definition in CONNECTOR_DEFINITIONS.items():
+        if not definition.auto_fetch_supported:
+            continue
         workspace, repository, gateway, service, now = await setup(
             tmp_path / connector.value, connector
         )
@@ -135,6 +139,28 @@ async def test_fixed_read_fetchers_create_bounded_source_linked_snapshots(
             }
             for call in gateway.calls
         )
+        if connector is ConnectorKind.GOOGLE_CALENDAR:
+            assert gateway.calls == [
+                (
+                    "GOOGLECALENDAR_EVENTS_LIST",
+                    "ca_google_calendar",
+                    {
+                        "calendarId": "primary",
+                        "timeMin": now.isoformat(),
+                        "timeMax": (now + timedelta(days=14)).isoformat(),
+                        "singleEvents": True,
+                        "timeZone": "Asia/Shanghai",
+                        "maxResults": 50,
+                    },
+                )
+            ]
+
+
+async def test_catalog_only_connector_cannot_enter_automatic_fetch_path(tmp_path: Path) -> None:
+    workspace, _repository, _gateway, service, _now = await setup(tmp_path, ConnectorKind.SLACK)
+
+    with pytest.raises(LookupError, match="automatic fetch unsupported"):
+        await service.sync(workspace.id, ConnectorKind.SLACK)
 
 
 async def test_due_sync_skips_disabled_binding(tmp_path: Path) -> None:

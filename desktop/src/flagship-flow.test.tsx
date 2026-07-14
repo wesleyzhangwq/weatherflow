@@ -78,6 +78,6 @@ describe("flagship macOS desktop story", () => {
     expect(screen.getByText(/v3.0.0/)).toBeInTheDocument();
     expect(await screen.findByText("release-checklist.md")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "批准" }));
-    await waitFor(() => expect(client.decide).toHaveBeenCalledWith("approval-1", "approve", 0));
+    await waitFor(() => expect(client.decide).toHaveBeenCalledWith("approval-1", "approve", 0, "w1"));
   });
 });

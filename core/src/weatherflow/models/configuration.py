@@ -14,8 +14,10 @@ from weatherflow.extensions import (
     CredentialRef,
     CredentialStore,
 )
+from weatherflow.models.anthropic import AnthropicMessagesAdapter
 from weatherflow.models.minimax import MiniMaxAdapter, OpenAICompatibleAdapter
-from weatherflow.runtime import ModelRouteUnavailableError
+from weatherflow.models.openai import OpenAIResponsesAdapter
+from weatherflow.runtime import ModelConfigurationRequiredError, ModelRouteUnavailableError
 from weatherflow.storage import Database
 
 
@@ -27,6 +29,8 @@ class ModelProvider(StrEnum):
     ZHIPU = "zhipu"
     SILICONFLOW = "siliconflow"
     STEPFUN = "stepfun"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
 
 
 class ProviderPreset(BaseModel):
@@ -140,6 +144,35 @@ def provider_presets() -> tuple[ProviderPreset, ...]:
                 "step-3.7-flash",
                 "step-3.5-flash-2603",
                 "step-3.5-flash",
+            ),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.OPENAI,
+            label="OpenAI",
+            base_url="https://api.openai.com/v1",
+            default_model="gpt-5.6-terra",
+            suggested_models=(
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.5-pro",
+                "gpt-5.4",
+                "gpt-5.4-pro",
+                "gpt-5.4-mini",
+                "gpt-5.4-nano",
+            ),
+        ),
+        ProviderPreset(
+            provider=ModelProvider.ANTHROPIC,
+            label="Anthropic",
+            base_url="https://api.anthropic.com/v1",
+            default_model="claude-sonnet-5",
+            suggested_models=(
+                "claude-fable-5",
+                "claude-opus-4-8",
+                "claude-sonnet-5",
+                "claude-haiku-4-5-20251001",
             ),
         ),
     )
@@ -394,7 +427,9 @@ class ModelConfigurationService:
             )
         return saved
 
-    def adapter(self, configuration: ModelConfiguration) -> OpenAICompatibleAdapter:
+    def adapter(
+        self, configuration: ModelConfiguration
+    ) -> OpenAICompatibleAdapter | OpenAIResponsesAdapter | AnthropicMessagesAdapter:
         return self._adapter(configuration, CredentialBroker(self.credential_store))
 
     async def bind_run(
@@ -487,13 +522,15 @@ class ModelConfigurationService:
             )
         return stored
 
-    async def resolve(self, run_id: str) -> OpenAICompatibleAdapter | None:
+    async def resolve(
+        self, run_id: str
+    ) -> OpenAICompatibleAdapter | OpenAIResponsesAdapter | AnthropicMessagesAdapter | None:
         try:
             route = await self.routes.get(run_id)
             if route is None:
                 raise ModelRouteUnavailableError(run_id)
             if route.provider == "echo":
-                return None
+                raise ModelConfigurationRequiredError(run_id)
             if route.base_url is None or route.credential_ref is None:
                 raise ModelRouteUnavailableError(run_id)
             return self.adapter(
@@ -546,7 +583,7 @@ class ModelConfigurationService:
         self,
         configuration: ModelConfiguration,
         broker: CredentialBroker,
-    ) -> OpenAICompatibleAdapter:
+    ) -> OpenAICompatibleAdapter | OpenAIResponsesAdapter | AnthropicMessagesAdapter:
         arguments = {
             "broker": broker,
             "credential_ref": configuration.credential_ref,
@@ -556,6 +593,10 @@ class ModelConfigurationService:
         }
         if configuration.provider is ModelProvider.MINIMAX:
             return MiniMaxAdapter(**arguments)
+        if configuration.provider is ModelProvider.OPENAI:
+            return OpenAIResponsesAdapter(**arguments)
+        if configuration.provider is ModelProvider.ANTHROPIC:
+            return AnthropicMessagesAdapter(**arguments)
         return OpenAICompatibleAdapter(provider=configuration.provider.value, **arguments)
 
     async def status(self, workspace_id: str) -> ModelStatus:

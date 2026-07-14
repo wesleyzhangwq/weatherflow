@@ -17,6 +17,7 @@ from weatherflow.connectors import (
     ConnectorSnapshot,
     ConnectorStatus,
     ConnectorSyncService,
+    ConversationAccess,
 )
 
 
@@ -45,6 +46,11 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
             ConnectorStatus(
                 connector=ConnectorKind.GITHUB,
                 label="GitHub",
+                category="development",
+                toolkit="github",
+                auto_fetch_supported=True,
+                conversation_tools_supported=True,
+                oauth_setup="managed",
                 phase=ConnectionPhase.ACTIVE,
                 configured=True,
                 connected=True,
@@ -83,6 +89,15 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
         )
         return None
 
+    async def update_conversation_access(
+        _service: ConnectorService,
+        requested_workspace_id: str,
+        connector: ConnectorKind,
+        access: ConversationAccess,
+    ):
+        calls.append(("conversation_access", (requested_workspace_id, connector, access)))
+        return None
+
     async def sync(
         _service: ConnectorSyncService,
         requested_workspace_id: str,
@@ -97,14 +112,19 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
             items=(),
         )
 
-    async def disconnect(_service: ConnectorService, connector: ConnectorKind) -> None:
-        calls.append(("disconnect", connector))
+    async def disconnect(
+        _service: ConnectorService,
+        requested_workspace_id: str,
+        connector: ConnectorKind,
+    ) -> None:
+        calls.append(("disconnect", (requested_workspace_id, connector)))
 
     monkeypatch.setattr(ConnectorService, "configure", configure)
     monkeypatch.setattr(ConnectorService, "statuses", statuses)
     monkeypatch.setattr(ConnectorService, "connect", connect)
     monkeypatch.setattr(ConnectorService, "refresh_attempt", refresh)
     monkeypatch.setattr(ConnectorService, "update_settings", update_settings)
+    monkeypatch.setattr(ConnectorService, "update_conversation_access", update_conversation_access)
     monkeypatch.setattr(ConnectorSyncService, "sync", sync)
     monkeypatch.setattr(ConnectorService, "disconnect", disconnect)
     transport = ASGITransport(app=create_app(container=container))
@@ -122,17 +142,45 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
             params={"workspace_id": workspace_id},
             json={"auto_fetch_enabled": False, "interval_minutes": 120},
         )
+        conversation_access = await client.post(
+            "/v1/connectors/github/conversation-access",
+            params={"workspace_id": workspace_id},
+            json={"conversation_access": "read_write"},
+        )
         synced = await client.post(
             "/v1/connectors/github/sync", params={"workspace_id": workspace_id}
         )
-        disconnected = await client.post("/v1/connectors/github/disconnect", json={"confirm": True})
+        disconnected = await client.post(
+            "/v1/connectors/github/disconnect",
+            params={"workspace_id": workspace_id},
+            json={"confirm": True},
+        )
 
     assert configured.status_code == 200
     assert "requestBody" not in openapi.json()["paths"]["/v1/connectors/configure"]["post"]
     assert listed.json()[0]["connected"] is True
+    catalog_fields = {
+        key: listed.json()[0][key]
+        for key in (
+            "category",
+            "toolkit",
+            "auto_fetch_supported",
+            "conversation_tools_supported",
+            "oauth_setup",
+        )
+    }
+    assert catalog_fields == {
+        "category": "development",
+        "toolkit": "github",
+        "auto_fetch_supported": True,
+        "conversation_tools_supported": True,
+        "oauth_setup": "managed",
+    }
     assert handoff.json()["connect_url"].startswith("https://connect.composio.dev/")
     assert refreshed.json()["phase"] == "active"
     assert settings.status_code == 204
+    assert conversation_access.status_code == 200
+    assert conversation_access.json()["conversation_access"] == "disabled"
     assert synced.json()["items"] == []
     assert disconnected.status_code == 204
     assert calls[0] == ("configure", None)
@@ -164,3 +212,27 @@ async def test_composio_failures_are_typed_and_never_expose_secret_or_upstream_b
 
     assert response.status_code == 401
     assert response.json() == {"detail": {"code": "connector_broker_auth", "retryable": False}}
+
+
+async def test_missing_byo_auth_config_is_a_typed_conflict(tmp_path: Path, monkeypatch) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+
+    async def reject(
+        _service: ConnectorService,
+        _workspace_id: str,
+        _connector: ConnectorKind,
+    ) -> ConnectHandoff:
+        raise ComposioGatewayError(ComposioErrorCode.AUTH_CONFIG_REQUIRED)
+
+    monkeypatch.setattr(ConnectorService, "connect", reject)
+    transport = ASGITransport(app=create_app(container=container))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/connectors/trello/connect")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "code": "connector_broker_auth_config_required",
+            "retryable": False,
+        }
+    }

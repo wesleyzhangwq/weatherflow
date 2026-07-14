@@ -47,7 +47,9 @@ The daemon is also usable through CLI and MCP. No client owns business state.
 
 ## 3. Hard contracts
 
-1. Every command creates an idempotent Run.
+1. Every command creates an idempotent Run. A `client_request_id` is bound to
+   its original Workspace and conversation session and cannot return a Run
+   across either boundary.
 2. Run status changes only through the deterministic Run Coordinator.
 3. Workers are leaf agents and cannot spawn more agents.
 4. Tool visibility is frozen per Run and checked again at execution.
@@ -97,15 +99,63 @@ The daemon is also usable through CLI and MCP. No client owns business state.
 25. A Skill selected from a local catalog is installed explicitly as an
     immutable verified Workspace snapshot. The source checkout is not a runtime
     dependency, installation does not grant authority, and changes apply only
-    to future Runs.
+    to future Runs. A renderer click creates a durable install Action and
+    Approval; request booleans are never authority, and execution starts only
+    after the persisted user decision.
 26. Desktop-managed MCP connections come from a curated, version-pinned catalog
     and require explicit installation and enablement. Renderer input cannot
     supply arbitrary commands or environment variables. MCP tools remain
     subject to Workspace scopes and execution-time Trust checks, and connection
-    changes affect only future Runs.
+    changes affect only future Runs. The package installer receives the real
+    approved Action id; an interrupted installation enters `NEEDS_REVIEW` and
+    is never automatically retried during recovery. A healthy enabled preset
+    contributes only its fixed `mcp:{preset}:use` effective scope while a new
+    capability snapshot is resolved; this derived scope comes from durable
+    enabled state plus the curated catalog, never from server annotations.
 27. Cockpit groups user-managed agent facilities in one left-navigation Tools
     section: Automations, Skills, MCP Servers, LLM Models, and Composio. System
     and privacy preferences remain in Settings; conversation remains primary.
+28. Conversation sessions are durable Workspace-scoped presentation groupings.
+    A Run may belong to one session, but session rename or pin state never
+    changes the Run, its frozen routes, capability snapshot, or authority.
+    Session mutation and session-filtered Run queries require the owning
+    Workspace identity and fail closed on a mismatch. Deleting a session is a
+    privacy deletion: it removes the session, all of its Runs, their events,
+    checkpoints, actions, approvals, routes, continuations, artifact manifests,
+    and unreferenced artifact bytes in one explicit deletion flow. It never
+    degrades into detaching Runs with a null session.
+29. An OAuth catalog entry describes a brokered account identity, not an Agent
+    capability. Automatic fetch and conversation tools stay unavailable until
+    WeatherFlow ships explicit reviewed contracts for that toolkit.
+30. Provider tool-call IDs are untrusted correlation hints, not Action
+    identities. A side-effect Action is idempotent only for the same Run, model
+    step, batch position, frozen tool, and canonical arguments. Recovery consumes
+    a persisted successful Action result without replaying the side effect.
+31. Brokered tool responses cross into model context only through an explicit
+    action-specific output projection. Unknown fields, credential-bearing text,
+    and URL query or fragment data fail closed instead of relying on a secret-key
+    blacklist.
+32. Trust Policy, not a tool name, decides the durable side-effect boundary.
+    Every call classified as `SANDBOX` or `APPROVE` must own an Action before
+    execution. A timeout or cancellation after execution starts moves both the
+    Action and Run to `NEEDS_REVIEW`; cancelling an async wrapper does not prove
+    that a worker thread or child process stopped. Only `ALLOW` calls may use the
+    lightweight no-Action path.
+33. A finite model-cost budget is enforceable only from provider-reported usage
+    and an exact entry in a versioned pricing catalog for the frozen provider,
+    model, and billing origin. Unknown pricing or usage fails closed before tool
+    dispatch or terminal result commit; it is never interpreted as zero cost.
+34. Executor output is untrusted until it validates against the frozen
+    `ToolSpec.output_schema` under JSON Schema Draft 2020-12. Invalid safe-read
+    output becomes a value-free failure Observation. Invalid output from a
+    side-effect Action moves the Action and Run to `NEEDS_REVIEW`, clears the
+    unusable persisted result, and is never replayed into model context or
+    re-executed during recovery. An empty schema remains an explicit
+    accept-anything compatibility contract.
+35. Runtime shutdown is an ownership boundary: stop background producers, cancel
+    and await every daemon-owned Run task, and only then close tool transports.
+    A terminally closed RuntimeContainer rejects new Run or connector tasks so no
+    task or database worker can outlive its event loop.
 
 ## 4. v3.0 scope
 
@@ -136,8 +186,9 @@ compatibility.
   configuration stores model/base URL plus a credential reference in SQLite;
   the API key lives only in macOS Keychain and enters requests at the transport
   boundary. Provider-safe function aliases map back to the frozen ToolSpec IDs.
-  Provider reasoning is excluded from domain state; Echo remains only as a
-  visibly unconfigured smoke fallback.
+  Provider reasoning is excluded from domain state; an unconfigured production
+  Run parks in `WAITING_USER` with a model-configuration requirement and never
+  fabricates an Echo success. Echo is an explicitly injected test adapter only.
 - 2026-07-13: Replaced direct desktop Python Keychain access with a narrow native
   Tauri credential boundary. Renderer commands are limited to `set`, `delete`,
   and `status`; the Python daemon receives only `resolve` over a `0600` Unix
@@ -231,6 +282,23 @@ compatibility.
   activity/task behavior, and display only active long-term profile assertions
   with confidence and evidence counts. The former check-in/correction form was
   removed because conversation is the primary deliberate-input surface.
+- 2026-07-14: Added durable Workspace-scoped conversation sessions for Cockpit
+  history management. Sessions may be empty, renamed, and pinned; new Runs may
+  reference one session while historical Runs remain valid without a session.
+  Pinning is presentation metadata only and grants no runtime authority.
+- 2026-07-14: Defined conversation deletion as a Workspace-scoped privacy
+  operation. The daemon cancels owned background work, transactionally removes
+  the session and all Run-owned operational/audit data, and then removes each
+  content-addressed artifact blob only when no surviving Run in that Workspace
+  still references it. Cross-Workspace deletion reports not found.
+- 2026-07-14: Added a shell-local Cockpit theme preference with explicit
+  `system`, `light`, and `dark` choices. The renderer applies the saved
+  `weatherflow.theme` value before React mount and follows macOS appearance only
+  in `system` mode; theme state does not cross into Python domain storage.
+- 2026-07-14: Closed the renderer's unauthenticated bridge fallback. Product
+  startup now resolves the native `daemon_bridge` command in every mode and
+  fails closed when it cannot obtain its per-launch token; isolated browser
+  tests must inject an explicit bridge configuration.
 - 2026-07-13: Standardized macOS development on a stable local code-signing
   requirement. `pnpm dev:app` signs Cargo's final debug executable immediately
   before launch with the fixed identifier `ai.weatherflow.desktop.dev` and a
@@ -251,3 +319,70 @@ compatibility.
   visible tile so transparent margins do not create a hidden pointer-catching
   region. Hover feedback changes only surface, border, and elevation and never
   shifts the tile's position. Run and sensor state remain small secondary dots.
+- 2026-07-14: Promoted brokered OAuth connections from background context only
+  into the frozen Capability Plane. Connection, automatic fetch, and
+  conversation access are three separate grants. Only curated canonical
+  WeatherFlow ToolSpecs map to reviewed Composio action slugs and toolkit
+  versions; no generic execute/meta tool is exposed. A Run freezes its opaque
+  connected-account identity and conversation-grant revision, then rechecks
+  both at execution. Reads may execute directly; writes and destructive actions
+  always persist Action/Approval first. Account changes fail closed for old Runs.
+- 2026-07-14: Closed inherited-tool routing gaps for MCP and Worker Runs. A
+  healthy enabled curated MCP preset contributes its fixed effective use scope
+  only while future capability snapshots resolve; server annotations still
+  cannot grant authority. A leaf Worker whose frozen child snapshot contains
+  reviewed read-only Composio tools receives an exact copy of the parent Run's
+  corresponding connector route only after Workspace, account identity, grant
+  revision, tool allowlist, and scopes are revalidated. Child snapshots without
+  those tools receive no connector route, and connector writes remain forbidden.
+- 2026-07-14: Adopted the useful core semantics of pi-agent without replacing
+  WeatherFlow's durable Run shell: provider-neutral typed turns, ordered
+  multi-tool batches, checkpoint-before-dispatch, full JSON Schema validation,
+  per-tool timeout, cancellation barriers for uncertain side effects, durable
+  usage/cost accounting, and bounded follow-up context projection. WeatherFlow
+  retains frozen per-Run model/tool/connector routes and its Trust/Rhythm planes;
+  pi-style streaming lifecycle events, steering queues, and compaction remain
+  extensions of this single SharedTurnLoop, never a second agent loop.
+- 2026-07-14: Expanded the brokered account directory to twenty curated
+  Composio OAuth toolkits while keeping capability support explicit. GitHub,
+  Gmail, and Google Calendar remain the only entries with production automatic
+  fetch and reviewed model-visible ToolSpecs. Before creating managed auth,
+  WeatherFlow checks the authoritative project toolkit record and always
+  restricts the Auth Config to a non-empty reviewed action allowlist. Missing
+  managed auth or a missing reviewed allowlist requires a user-provided Auth
+  Config and fails closed; connection alone never exposes tools.
+- 2026-07-14: Hardened the durable side-effect boundary against repeated or
+  malformed provider call IDs. Runtime Action keys now bind the Run, model
+  step, batch slot, frozen tool, and canonical arguments; ApprovalCoordinator
+  rejects any idempotency-key identity mismatch. A recovered `SUCCEEDED` Action
+  contributes its persisted result as the missing Observation and is never
+  executed again. Composio results now use reviewed per-action output
+  projections with credential-text redaction and query-free URLs before they
+  enter checkpoints or model context.
+- 2026-07-14: Extended the Action barrier to all Trust Policy `SANDBOX` and
+  `APPROVE` decisions. Sandboxed workspace writes and command execution are
+  durably system-authorized before dispatch, and timeout or cancellation after
+  dispatch becomes `NEEDS_REVIEW` because cancellation cannot establish that a
+  thread or process stopped. Added the versioned MiniMax pay-as-you-go pricing
+  catalog `minimax-paygo-2026-07-14`; finite cost budgets now use provider usage
+  only when the frozen model and official billing origin have a known price and
+  otherwise fail closed before tools or terminal output are committed.
+- 2026-07-14: Added Draft 2020-12 validation at the Tool Observation boundary.
+  Safe read tools replace invalid executor output with value-free validation
+  diagnostics. Side-effect output is validated while its Action is still
+  `EXECUTING`; a mismatch transitions Action and Run to `NEEDS_REVIEW` without
+  persisting the returned value. Recovered historical `SUCCEEDED` Actions are
+  revalidated before their result enters the checkpoint; invalid results are
+  cleared and never replayed. Reviewed Composio tools now publish strict,
+  action-specific output schemas for their projected result envelopes.
+- 2026-07-14: Added first-party OpenAI Responses and Anthropic Messages model
+  adapters without adding another agent loop or credential path. `openai` and
+  `anthropic` are fixed native credential providers with renderer
+  `set`/`delete`/`status` and daemon-only private-socket `resolve`. OpenAI uses
+  stateless `store=false` Responses calls and Anthropic uses the versioned
+  Messages API. Provider reasoning items, signed thinking blocks, and exact
+  tool-use messages required for a later turn are retained only as encrypted,
+  Run/model-bound provider continuations; normalized text, tool calls, and
+  provider-reported usage remain the only data admitted to SharedTurnLoop state.
+  Workspace selection still freezes one explicit provider/model route per Run;
+  no automatic model routing was introduced.

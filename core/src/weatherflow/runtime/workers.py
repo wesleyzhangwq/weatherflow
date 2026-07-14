@@ -13,7 +13,7 @@ from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime.models import AgentDefinition, CompactWorkerResult
 from weatherflow.runtime.outcomes import LoopStatus
-from weatherflow.runtime.protocols import ModelRouteBinder
+from weatherflow.runtime.protocols import ConnectorRouteBinder, ModelRouteBinder
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.storage import Database
 from weatherflow.workspaces import Workspace
@@ -94,6 +94,7 @@ class WorkerCoordinator:
         checkpoints: RunCheckpointRepository,
         definitions: Mapping[str, AgentDefinition],
         model_routes: ModelRouteBinder | None = None,
+        connector_routes: ConnectorRouteBinder | None = None,
         max_concurrency: int = 3,
     ) -> None:
         if max_concurrency < 1:
@@ -111,6 +112,7 @@ class WorkerCoordinator:
         self.checkpoints = checkpoints
         self.definitions = dict(definitions)
         self.model_routes = model_routes
+        self.connector_routes = connector_routes
         self.max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._delegation_locks: dict[str, asyncio.Lock] = {}
@@ -195,6 +197,7 @@ class WorkerCoordinator:
             client_request_id=client_request_id,
             user_intent=task.strip(),
             workspace_id=workspace.id,
+            budget=workspace.default_budget,
         )
         if self.model_routes is not None:
             await self.model_routes.clone_run_route(
@@ -219,6 +222,13 @@ class WorkerCoordinator:
                 allowed_tool_ids=(definition.tool_filter or None),
             )
             child = frozen.run
+
+        if self.connector_routes is not None:
+            await self.connector_routes.clone_run_routes(
+                parent_run_id=parent_run_id,
+                child_run_id=child.id,
+                workspace_id=workspace.id,
+            )
 
         await self._ensure_lifecycle_event(
             parent_run_id=parent_run_id,

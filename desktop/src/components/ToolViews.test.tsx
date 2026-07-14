@@ -44,14 +44,19 @@ describe("Skill catalog", () => {
       source: "wesley-skills", source_path: "/catalog/focus-coach", source_digest: "a".repeat(64),
       validation_status: "valid", validation_errors: [], installed: false, installed_reference: null,
     };
-    const installSkill = vi.fn().mockResolvedValue({ ...skill, installed: true });
+    const request = { status: "needs_approval" as const, action_id: "act1", approval_id: "ap1", approval_version: 0, run_id: "r1", preview: {} };
+    const installSkill = vi.fn().mockResolvedValue(request);
+    const decide = vi.fn().mockResolvedValue({});
     const client = {
-      skills: vi.fn().mockResolvedValue([skill]), workspaces: vi.fn().mockResolvedValue([workspace]), installSkill,
+      skills: vi.fn().mockResolvedValue([skill]), workspaces: vi.fn().mockResolvedValue([workspace]), installSkill, decide,
     } as unknown as WeatherFlowClient;
     render(<SkillsView client={client} workspace={workspace} onOperation={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "安装" }));
-    await waitFor(() => expect(installSkill).toHaveBeenCalledWith("focus-coach", "w1", 3));
+    await waitFor(() => expect(installSkill).toHaveBeenCalledWith("focus-coach", "w1", 3, expect.any(String)));
+    expect(screen.getByText("需要批准")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "批准安装" }));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("ap1", "approve", 0, "w1"));
   });
 });
 
@@ -70,12 +75,16 @@ describe("MCP catalog", () => {
       unavailable_reason: "private network", installed: false, enabled: false, health: "not_installed",
       tool_ids: [], installed_at: null, checked_at: null,
     }];
-    const installMCP = vi.fn().mockResolvedValue({ ...presets[0], installed: true });
-    const client = { mcpPresets: vi.fn().mockResolvedValue(presets), installMCP } as unknown as WeatherFlowClient;
+    const request = { status: "needs_approval" as const, action_id: "act2", approval_id: "ap2", approval_version: 0, run_id: "r2", preview: {} };
+    const installMCP = vi.fn().mockResolvedValue(request);
+    const decide = vi.fn().mockResolvedValue({});
+    const client = { mcpPresets: vi.fn().mockResolvedValue(presets), installMCP, decide } as unknown as WeatherFlowClient;
     render(<MCPServersView client={client} workspaceId="w1" onOperation={vi.fn()} />);
 
     expect(await screen.findByRole("button", { name: "暂不可用" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "安装" }));
-    await waitFor(() => expect(installMCP).toHaveBeenCalledWith("filesystem", "w1"));
+    await waitFor(() => expect(installMCP).toHaveBeenCalledWith("filesystem", "w1", expect.any(String)));
+    fireEvent.click(screen.getByRole("button", { name: "批准安装" }));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("ap2", "approve", 0, "w1"));
   });
 });

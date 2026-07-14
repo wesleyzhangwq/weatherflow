@@ -1,14 +1,22 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from weatherflow.connectors import (
+    ComposioErrorCode,
+    ComposioGatewayError,
     ComposioLink,
     ComposioRemoteAccount,
     ConnectionPhase,
+    ConnectorAccount,
+    ConnectorBinding,
     ConnectorKind,
     ConnectorRepository,
     ConnectorService,
     ConnectorSnapshot,
+    ConversationAccess,
+    OAuthSetup,
     SourceItem,
 )
 from weatherflow.events import EventLedger
@@ -42,9 +50,19 @@ class FakeGateway:
         self.validated: list[str] = []
         self.revoked: list[str] = []
         self.phase = ConnectionPhase.WAITING_USER
+        self.oauth_failure: ConnectorKind | None = None
+        self.oauth_calls: list[ConnectorKind] = []
 
     async def validate_api_key(self, api_key: str) -> None:
         self.validated.append(api_key)
+
+    async def oauth_setup(self, connector: ConnectorKind) -> OAuthSetup:
+        self.oauth_calls.append(connector)
+        if connector is self.oauth_failure:
+            raise ComposioGatewayError(ComposioErrorCode.TRANSPORT, retryable=True)
+        if connector is ConnectorKind.GOOGLE_CALENDAR:
+            return OAuthSetup.BRING_YOUR_OWN
+        return OAuthSetup.MANAGED
 
     async def create_link(self, connector: ConnectorKind, *, user_id: str) -> ComposioLink:
         return ComposioLink(
@@ -63,6 +81,31 @@ class FakeGateway:
 
     async def revoke(self, account_id: str) -> None:
         self.revoked.append(account_id)
+
+
+class UniqueLinkGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self._next_link = 0
+        self.phases: dict[str, ConnectionPhase] = {}
+
+    async def create_link(self, connector: ConnectorKind, *, user_id: str) -> ComposioLink:
+        self._next_link += 1
+        account_id = f"ca_{connector.value}_{self._next_link}"
+        self.phases[account_id] = ConnectionPhase.WAITING_USER
+        return ComposioLink(
+            redirect_url=f"https://connect.composio.dev/{account_id}",
+            connected_account_id=account_id,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+
+    async def get_account(self, account_id: str) -> ComposioRemoteAccount:
+        return ComposioRemoteAccount(
+            id=account_id,
+            phase=self.phases[account_id],
+            toolkit="github",
+            display_name=account_id,
+        )
 
 
 async def setup(tmp_path: Path):
@@ -107,7 +150,11 @@ async def test_configure_handoff_and_authoritative_activation(tmp_path: Path) ->
 
     assert active.phase is ConnectionPhase.ACTIVE
     binding = await repository.get_binding(workspace.id, ConnectorKind.GITHUB)
-    assert binding is not None and binding.granted_scopes == frozenset({"github:read"})
+    assert binding is not None and binding.granted_scopes == frozenset(
+        {"github:read", "github:write"}
+    )
+    assert binding.conversation_access is ConversationAccess.DISABLED
+    assert binding.conversation_tool_ids == frozenset()
     assert keyring.values == {("ai.weatherflow.composio", "project_api_key"): SECRET}
     events = await service.ledger.list_stream("connector", ConnectorKind.GITHUB.value, limit=20)
     serialized = "".join(event.model_dump_json() for event in events)
@@ -118,6 +165,92 @@ async def test_configure_handoff_and_authoritative_activation(tmp_path: Path) ->
         "connector.handoff_started",
         "connector.activated",
     ]
+
+
+async def test_same_connector_accounts_are_isolated_by_workspace(tmp_path: Path) -> None:
+    database, first, repository, _, _, service = await setup(tmp_path)
+    second = Workspace.new(
+        name="Second connection boundary",
+        action_roots=[tmp_path / "project-2"],
+        internal_root=tmp_path / "internal-2",
+        artifact_root=tmp_path / "artifacts-2",
+    )
+    await WorkspaceRepository(database).create(second)
+    gateway = UniqueLinkGateway()
+    service.gateway = gateway
+
+    first_handoff = await service.connect(first.id, ConnectorKind.GITHUB)
+    second_handoff = await service.connect(second.id, ConnectorKind.GITHUB)
+    gateway.phases["ca_github_1"] = ConnectionPhase.ACTIVE
+    await service.refresh_attempt(first_handoff.attempt_id)
+
+    first_binding = await repository.get_binding(first.id, ConnectorKind.GITHUB)
+    assert first_binding is not None
+    assert await repository.get_binding(second.id, ConnectorKind.GITHUB) is None
+
+    gateway.phases["ca_github_2"] = ConnectionPhase.ACTIVE
+    await service.refresh_attempt(second_handoff.attempt_id)
+
+    second_binding = await repository.get_binding(second.id, ConnectorKind.GITHUB)
+    assert second_binding is not None
+    assert second_binding.account_id != first_binding.account_id
+    first_account = await repository.get_account_by_id(first.id, first_binding.account_id)
+    second_account = await repository.get_account_by_id(second.id, second_binding.account_id)
+    assert first_account is not None
+    assert second_account is not None
+    assert first_account.workspace_id == first.id
+    assert first_account.external_account_id == "ca_github_1"
+    assert second_account.workspace_id == second.id
+    assert second_account.external_account_id == "ca_github_2"
+    assert await repository.get_account_by_id(first.id, second_binding.account_id) is None
+
+
+async def test_only_latest_concurrent_connect_attempt_may_activate(tmp_path: Path) -> None:
+    _, workspace, repository, _, _, service = await setup(tmp_path)
+    gateway = UniqueLinkGateway()
+    service.gateway = gateway
+
+    first = await service.connect(workspace.id, ConnectorKind.GITHUB)
+    second = await service.connect(workspace.id, ConnectorKind.GITHUB)
+    gateway.phases["ca_github_1"] = ConnectionPhase.ACTIVE
+
+    stale = await service.refresh_attempt(first.attempt_id)
+
+    assert stale.phase is ConnectionPhase.EXPIRED
+    assert await repository.get_binding(workspace.id, ConnectorKind.GITHUB) is None
+
+    gateway.phases["ca_github_2"] = ConnectionPhase.ACTIVE
+    active = await service.refresh_attempt(second.attempt_id)
+
+    assert active.phase is ConnectionPhase.ACTIVE
+    binding = await repository.get_binding(workspace.id, ConnectorKind.GITHUB)
+    assert binding is not None
+    account = await repository.get_account_by_id(workspace.id, binding.account_id)
+    assert account is not None
+    assert account.external_account_id == "ca_github_2"
+
+
+async def test_conversation_access_is_explicit_and_separate_from_auto_fetch(
+    tmp_path: Path,
+) -> None:
+    _, workspace, repository, _, gateway, service = await setup(tmp_path)
+    handoff = await service.connect(workspace.id, ConnectorKind.GITHUB)
+    gateway.phase = ConnectionPhase.ACTIVE
+    await service.refresh_attempt(handoff.attempt_id)
+
+    read_binding = await service.update_conversation_access(
+        workspace.id, ConnectorKind.GITHUB, ConversationAccess.READ
+    )
+    assert read_binding.conversation_access is ConversationAccess.READ
+    assert read_binding.auto_fetch_enabled is True
+    assert read_binding.conversation_tool_ids
+    assert all("create" not in tool_id for tool_id in read_binding.conversation_tool_ids)
+
+    disabled = await service.update_conversation_access(
+        workspace.id, ConnectorKind.GITHUB, ConversationAccess.DISABLED
+    )
+    assert disabled.conversation_tool_ids == frozenset()
+    assert (await repository.get_binding(workspace.id, ConnectorKind.GITHUB)) == disabled
 
 
 async def test_unavailable_keyring_keeps_background_connectors_disabled(
@@ -131,6 +264,95 @@ async def test_unavailable_keyring_keeps_background_connectors_disabled(
     service.credential_store = UnavailableStore()
 
     assert service.configured() is False
+
+
+async def test_statuses_expose_oauth_catalog_capabilities_without_virtual_tools(
+    tmp_path: Path,
+) -> None:
+    _, workspace, _, _, _, service = await setup(tmp_path)
+
+    statuses = {status.connector: status for status in await service.statuses(workspace.id)}
+
+    assert len(statuses) == 20
+    github = statuses[ConnectorKind.GITHUB]
+    assert github.category == "development"
+    assert github.toolkit == "github"
+    assert github.auto_fetch_supported is True
+    assert github.conversation_tools_supported is True
+    assert github.oauth_setup is OAuthSetup.MANAGED
+    slack = statuses[ConnectorKind.SLACK]
+    assert slack.category == "communication"
+    assert slack.toolkit == "slack"
+    assert slack.auto_fetch_supported is False
+    assert slack.conversation_tools_supported is False
+    assert slack.oauth_setup is OAuthSetup.MANAGED
+    assert statuses[ConnectorKind.GOOGLE_CALENDAR].oauth_setup is OAuthSetup.BRING_YOUR_OWN
+    assert statuses[ConnectorKind.TRELLO].oauth_setup is OAuthSetup.UNKNOWN
+
+
+async def test_one_toolkit_lookup_failure_does_not_fail_the_oauth_catalog(
+    tmp_path: Path,
+) -> None:
+    _, workspace, _, _, gateway, service = await setup(tmp_path)
+    gateway.oauth_failure = ConnectorKind.SLACK
+
+    statuses = {status.connector: status for status in await service.statuses(workspace.id)}
+
+    assert statuses[ConnectorKind.SLACK].oauth_setup is OAuthSetup.UNKNOWN
+    assert statuses[ConnectorKind.GITHUB].oauth_setup is OAuthSetup.MANAGED
+
+    call_count = len(gateway.oauth_calls)
+    cached = {status.connector: status for status in await service.statuses(workspace.id)}
+
+    assert len(gateway.oauth_calls) == call_count
+    assert cached[ConnectorKind.SLACK].oauth_setup is OAuthSetup.UNKNOWN
+
+
+async def test_successful_broker_configuration_invalidates_oauth_setup_cache(
+    tmp_path: Path,
+) -> None:
+    _, workspace, _, _, gateway, service = await setup(tmp_path)
+    await service.statuses(workspace.id)
+    call_count = len(gateway.oauth_calls)
+
+    await service.configure()
+    await service.statuses(workspace.id)
+
+    assert len(gateway.oauth_calls) == call_count * 2
+
+
+async def test_unsupported_connector_cannot_enable_fetch_or_conversation_tools(
+    tmp_path: Path,
+) -> None:
+    _, workspace, repository, _, _, service = await setup(tmp_path)
+    account = ConnectorAccount.new(
+        workspace_id=workspace.id,
+        connector=ConnectorKind.SLACK,
+        external_account_id="ca_slack",
+        credential_ref=CredentialRef(provider="composio", name="project_api_key"),
+    )
+    await repository.save_account(account)
+    binding = ConnectorBinding.new(
+        workspace_id=workspace.id,
+        connector=ConnectorKind.SLACK,
+        account_id=account.id,
+    )
+    await repository.save_binding(binding)
+
+    assert binding.auto_fetch_enabled is False
+    with pytest.raises(PermissionError):
+        await service.update_settings(
+            workspace.id,
+            ConnectorKind.SLACK,
+            auto_fetch_enabled=True,
+            interval_minutes=60,
+        )
+    with pytest.raises(PermissionError):
+        await service.update_conversation_access(
+            workspace.id,
+            ConnectorKind.SLACK,
+            ConversationAccess.READ,
+        )
 
 
 async def test_disconnect_revokes_remote_and_clears_local_derived_data(tmp_path: Path) -> None:
@@ -157,9 +379,9 @@ async def test_disconnect_revokes_remote_and_clears_local_derived_data(tmp_path:
         )
     )
 
-    await service.disconnect(ConnectorKind.GITHUB)
+    await service.disconnect(workspace.id, ConnectorKind.GITHUB)
 
     assert gateway.revoked == ["ca_github"]
-    assert await repository.get_account(ConnectorKind.GITHUB) is None
+    assert await repository.get_account(workspace.id, ConnectorKind.GITHUB) is None
     assert await repository.get_binding(workspace.id, ConnectorKind.GITHUB) is None
     assert await repository.get_snapshot(workspace.id, ConnectorKind.GITHUB) is None

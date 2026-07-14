@@ -9,6 +9,7 @@ from weatherflow.capabilities.builtin import (
     UnknownCapabilityPackError,
 )
 from weatherflow.config import Settings
+from weatherflow.mcp import MCPInstallAuthorization
 from weatherflow.runs import RunStatus
 from weatherflow.runtime import (
     FinalTurn,
@@ -29,8 +30,9 @@ async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Pat
         client_request_id="request-1",
     )
 
-    assert outcome is not None and outcome.status is LoopStatus.SUCCEEDED
+    assert outcome is not None and outcome.status is LoopStatus.WAITING_USER
     assert run.workspace_id == workspace.id
+    assert outcome.error == "configure a language model before running this task"
 
     rebuilt = await RuntimeContainer.create(settings)
     stored_workspace = await rebuilt.workspaces.get(workspace.id)
@@ -39,7 +41,8 @@ async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Pat
     checkpoint = await rebuilt.checkpoints.get(run.id)
 
     assert stored_workspace == workspace
-    assert stored_run is not None and stored_run.status is RunStatus.SUCCEEDED
+    assert stored_run is not None and stored_run.status is RunStatus.WAITING_USER
+    assert stored_run.error_class == "ModelConfigurationRequired"
     assert snapshot is not None
     assert {tool.tool_id for tool in snapshot.tools} == {
         "developer.git_status",
@@ -48,7 +51,7 @@ async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Pat
         "developer.write_artifact",
         "developer.write_file",
     }
-    assert checkpoint is not None and checkpoint.state["result_committed"] is True
+    assert checkpoint is not None and checkpoint.state.get("result_committed") is not True
     assert checkpoint.state["rhythm_policy"]["proactivity"] == "silent"
     assert set(rebuilt.workers.definitions) == {
         "release-preparer",
@@ -92,6 +95,43 @@ class CountingExecutor:
     async def execute(self, tool, arguments, context):
         self.calls += 1
         return ToolExecutionResult(output={"status": "shipped"})
+
+
+class FixedMCPTransport:
+    async def request(self, method, params=None):
+        if method == "initialize":
+            return {"serverInfo": {"name": "filesystem", "version": "1.0.0"}}
+        if method == "tools/list":
+            return {
+                "tools": [
+                    {
+                        "name": "read_file",
+                        "description": "Read one file",
+                        "inputSchema": {"type": "object"},
+                        "annotations": {"readOnlyHint": True},
+                    }
+                ]
+            }
+        if method == "ping":
+            return {}
+        raise AssertionError(method)
+
+    async def notify(self, method, params=None):
+        assert method == "notifications/initialized"
+
+    async def close(self):
+        return None
+
+
+class FixedMCPInstaller:
+    async def install(self, preset, *, internal_root: Path, approved_action_id: str):
+        executable = preset.executable_path(internal_root)
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("fixture")
+        return preset.installation_root(internal_root)
+
+    def is_installed(self, preset, *, internal_root: Path) -> bool:
+        return preset.executable_path(internal_root).is_file()
 
 
 async def test_restart_preserves_pending_turn_and_resumes_after_approval(
@@ -186,6 +226,40 @@ async def test_installed_packs_define_the_frozen_tool_surface(tmp_path: Path) ->
     assert snapshot is not None
     assert [tool.tool_id for tool in snapshot.tools] == ["research.gather"]
     assert container.executors.get("research.gather") is not None
+
+
+async def test_enabled_curated_mcp_tools_receive_effective_workspace_scope(
+    tmp_path: Path,
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path / "data"))
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = Workspace.new(
+        name="MCP",
+        action_roots=[project],
+        internal_root=tmp_path / "internal",
+        artifact_root=tmp_path / "artifacts",
+    )
+    await container.workspaces.create(workspace)
+    container.mcp_management.package_installer = FixedMCPInstaller()
+    container.mcp_management.transport_factory = lambda argv: FixedMCPTransport()
+    await container.mcp_management.install(
+        "filesystem",
+        workspace=container._mcp_workspace_context(workspace),
+        authorization=MCPInstallAuthorization(approved_action_id="approved-install"),
+    )
+    await container.enable_mcp("filesystem", workspace)
+
+    run, _ = await container.submit_run(
+        user_intent="Read a project file with MCP",
+        workspace_id=workspace.id,
+        execute=False,
+    )
+    snapshot = await container.snapshots.get_by_run_id(run.id)
+
+    assert snapshot is not None
+    assert "mcp.filesystem.read_file" in {tool.tool_id for tool in snapshot.tools}
+    assert "mcp:filesystem:use" not in workspace.granted_scopes
 
 
 async def test_unavailable_pack_provider_is_hidden_fail_closed(tmp_path: Path) -> None:

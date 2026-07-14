@@ -13,6 +13,7 @@ from weatherflow.trust import (
     ApprovalCoordinator,
     ApprovalPolicyError,
     ApprovalRepository,
+    ApprovalStateError,
     ApprovalStatus,
     SupervisedPolicy,
 )
@@ -116,6 +117,43 @@ async def test_repeated_idempotency_key_returns_existing_bundle(tmp_path: Path) 
 
     assert repeated == first
     assert await ledger.list_correlation(run_id) == before
+
+
+@pytest.mark.parametrize(
+    ("run_id_override", "tool_override", "arguments_override"),
+    [
+        ("another-run", None, None),
+        (None, release_tool().model_copy(update={"tool_id": "github.create_tag"}), None),
+        (None, None, {"tag": "v4.0.0"}),
+    ],
+)
+async def test_idempotency_key_cannot_reuse_a_different_action_identity(
+    tmp_path: Path,
+    run_id_override: str | None,
+    tool_override: ToolSpec | None,
+    arguments_override: dict[str, str] | None,
+) -> None:
+    coordinator, _, _, workspace, run_id = await setup_coordinator(tmp_path)
+    values = {
+        "run_id": run_id,
+        "expected_run_version": 2,
+        "tool": release_tool(),
+        "workspace": workspace,
+        "arguments": {"tag": "v3.0.0"},
+        "idempotency_key": "run-1:release-v3",
+        "preview": {"summary": "Create release v3.0.0"},
+    }
+    await coordinator.propose(**values)
+
+    with pytest.raises(ApprovalStateError, match="idempotency key identity mismatch"):
+        await coordinator.propose(
+            **{
+                **values,
+                "run_id": run_id_override or run_id,
+                "tool": tool_override or release_tool(),
+                "arguments": arguments_override or {"tag": "v3.0.0"},
+            }
+        )
 
 
 @pytest.mark.parametrize(

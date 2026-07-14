@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowSquareOut, Brain, Check, ClockCounterClockwise, MagnifyingGlass,
   Pause, Play, Plus, ShieldCheck, Sparkle, Trash, Wrench,
@@ -6,7 +6,7 @@ import {
 import type { WeatherFlowClient } from "../bridge";
 import type {
   Automation, AutomationRunLink, AutomationSchedule, AutomationStatus,
-  MCPPreset, ScheduleKind, SkillCatalogEntry, Workspace,
+  InstallApprovalRequest, MCPPreset, ScheduleKind, SkillCatalogEntry, Workspace,
 } from "../types";
 
 type AutomationFilter = "all" | AutomationStatus;
@@ -172,6 +172,8 @@ export function SkillsView({ client, workspace, onOperation }: { client: Weather
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "installed">("all");
   const [busy, setBusy] = useState<string | null>(null);
+  const [pending, setPending] = useState<Record<string, InstallApprovalRequest>>({});
+  const requestIds = useRef<Record<string, string>>({});
   const workspaceId = workspace?.id;
   const refresh = useCallback(async () => {
     if (!workspaceId || typeof (client as Partial<WeatherFlowClient>).skills !== "function") return;
@@ -190,16 +192,36 @@ export function SkillsView({ client, workspace, onOperation }: { client: Weather
       const latest = (await client.workspaces()).find((candidate) => candidate.id === workspace.id);
       if (latest?.version === undefined) throw new Error("workspace version unavailable");
       if (item.installed) await client.uninstallSkill(item.id, workspace.id, latest.version);
-      else await client.installSkill(item.id, workspace.id, latest.version);
+      else {
+        const requestId = requestIds.current[item.id] ?? crypto.randomUUID();
+        requestIds.current[item.id] = requestId;
+        const requested = await client.installSkill(item.id, workspace.id, latest.version, requestId);
+        setPending((current) => ({ ...current, [item.id]: requested }));
+        onOperation(`${item.id} 安装请求需要批准；批准前不会修改项目。`);
+        return;
+      }
       await refresh();
       onOperation(item.installed ? `${item.id} 已从当前项目移除。` : `${item.id} 已安装；新的任务可以使用它。`);
     } catch { onOperation("Skill 状态更新失败；项目可能刚刚被其他操作修改，请重试。"); }
     finally { setBusy(null); }
   };
+  const decideInstall = async (item: SkillCatalogEntry, approved: boolean) => {
+    if (!workspace || busy || !pending[item.id]) return;
+    setBusy(item.id);
+    try {
+      const request = pending[item.id];
+      await client.decide(request.approval_id, approved ? "approve" : "deny", request.approval_version, workspace.id);
+      delete requestIds.current[item.id];
+      setPending((current) => { const next = { ...current }; delete next[item.id]; return next; });
+      await refresh();
+      onOperation(approved ? `${item.id} 已批准并完成安装。` : `${item.id} 安装已取消。`);
+    } catch { onOperation(`${item.id} 批准状态已变化；请刷新后重试。`); }
+    finally { setBusy(null); }
+  };
   return <div className="page-view catalog-view">
     <header className="tool-page-bar"><div><span>工具 · Skills</span><h1>为当前项目选择技能</h1><p>来自 wesley-skills 的 127 个本机技能。安装后使用不可变快照，说明不会授予权限。</p></div><span className="catalog-count">{items.filter((item) => item.installed).length} 已安装</span></header>
     <div className="catalog-toolbar"><div className="segmented-tabs"><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部</button><button className={filter === "installed" ? "active" : ""} onClick={() => setFilter("installed")}>已安装</button></div><label className="tool-search"><MagnifyingGlass /><input aria-label="搜索 Skills" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、用途或分类…" /></label></div>
-    <div className="skill-grid">{visible.map((item) => <article className={item.installed ? "installed" : ""} key={item.id}><header><span className="skill-mark"><Brain /></span><span className={`catalog-state ${item.installed ? "active" : ""}`}>{item.installed ? <><Check />已安装</> : item.validation_status === "valid" ? "可安装" : "不可用"}</span></header><small>{item.category ?? "通用技能"}</small><h2>{item.id}</h2><p>{item.description_zh ?? item.description}</p>{item.boundary_zh && <div className="skill-boundary"><ShieldCheck />{item.boundary_zh}</div>}<footer><span>{item.source}</span><button onClick={() => void mutate(item)} disabled={busy === item.id || item.validation_status !== "valid"}>{busy === item.id ? "处理中…" : item.installed ? "移除" : "安装"}</button></footer></article>)}</div>
+    <div className="skill-grid">{visible.map((item) => <article className={item.installed ? "installed" : ""} key={item.id}><header><span className="skill-mark"><Brain /></span><span className={`catalog-state ${item.installed ? "active" : ""}`}>{item.installed ? <><Check />已安装</> : pending[item.id] ? "需要批准" : item.validation_status === "valid" ? "可安装" : "不可用"}</span></header><small>{item.category ?? "通用技能"}</small><h2>{item.id}</h2><p>{item.description_zh ?? item.description}</p>{item.boundary_zh && <div className="skill-boundary"><ShieldCheck />{item.boundary_zh}</div>}<footer><span>{item.source}</span>{pending[item.id] ? <span className="install-approval-actions"><button onClick={() => void decideInstall(item, false)} disabled={busy === item.id}>取消</button><button className="primary" onClick={() => void decideInstall(item, true)} disabled={busy === item.id}>批准安装</button></span> : <button onClick={() => void mutate(item)} disabled={busy === item.id || item.validation_status !== "valid"}>{busy === item.id ? "处理中…" : item.installed ? "移除" : "安装"}</button>}</footer></article>)}</div>
     {visible.length === 0 && <div className="tool-empty standalone"><Sparkle /><strong>没有匹配的 Skill</strong><p>换一个关键词，或切回“全部”。</p></div>}
   </div>;
 }
@@ -207,6 +229,8 @@ export function SkillsView({ client, workspace, onOperation }: { client: Weather
 export function MCPServersView({ client, workspaceId, onOperation }: { client: WeatherFlowClient; workspaceId?: string | null; onOperation: (message: string) => void }) {
   const [items, setItems] = useState<MCPPreset[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [pending, setPending] = useState<Record<string, InstallApprovalRequest>>({});
+  const requestIds = useRef<Record<string, string>>({});
   const refresh = useCallback(async () => {
     if (!workspaceId || typeof (client as Partial<WeatherFlowClient>).mcpPresets !== "function") return;
     setItems(await client.mcpPresets(workspaceId));
@@ -216,16 +240,36 @@ export function MCPServersView({ client, workspaceId, onOperation }: { client: W
     if (!workspaceId || busy || !item.available) return;
     setBusy(item.preset_id);
     try {
-      if (!item.installed) await client.installMCP(item.preset_id, workspaceId);
+      if (!item.installed) {
+        const requestId = requestIds.current[item.preset_id] ?? crypto.randomUUID();
+        requestIds.current[item.preset_id] = requestId;
+        const requested = await client.installMCP(item.preset_id, workspaceId, requestId);
+        setPending((current) => ({ ...current, [item.preset_id]: requested }));
+        onOperation(`${item.title} 安装请求需要批准；批准前不会执行安装。`);
+        return;
+      }
       else await client.setMCPEnabled(item.preset_id, workspaceId, !item.enabled);
       await refresh();
       onOperation(!item.installed ? `${item.title} 已安装，确认后可启用。` : item.enabled ? `${item.title} 已停用。` : `${item.title} 已启用，新任务可以使用它。`);
     } catch { onOperation(`${item.title} 操作失败；没有扩大任何权限。`); }
     finally { setBusy(null); }
   };
+  const decideInstall = async (item: MCPPreset, approved: boolean) => {
+    if (!workspaceId || busy || !pending[item.preset_id]) return;
+    setBusy(item.preset_id);
+    try {
+      const request = pending[item.preset_id];
+      await client.decide(request.approval_id, approved ? "approve" : "deny", request.approval_version, workspaceId);
+      delete requestIds.current[item.preset_id];
+      setPending((current) => { const next = { ...current }; delete next[item.preset_id]; return next; });
+      await refresh();
+      onOperation(approved ? `${item.title} 已批准并完成安装。` : `${item.title} 安装已取消。`);
+    } catch { onOperation(`${item.title} 批准状态已变化；请刷新后重试。`); }
+    finally { setBusy(null); }
+  };
   return <div className="page-view catalog-view mcp-view">
     <header className="tool-page-bar"><div><span>工具 · MCP Server</span><h1>连接经过约束的本机工具</h1><p>只显示由 Python 固定的官方预设、版本和参数；React 不能提交任意命令或环境变量。</p></div><span className="catalog-count">{items.filter((item) => item.enabled).length} 已启用</span></header>
-    <div className="mcp-grid">{items.map((item) => <article className={`${item.enabled ? "enabled" : ""} ${!item.available ? "unavailable" : ""}`} key={item.preset_id}><header><span className="mcp-mark"><Wrench /></span><span className={`catalog-state ${item.health === "healthy" ? "active" : ""}`}>{item.health === "healthy" ? "健康" : item.health === "disabled" ? "已停用" : item.health === "not_installed" ? "未安装" : "不可用"}</span></header><div className="mcp-title"><div><small>{item.publisher} · {item.version}</small><h2>{item.title}</h2></div><a href={item.source_url} target="_blank" rel="noreferrer" aria-label={`查看 ${item.title} 源码`}><ArrowSquareOut /></a></div><p>{item.description}</p><div className="capability-tags">{item.capabilities.map((capability) => <span key={capability}>{capability}</span>)}</div><div className="mcp-risk"><ShieldCheck />{item.risk_note}</div>{item.tool_ids.length > 0 && <small className="tool-count">已发现 {item.tool_ids.length} 个工具</small>}<button className={item.enabled ? "secondary" : "primary"} onClick={() => void mutate(item)} disabled={busy === item.preset_id || !item.available}>{busy === item.preset_id ? "处理中…" : !item.available ? "暂不可用" : !item.installed ? "安装" : item.enabled ? "停用" : "启用"}</button></article>)}</div>
+    <div className="mcp-grid">{items.map((item) => <article className={`${item.enabled ? "enabled" : ""} ${!item.available ? "unavailable" : ""}`} key={item.preset_id}><header><span className="mcp-mark"><Wrench /></span><span className={`catalog-state ${item.health === "healthy" ? "active" : ""}`}>{pending[item.preset_id] ? "需要批准" : item.health === "healthy" ? "健康" : item.health === "disabled" ? "已停用" : item.health === "not_installed" ? "未安装" : "不可用"}</span></header><div className="mcp-title"><div><small>{item.publisher} · {item.version}</small><h2>{item.title}</h2></div><a href={item.source_url} target="_blank" rel="noreferrer" aria-label={`查看 ${item.title} 源码`}><ArrowSquareOut /></a></div><p>{item.description}</p><div className="capability-tags">{item.capabilities.map((capability) => <span key={capability}>{capability}</span>)}</div><div className="mcp-risk"><ShieldCheck />{item.risk_note}</div>{item.tool_ids.length > 0 && <small className="tool-count">已发现 {item.tool_ids.length} 个工具</small>}{pending[item.preset_id] ? <div className="install-approval-actions"><button onClick={() => void decideInstall(item, false)} disabled={busy === item.preset_id}>取消</button><button className="primary" onClick={() => void decideInstall(item, true)} disabled={busy === item.preset_id}>批准安装</button></div> : <button className={item.enabled ? "secondary" : "primary"} onClick={() => void mutate(item)} disabled={busy === item.preset_id || !item.available}>{busy === item.preset_id ? "处理中…" : !item.available ? "暂不可用" : !item.installed ? "安装" : item.enabled ? "停用" : "启用"}</button>}</article>)}</div>
   </div>;
 }
 

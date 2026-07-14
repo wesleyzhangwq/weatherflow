@@ -1,4 +1,4 @@
-import type { Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, SkillCatalogEntry, SystemStatus, Workspace } from "./types";
+import type { Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorConversationAccess, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, InstallApprovalRequest, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, Session, SkillCatalogEntry, SystemStatus, Workspace } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
@@ -14,7 +14,6 @@ export function bridgeConfig(): BridgeConfig {
 }
 
 export async function resolveBridgeConfig(): Promise<BridgeConfig> {
-  if (import.meta.env.DEV) return bridgeConfig();
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const embedded = explicitBridgeConfig();
     if (embedded) return embedded;
@@ -24,7 +23,7 @@ export async function resolveBridgeConfig(): Promise<BridgeConfig> {
       await new Promise((resolve) => window.setTimeout(resolve, 100));
     }
   }
-  return bridgeConfig();
+  throw new Error("authenticated WeatherFlow daemon bridge unavailable");
 }
 
 function explicitBridgeConfig(): BridgeConfig | null {
@@ -32,7 +31,7 @@ function explicitBridgeConfig(): BridgeConfig | null {
 }
 
 export class WeatherFlowClient {
-  constructor(private readonly config: BridgeConfig = bridgeConfig()) {}
+  constructor(private readonly config: BridgeConfig) {}
 
   private headers(): HeadersInit {
     return this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {};
@@ -60,20 +59,30 @@ export class WeatherFlowClient {
     return this.request("/v1/workspaces", { method: "POST", body: JSON.stringify({ name, path }) });
   }
   runs(workspaceId?: string | null): Promise<Run[]> { return this.request(this.scoped("/v1/runs", workspaceId)); }
+  sessions(workspaceId: string): Promise<Session[]> { return this.request(this.scoped("/v1/sessions", workspaceId)); }
+  createSession(workspaceId: string): Promise<Session> {
+    return this.request("/v1/sessions", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) });
+  }
+  updateSession(sessionId: string, workspaceId: string, update: { title?: string; pinned?: boolean }): Promise<Session> {
+    return this.request(this.scoped(`/v1/sessions/${encodeURIComponent(sessionId)}`, workspaceId), { method: "PATCH", body: JSON.stringify(update) });
+  }
+  deleteSession(sessionId: string, workspaceId: string): Promise<void> {
+    return this.request(this.scoped(`/v1/sessions/${encodeURIComponent(sessionId)}`, workspaceId), { method: "DELETE" });
+  }
   approvals(): Promise<Approval[]> { return this.request("/v1/approvals"); }
   timeline(runId: string): Promise<LedgerEvent[]> { return this.request(`/v1/runs/${runId}/timeline`); }
   artifacts(runId: string): Promise<Artifact[]> { return this.request(`/v1/runs/${runId}/artifacts`); }
   cancel(runId: string): Promise<Run> { return this.request(`/v1/runs/${runId}/cancel`, { method: "POST" }); }
-  createRun(userIntent: string, clientRequestId: string, workspaceId?: string | null, contextRunId?: string | null): Promise<Run> {
+  createRun(userIntent: string, clientRequestId: string, workspaceId?: string | null, contextRunId?: string | null, sessionId?: string | null): Promise<Run> {
     return this.request("/v1/runs", {
       method: "POST",
-      body: JSON.stringify({ user_intent: userIntent, client_request_id: clientRequestId, workspace_id: workspaceId, context_run_id: contextRunId }),
+      body: JSON.stringify({ user_intent: userIntent, client_request_id: clientRequestId, workspace_id: workspaceId, context_run_id: contextRunId, ...(sessionId !== undefined ? { session_id: sessionId } : {}) }),
     });
   }
-  decide(approvalId: string, decision: "approve" | "deny", version: number): Promise<unknown> {
+  decide(approvalId: string, decision: "approve" | "deny", version: number, workspaceId?: string): Promise<unknown> {
     return this.request(`/v1/approvals/${approvalId}/decision`, {
       method: "POST",
-      body: JSON.stringify({ decision, expected_version: version, resume: true }),
+      body: JSON.stringify({ decision, expected_version: version, resume: true, ...(workspaceId ? { workspace_id: workspaceId } : {}) }),
     });
   }
   ingestSignal(signal: Record<string, unknown>, workspaceId?: string | null): Promise<unknown> {
@@ -124,11 +133,17 @@ export class WeatherFlowClient {
   updateConnectorSettings(connector: ConnectorKind, autoFetchEnabled: boolean, intervalMinutes: number, workspaceId?: string | null): Promise<void> {
     return this.request(this.scoped(`/v1/connectors/${connector}/settings`, workspaceId), { method: "POST", body: JSON.stringify({ auto_fetch_enabled: autoFetchEnabled, interval_minutes: intervalMinutes }) });
   }
+  updateConnectorConversationAccess(connector: ConnectorKind, conversationAccess: ConnectorConversationAccess, workspaceId?: string | null): Promise<ConnectorStatus> {
+    return this.request(this.scoped(`/v1/connectors/${connector}/conversation-access`, workspaceId), {
+      method: "POST",
+      body: JSON.stringify({ conversation_access: conversationAccess }),
+    });
+  }
   syncConnector(connector: ConnectorKind, workspaceId?: string | null): Promise<ConnectorSnapshot> {
     return this.request(this.scoped(`/v1/connectors/${connector}/sync`, workspaceId), { method: "POST" });
   }
-  disconnectConnector(connector: ConnectorKind): Promise<void> {
-    return this.request(`/v1/connectors/${connector}/disconnect`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+  disconnectConnector(connector: ConnectorKind, workspaceId?: string | null): Promise<void> {
+    return this.request(this.scoped(`/v1/connectors/${connector}/disconnect`, workspaceId), { method: "POST", body: JSON.stringify({ confirm: true }) });
   }
   automations(workspaceId: string): Promise<Automation[]> {
     return this.request(this.scoped("/v1/automations", workspaceId));
@@ -154,8 +169,8 @@ export class WeatherFlowClient {
   skills(workspaceId: string): Promise<SkillCatalogEntry[]> {
     return this.request(this.scoped("/v1/skills/catalog", workspaceId));
   }
-  installSkill(skillId: string, workspaceId: string, workspaceVersion: number): Promise<SkillCatalogEntry> {
-    return this.request(`/v1/skills/${encodeURIComponent(skillId)}/install`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, expected_workspace_version: workspaceVersion, confirm: true }) });
+  installSkill(skillId: string, workspaceId: string, workspaceVersion: number, clientRequestId: string): Promise<InstallApprovalRequest> {
+    return this.request(`/v1/skills/${encodeURIComponent(skillId)}/install`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, expected_workspace_version: workspaceVersion, client_request_id: clientRequestId }) });
   }
   uninstallSkill(skillId: string, workspaceId: string, workspaceVersion: number): Promise<SkillCatalogEntry> {
     return this.request(`/v1/skills/${encodeURIComponent(skillId)}`, { method: "DELETE", body: JSON.stringify({ workspace_id: workspaceId, expected_workspace_version: workspaceVersion, confirm: true }) });
@@ -163,8 +178,8 @@ export class WeatherFlowClient {
   mcpPresets(workspaceId: string): Promise<MCPPreset[]> {
     return this.request(this.scoped("/v1/mcp/catalog", workspaceId));
   }
-  installMCP(presetId: string, workspaceId: string): Promise<MCPPreset> {
-    return this.request(`/v1/mcp/${encodeURIComponent(presetId)}/install`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, confirm: true }) });
+  installMCP(presetId: string, workspaceId: string, clientRequestId: string): Promise<InstallApprovalRequest> {
+    return this.request(`/v1/mcp/${encodeURIComponent(presetId)}/install`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, client_request_id: clientRequestId }) });
   }
   setMCPEnabled(presetId: string, workspaceId: string, enabled: boolean): Promise<MCPPreset> {
     return this.request(`/v1/mcp/${encodeURIComponent(presetId)}/${enabled ? "enable" : "disable"}`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) });

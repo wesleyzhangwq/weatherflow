@@ -481,6 +481,34 @@ class MCPManagementService:
         )
         return tuple(sorted(tools, key=lambda item: item.tool_id))
 
+    async def effective_scopes(self, workspace_id: str) -> frozenset[str]:
+        """Derive authority only from healthy persisted fixed-preset connections."""
+
+        scopes: set[str] = set()
+        for state in await self.repository.list_for_workspace(workspace_id):
+            if (
+                not state.enabled
+                or state.health is not MCPManagedHealth.HEALTHY
+                or not state.tool_ids
+            ):
+                continue
+            self.catalog.require(state.preset_id)
+            connected = self._connections.get((workspace_id, state.preset_id))
+            if connected is None:
+                continue
+            expected_scope = f"mcp:{state.preset_id}:use"
+            expected_source = f"mcp:{state.preset_id}"
+            if set(state.tool_ids) != {tool.tool_id for tool in connected.tools}:
+                continue
+            if any(
+                tool.source != expected_source
+                or tool.required_scopes != frozenset({expected_scope})
+                for tool in connected.tools
+            ):
+                continue
+            scopes.add(expected_scope)
+        return frozenset(scopes)
+
     def connection(self, workspace_id: str, preset_id: str) -> ConnectedMCP | None:
         return self._connections.get((workspace_id, preset_id))
 

@@ -1,3 +1,4 @@
+import asyncio
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -7,6 +8,7 @@ from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime.models import ToolExecutionContext, ToolExecutionResult
 from weatherflow.runtime.protocols import ToolExecutor
+from weatherflow.runtime.validation import ToolOutputValidation, validate_tool_output
 from weatherflow.storage import Database
 from weatherflow.trust import (
     Action,
@@ -69,7 +71,7 @@ class ActionExecutionCoordinator:
         if action is None:
             raise ActionNotFoundError(action_id)
         decision = self.policy.evaluate(tool, workspace)
-        if decision.kind is not DecisionKind.APPROVE:
+        if decision.kind not in {DecisionKind.APPROVE, DecisionKind.SANDBOX}:
             raise ApprovalPolicyError(decision.reason)
         if action.tool_id != tool.tool_id:
             raise ApprovalPolicyError("approved action tool does not match frozen ToolSpec")
@@ -98,15 +100,28 @@ class ActionExecutionCoordinator:
             )
 
         try:
-            result = await executor.execute(
-                tool,
-                action.arguments,
-                ToolExecutionContext(
-                    run_id=action.run_id,
-                    workspace_id=workspace.id,
-                    action_id=action.id,
-                    idempotency_key=action.idempotency_key,
+            result = await asyncio.wait_for(
+                executor.execute(
+                    tool,
+                    action.arguments,
+                    ToolExecutionContext(
+                        run_id=action.run_id,
+                        workspace_id=workspace.id,
+                        action_id=action.id,
+                        idempotency_key=action.idempotency_key,
+                    ),
                 ),
+                timeout=tool.timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._needs_review(executing, "execution cancelled after side effect started")
+            )
+            raise
+        except TimeoutError:
+            return await self._needs_review(
+                executing,
+                f"tool {tool.tool_id} timed out after {tool.timeout_seconds}s",
             )
         except DefinitiveToolError as error:
             failed = await self._finish(
@@ -123,6 +138,13 @@ class ActionExecutionCoordinator:
         except Exception as error:
             return await self._needs_review(executing, str(error))
 
+        output_validation = validate_tool_output(tool.output_schema, result.output)
+        if not output_validation.valid:
+            return await self._needs_review(
+                executing,
+                self._output_validation_reason(output_validation),
+            )
+
         succeeded = await self._finish(
             executing,
             ActionStatus.SUCCEEDED,
@@ -133,6 +155,45 @@ class ActionExecutionCoordinator:
             status=ActionExecutionStatus.SUCCEEDED,
             action=succeeded,
             result=result,
+        )
+
+    async def recover_succeeded(
+        self,
+        *,
+        action_id: str,
+        tool: ToolSpec,
+        workspace: Workspace,
+    ) -> ActionExecutionOutcome:
+        action = await self.actions.get(action_id)
+        if action is None:
+            raise ActionNotFoundError(action_id)
+        decision = self.policy.evaluate(tool, workspace)
+        if decision.kind not in {DecisionKind.APPROVE, DecisionKind.SANDBOX}:
+            raise ApprovalPolicyError(decision.reason)
+        if action.tool_id != tool.tool_id:
+            raise ApprovalPolicyError("succeeded action tool does not match frozen ToolSpec")
+        if action.status is not ActionStatus.SUCCEEDED:
+            raise ApprovalPolicyError(f"action is {action.status.value}, not succeeded")
+        if action.result is None:
+            return await self._needs_review(action, "succeeded action has no persisted result")
+        output_validation = validate_tool_output(tool.output_schema, action.result)
+        if not output_validation.valid:
+            return await self._needs_review(
+                action,
+                self._output_validation_reason(output_validation),
+            )
+        return ActionExecutionOutcome(
+            status=ActionExecutionStatus.SUCCEEDED,
+            action=action,
+            result=ToolExecutionResult(output=action.result),
+        )
+
+    @staticmethod
+    def _output_validation_reason(validation: ToolOutputValidation) -> str:
+        return (
+            "frozen tool output schema is invalid"
+            if not validation.schema_valid
+            else "tool output does not match frozen output schema"
         )
 
     async def _finish(

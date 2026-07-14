@@ -8,6 +8,14 @@ from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
 
 
+class RecordingMCPInstaller:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Path, str]] = []
+
+    async def install(self, preset, *, internal_root: Path, approved_action_id: str) -> None:
+        self.calls.append((preset.preset_id, internal_root, approved_action_id))
+
+
 def _skill_catalog(root: Path) -> Path:
     skill = root / "skills" / "focus-coach"
     skill.mkdir(parents=True)
@@ -34,6 +42,8 @@ def test_automation_skill_and_mcp_surfaces_use_one_workspace_boundary(tmp_path: 
 
     with asyncio.Runner() as runner:
         container = runner.run(RuntimeContainer.create(settings))
+        mcp_installer = RecordingMCPInstaller()
+        container.mcp_management.package_installer = mcp_installer
         workspace = runner.run(container.authorize_workspace(name="Project", path=project))
         with TestClient(create_app(settings, container=container)) as client:
             created = client.post(
@@ -73,11 +83,29 @@ def test_automation_skill_and_mcp_surfaces_use_one_workspace_boundary(tmp_path: 
                 json={
                     "workspace_id": workspace.id,
                     "expected_workspace_version": workspace.version,
-                    "confirm": True,
+                    "client_request_id": "install-focus-coach",
                 },
             )
-            assert install.status_code == 200
-            assert install.json()["installed"] is True
+            assert install.status_code == 202
+            assert install.json()["status"] == "needs_approval"
+            before_approval = client.get(
+                "/v1/skills/catalog", params={"workspace_id": workspace.id}
+            )
+            assert before_approval.json()[0]["installed"] is False
+            approved_skill = client.post(
+                f"/v1/approvals/{install.json()['approval_id']}/decision",
+                json={
+                    "decision": "approve",
+                    "expected_version": install.json()["approval_version"],
+                    "workspace_id": workspace.id,
+                },
+            )
+            assert approved_skill.status_code == 200
+            assert approved_skill.json()["action"]["status"] == "succeeded"
+            installed_skills = client.get(
+                "/v1/skills/catalog", params={"workspace_id": workspace.id}
+            )
+            assert installed_skills.json()[0]["installed"] is True
 
             mcp = client.get("/v1/mcp/catalog", params={"workspace_id": workspace.id})
             assert mcp.status_code == 200
@@ -87,8 +115,31 @@ def test_automation_skill_and_mcp_surfaces_use_one_workspace_boundary(tmp_path: 
             assert by_id["fetch"]["available"] is False
             assert "package_name" not in by_id["filesystem"]
 
+            mcp_install = client.post(
+                "/v1/mcp/filesystem/install",
+                json={
+                    "workspace_id": workspace.id,
+                    "client_request_id": "install-filesystem-mcp",
+                },
+            )
+            assert mcp_install.status_code == 202
+            assert mcp_install.json()["status"] == "needs_approval"
+            assert mcp_installer.calls == []
+            approved_mcp = client.post(
+                f"/v1/approvals/{mcp_install.json()['approval_id']}/decision",
+                json={
+                    "decision": "approve",
+                    "expected_version": mcp_install.json()["approval_version"],
+                    "workspace_id": workspace.id,
+                },
+            )
+            assert approved_mcp.status_code == 200
+            assert approved_mcp.json()["action"]["status"] == "succeeded"
+            assert mcp_installer.calls[0][0] == "filesystem"
+            assert mcp_installer.calls[0][2] == mcp_install.json()["action_id"]
 
-def test_install_endpoints_require_an_explicit_confirmation(tmp_path: Path) -> None:
+
+def test_install_endpoints_reject_boolean_confirmation_as_authority(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
         skill_catalog_root=_skill_catalog(tmp_path / "wesley-skills"),
@@ -102,15 +153,80 @@ def test_install_endpoints_require_an_explicit_confirmation(tmp_path: Path) -> N
                 json={
                     "workspace_id": workspace.id,
                     "expected_workspace_version": workspace.version,
-                    "confirm": False,
+                    "client_request_id": "skill-boolean-bypass",
+                    "confirm": True,
                 },
             )
             assert skill.status_code == 422
-            assert skill.json()["detail"]["code"] == "confirmation_required"
 
             mcp = client.post(
                 "/v1/mcp/filesystem/install",
-                json={"workspace_id": workspace.id, "confirm": False},
+                json={
+                    "workspace_id": workspace.id,
+                    "client_request_id": "mcp-boolean-bypass",
+                    "confirm": True,
+                },
             )
             assert mcp.status_code == 422
-            assert mcp.json()["detail"]["code"] == "confirmation_required"
+
+
+def test_install_approval_cannot_cross_workspace_or_expiry_boundary(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        skill_catalog_root=_skill_catalog(tmp_path / "wesley-skills"),
+    )
+    owner_root = tmp_path / "owner"
+    other_root = tmp_path / "other"
+    owner_root.mkdir()
+    other_root.mkdir()
+    with asyncio.Runner() as runner:
+        container = runner.run(RuntimeContainer.create(settings))
+        owner = runner.run(container.authorize_workspace(name="Owner", path=owner_root))
+        other = runner.run(container.authorize_workspace(name="Other", path=other_root))
+        with TestClient(create_app(settings, container=container)) as client:
+            cross_workspace = client.post(
+                "/v1/skills/focus-coach/install",
+                json={
+                    "workspace_id": owner.id,
+                    "expected_workspace_version": owner.version,
+                    "client_request_id": "cross-workspace-install",
+                },
+            )
+            denied = client.post(
+                f"/v1/approvals/{cross_workspace.json()['approval_id']}/decision",
+                json={
+                    "decision": "approve",
+                    "expected_version": 0,
+                    "workspace_id": other.id,
+                },
+            )
+            assert denied.status_code == 404
+            assert denied.json()["detail"]["code"] == "approval_not_found"
+
+            expiring = client.post(
+                "/v1/skills/focus-coach/install",
+                json={
+                    "workspace_id": owner.id,
+                    "expected_workspace_version": owner.version,
+                    "client_request_id": "expired-install",
+                },
+            )
+            runner.run(
+                container.approval_coordinator.expire(
+                    approval_id=expiring.json()["approval_id"],
+                    expected_version=0,
+                )
+            )
+            expired = client.post(
+                f"/v1/approvals/{expiring.json()['approval_id']}/decision",
+                json={
+                    "decision": "approve",
+                    "expected_version": 1,
+                    "workspace_id": owner.id,
+                },
+            )
+            assert expired.status_code == 409
+            assert expired.json()["detail"]["code"] == "approval_already_decided"
+
+            catalog = client.get("/v1/skills/catalog", params={"workspace_id": owner.id})
+            assert catalog.json()[0]["installed"] is False
