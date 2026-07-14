@@ -1,10 +1,13 @@
+import asyncio
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from weatherflow.artifacts import ArtifactRepository, ArtifactStore
 from weatherflow.capabilities.builtin import DeveloperExecutor, developer_tool_specs
-from weatherflow.capabilities.builtin.developer import ALLOWED_COMMANDS
+from weatherflow.capabilities.builtin.developer import _sanitized_path
 from weatherflow.events import EventLedger
 from weatherflow.runs import Run, RunRepository
 from weatherflow.runtime import ToolExecutionContext
@@ -95,23 +98,107 @@ async def test_internal_root_and_symlink_escape_are_rejected(tmp_path: Path) -> 
         )
 
 
-async def test_command_execution_is_allowlisted_and_bounded(tmp_path: Path) -> None:
-    _, workspace, executor = await setup(tmp_path)
+async def test_command_execution_only_accepts_classified_read_only_forms(tmp_path: Path) -> None:
+    project, workspace, executor = await setup(tmp_path)
     context = ToolExecutionContext(run_id="run-1", workspace_id=workspace.id)
 
     result = await executor.execute(
         spec("developer.run_command"),
-        {"argv": ["python", "-c", "print('ok')"]},
+        {"argv": ["python", "--version"]},
         context,
     )
     assert result.output["returncode"] == 0
-    assert result.output["stdout"] == "ok\n"
 
-    assert "pnpm" in ALLOWED_COMMANDS
+    await asyncio.to_thread(
+        subprocess.run,
+        ["git", "init", str(project)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    status = await executor.execute(
+        spec("developer.run_command"),
+        {"argv": ["git", "status", "--short"]},
+        context,
+    )
+    assert status.output["returncode"] == 0
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", "-c", "from pathlib import Path; Path('/tmp/escaped').write_text('x')"],
+        ["python3", "task.py"],
+        ["git", "push", "origin", "main"],
+        ["git", "-C", "/tmp", "status"],
+        ["npm", "install", "left-pad"],
+        ["pnpm", "add", "left-pad"],
+        ["uv", "pip", "install", "requests"],
+        ["npx", "eslint", "."],
+        ["make", "release"],
+        ["sh", "-c", "echo unsafe"],
+    ],
+)
+async def test_unclassified_or_side_effecting_commands_fail_closed(
+    tmp_path: Path,
+    argv: list[str],
+) -> None:
+    _, workspace, executor = await setup(tmp_path)
+    context = ToolExecutionContext(run_id="run-1", workspace_id=workspace.id)
 
     with pytest.raises(PermissionError):
+        await executor.execute(spec("developer.run_command"), {"argv": argv}, context)
+
+
+async def test_workspace_executables_cannot_shadow_classified_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, workspace, executor = await setup(tmp_path)
+    binary_directory = project / "bin"
+    binary_directory.mkdir()
+    fake_python = binary_directory / "python"
+    fake_python.write_text("#!/bin/sh\necho escaped\n")
+    fake_python.chmod(0o755)
+    (project / "nested").mkdir()
+    monkeypatch.setenv("PATH", f"{binary_directory}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(PermissionError, match="Workspace executable"):
         await executor.execute(
-            spec("developer.run_command"), {"argv": ["sh", "-c", "echo unsafe"]}, context
+            spec("developer.run_command"),
+            {"argv": ["python", "--version"], "cwd": "nested"},
+            ToolExecutionContext(run_id="run-1", workspace_id=workspace.id),
+        )
+
+
+async def test_subprocess_path_excludes_workspace_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, workspace, _ = await setup(tmp_path)
+    binary_directory = project / "bin"
+    binary_directory.mkdir()
+    trusted_directory = tmp_path / "trusted-bin"
+    trusted_directory.mkdir()
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((str(binary_directory), "", str(trusted_directory))),
+    )
+
+    assert _sanitized_path(workspace) == str(trusted_directory)
+
+
+async def test_git_metadata_cannot_escape_workspace(tmp_path: Path) -> None:
+    project, workspace, executor = await setup(tmp_path)
+    outside_git = tmp_path / "outside.git"
+    outside_git.mkdir()
+    (project / ".git").write_text(f"gitdir: {outside_git}\n")
+
+    with pytest.raises(PermissionError, match="Git metadata"):
+        await executor.execute(
+            spec("developer.run_command"),
+            {"argv": ["git", "status", "--short"]},
+            ToolExecutionContext(run_id="run-1", workspace_id=workspace.id),
         )
 
 

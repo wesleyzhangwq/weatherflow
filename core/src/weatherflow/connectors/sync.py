@@ -3,7 +3,10 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
-from weatherflow.connectors.composio import ComposioGatewayError
+from weatherflow.connectors.composio import (
+    ComposioErrorCode,
+    ComposioGatewayError,
+)
 from weatherflow.connectors.models import (
     CONNECTOR_DEFINITIONS,
     ConnectionPhase,
@@ -66,6 +69,18 @@ class ConnectorSyncService:
                 {"error_code": error.code.value, "retryable": error.retryable},
             )
             raise
+        except Exception as error:
+            error_code = "invalid_response"
+            await self.repository.save_binding(
+                binding.after_sync(now=observed, error_code=error_code)
+            )
+            await self._event(
+                "connector.sync_failed",
+                connector,
+                workspace_id,
+                {"error_code": error_code, "retryable": False},
+            )
+            raise ComposioGatewayError(ComposioErrorCode.UPSTREAM) from error
         snapshot = ConnectorSnapshot(
             workspace_id=workspace_id,
             connector=connector,
@@ -131,6 +146,7 @@ class ConnectorSyncService:
                 arguments={
                     "query": "is:unread -in:spam -in:trash",
                     "max_results": 50,
+                    "include_payload": False,
                 },
             )
         else:
@@ -196,7 +212,7 @@ def _normalize_item(
         return None
     if connector is ConnectorKind.GMAIL:
         title = _find_string(raw, ("subject", "title")) or "未读邮件"
-        summary = _find_string(raw, ("snippet", "summary", "body")) or ""
+        summary = _find_string(raw, ("snippet",)) or ""
         occurred = _parse_datetime(
             _find_string(raw, ("date", "internal_date", "received_at")), observed
         )

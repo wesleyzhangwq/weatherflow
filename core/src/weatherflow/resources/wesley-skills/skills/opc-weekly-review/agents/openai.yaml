@@ -1,0 +1,4 @@
+interface:
+  display_name: "OPC Weekly Review"
+  short_description: "Review weekly founder execution and choose next actions."
+  default_prompt: "Use this skill to run a focused weekly review for an OPC founder."

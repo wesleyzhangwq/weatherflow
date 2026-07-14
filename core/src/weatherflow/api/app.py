@@ -1,6 +1,9 @@
 import asyncio
 import secrets
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import (
     FastAPI,
@@ -18,21 +21,34 @@ from weatherflow import __version__
 from weatherflow.api.schemas import (
     ApprovalDecisionRequest,
     ApprovalView,
+    AutomationCreateRequest,
+    AutomationUpdateRequest,
     ConnectorConfigureResponse,
     ConnectorDisconnectRequest,
     ConnectorSettingsRequest,
     DesktopSnapshot,
     HealthResponse,
+    MCPMutationRequest,
+    MCPPresetView,
     ModelConfigurationResponse,
     ModelConfigureRequest,
     ModelProviderList,
     OnboardingCompleteRequest,
     ResetConfirmRequest,
     RunCreateRequest,
+    SkillMutationRequest,
     SystemStatus,
+    VersionedRequest,
     WorkspaceCreateRequest,
 )
 from weatherflow.artifacts import ArtifactManifest
+from weatherflow.automations import (
+    Automation,
+    AutomationNotFoundError,
+    AutomationRunLink,
+    AutomationStatus,
+    AutomationVersionConflict,
+)
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
 from weatherflow.connectors import (
@@ -45,6 +61,14 @@ from weatherflow.connectors import (
     ConnectorStatus,
 )
 from weatherflow.events import Event, UnknownEventCursor
+from weatherflow.extensions import SkillCatalogEntry, SkillCatalogError
+from weatherflow.mcp import (
+    MCPInstallationError,
+    MCPInstallAuthorization,
+    MCPNotInstalledError,
+    MCPPresetUnavailableError,
+    UnknownMCPPresetError,
+)
 from weatherflow.models import (
     ModelProvider,
     ProviderModelCatalog,
@@ -60,14 +84,14 @@ from weatherflow.operations import (
     SecurityScan,
     SecurityScanner,
 )
-from weatherflow.rhythm import CurrentRhythm, RhythmSignal
+from weatherflow.rhythm import CurrentRhythm, RhythmInsights, RhythmInsightsService, RhythmSignal
 from weatherflow.runs import InvalidTransitionError, Run, RunStatus
 from weatherflow.trust import (
     ApprovalAlreadyDecided,
     ApprovalBundle,
     ApprovalStatus,
 )
-from weatherflow.workspaces import Workspace
+from weatherflow.workspaces import Workspace, WorkspaceVersionConflict
 
 
 def create_app(
@@ -76,10 +100,26 @@ def create_app(
     container: RuntimeContainer | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings()
-    app = FastAPI(title="WeatherFlow Core", version=__version__)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        application.state.lifespan_active = True
+        try:
+            service = application.state.container
+            if service is not None:
+                await service.start_background()
+            yield
+        finally:
+            service = application.state.container
+            if service is not None:
+                await service.stop_background()
+            application.state.lifespan_active = False
+
+    app = FastAPI(title="WeatherFlow Core", version=__version__, lifespan=lifespan)
     app.state.settings = resolved_settings
     app.state.container = container
     app.state.container_lock = asyncio.Lock()
+    app.state.lifespan_active = False
 
     @app.exception_handler(ComposioGatewayError)
     async def composio_gateway_failure(
@@ -125,7 +165,7 @@ def create_app(
             "tauri://localhost",
             "http://tauri.localhost",
         ],
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -135,7 +175,10 @@ def create_app(
                 if app.state.container is None:
                     app.state.container = await RuntimeContainer.create(resolved_settings)
         service = app.state.container
-        await service.start_background()
+        await service.start_background(
+            include_connector_sync=app.state.lifespan_active,
+            include_automation_scheduler=app.state.lifespan_active,
+        )
         return service
 
     async def selected_workspace(service: RuntimeContainer, workspace_id: str | None) -> Workspace:
@@ -229,6 +272,291 @@ def create_app(
                 detail={"code": "workspace_not_found", "workspace_id": workspace_id},
             )
         return workspace
+
+    @app.get("/v1/automations", response_model=list[Automation])
+    async def list_automations(
+        workspace_id: str,
+        automation_status: AutomationStatus | None = None,
+    ) -> list[Automation]:
+        service = await runtime()
+        await selected_workspace(service, workspace_id)
+        return await service.automations.list(workspace_id, status=automation_status)
+
+    @app.post(
+        "/v1/automations",
+        response_model=Automation,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_automation(request: AutomationCreateRequest) -> Automation:
+        service = await runtime()
+        await selected_workspace(service, request.workspace_id)
+        return await service.automations.create(
+            workspace_id=request.workspace_id,
+            name=request.name,
+            prompt=request.prompt,
+            schedule=request.schedule,
+        )
+
+    @app.patch("/v1/automations/{automation_id}", response_model=Automation)
+    async def update_automation(
+        automation_id: str,
+        request: AutomationUpdateRequest,
+    ) -> Automation:
+        service = await runtime()
+        try:
+            return await service.automations.update(
+                automation_id,
+                expected_version=request.expected_version,
+                name=request.name,
+                prompt=request.prompt,
+                schedule=request.schedule,
+            )
+        except AutomationNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "automation_not_found", "automation_id": automation_id},
+            ) from error
+        except AutomationVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "automation_version_conflict"},
+            ) from error
+
+    @app.post("/v1/automations/{automation_id}/pause", response_model=Automation)
+    async def pause_automation(
+        automation_id: str,
+        request: VersionedRequest,
+    ) -> Automation:
+        service = await runtime()
+        try:
+            return await service.automations.pause(
+                automation_id,
+                expected_version=request.expected_version,
+            )
+        except AutomationNotFoundError as error:
+            raise HTTPException(status_code=404, detail={"code": "automation_not_found"}) from error
+        except AutomationVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "automation_version_conflict"},
+            ) from error
+
+    @app.post("/v1/automations/{automation_id}/resume", response_model=Automation)
+    async def resume_automation(
+        automation_id: str,
+        request: VersionedRequest,
+    ) -> Automation:
+        service = await runtime()
+        try:
+            return await service.automations.resume(
+                automation_id,
+                expected_version=request.expected_version,
+            )
+        except AutomationNotFoundError as error:
+            raise HTTPException(status_code=404, detail={"code": "automation_not_found"}) from error
+        except AutomationVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "automation_version_conflict"},
+            ) from error
+
+    @app.post("/v1/automations/{automation_id}/run", response_model=AutomationRunLink)
+    async def run_automation_now(automation_id: str) -> AutomationRunLink:
+        service = await runtime()
+        try:
+            return await service.automations.run_now(automation_id)
+        except AutomationNotFoundError as error:
+            raise HTTPException(status_code=404, detail={"code": "automation_not_found"}) from error
+
+    @app.get(
+        "/v1/automations/{automation_id}/history",
+        response_model=list[AutomationRunLink],
+    )
+    async def automation_history(
+        automation_id: str,
+        limit: int = 100,
+    ) -> list[AutomationRunLink]:
+        service = await runtime()
+        if await service.automations.get(automation_id) is None:
+            raise HTTPException(status_code=404, detail={"code": "automation_not_found"})
+        return await service.automations.history(automation_id, limit=limit)
+
+    @app.delete("/v1/automations/{automation_id}", status_code=204)
+    async def delete_automation(
+        automation_id: str,
+        request: VersionedRequest,
+    ) -> Response:
+        service = await runtime()
+        if not request.confirm:
+            raise HTTPException(status_code=422, detail={"code": "confirmation_required"})
+        try:
+            await service.automations.delete(
+                automation_id,
+                expected_version=request.expected_version,
+            )
+        except AutomationVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "automation_version_conflict"},
+            ) from error
+        return Response(status_code=204)
+
+    @app.get("/v1/skills/catalog", response_model=list[SkillCatalogEntry])
+    async def list_skills(workspace_id: str) -> list[SkillCatalogEntry]:
+        service = await runtime()
+        await selected_workspace(service, workspace_id)
+        try:
+            return list(await service.skill_catalog.list_for_workspace(workspace_id))
+        except SkillCatalogError as error:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "skill_catalog_unavailable"},
+            ) from error
+
+    @app.post("/v1/skills/{skill_id}/install", response_model=SkillCatalogEntry)
+    async def install_skill(
+        skill_id: str,
+        request: SkillMutationRequest,
+    ) -> SkillCatalogEntry:
+        service = await runtime()
+        await selected_workspace(service, request.workspace_id)
+        if not request.confirm:
+            raise HTTPException(status_code=422, detail={"code": "confirmation_required"})
+        try:
+            await service.skill_catalog.install_for_workspace(
+                skill_id,
+                workspace_id=request.workspace_id,
+                expected_workspace_version=request.expected_workspace_version,
+            )
+            entries = await service.skill_catalog.list_for_workspace(request.workspace_id)
+        except WorkspaceVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "workspace_version_conflict"},
+            ) from error
+        except (SkillCatalogError, ValueError) as error:
+            raise HTTPException(status_code=422, detail={"code": "skill_invalid"}) from error
+        return next(entry for entry in entries if entry.id == skill_id)
+
+    @app.delete("/v1/skills/{skill_id}", response_model=SkillCatalogEntry)
+    async def uninstall_skill(
+        skill_id: str,
+        request: SkillMutationRequest,
+    ) -> SkillCatalogEntry:
+        service = await runtime()
+        await selected_workspace(service, request.workspace_id)
+        if not request.confirm:
+            raise HTTPException(status_code=422, detail={"code": "confirmation_required"})
+        try:
+            await service.skill_catalog.uninstall_from_workspace(
+                skill_id,
+                workspace_id=request.workspace_id,
+                expected_workspace_version=request.expected_workspace_version,
+            )
+            entries = await service.skill_catalog.list_for_workspace(request.workspace_id)
+        except WorkspaceVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "workspace_version_conflict"},
+            ) from error
+        except (LookupError, SkillCatalogError) as error:
+            raise HTTPException(status_code=404, detail={"code": "skill_not_installed"}) from error
+        return next(entry for entry in entries if entry.id == skill_id)
+
+    async def mcp_catalog_views(
+        service: RuntimeContainer,
+        workspace_id: str,
+    ) -> list[MCPPresetView]:
+        summaries = {item.preset_id: item for item in service.mcp_management.catalog.summaries()}
+        states = await service.mcp_management.list_statuses(workspace_id)
+        return [
+            MCPPresetView(
+                **summaries[state.preset_id].model_dump(),
+                installed=state.installed,
+                enabled=state.enabled,
+                health=state.health.value,
+                tool_ids=state.tool_ids,
+                installed_at=state.installed_at,
+                checked_at=state.checked_at,
+            )
+            for state in states
+        ]
+
+    @app.get("/v1/mcp/catalog", response_model=list[MCPPresetView])
+    async def list_mcp_presets(workspace_id: str) -> list[MCPPresetView]:
+        service = await runtime()
+        await selected_workspace(service, workspace_id)
+        return await mcp_catalog_views(service, workspace_id)
+
+    @app.post("/v1/mcp/{preset_id}/install", response_model=MCPPresetView)
+    async def install_mcp_preset(
+        preset_id: str,
+        request: MCPMutationRequest,
+    ) -> MCPPresetView:
+        service = await runtime()
+        workspace = await selected_workspace(service, request.workspace_id)
+        if not request.confirm:
+            raise HTTPException(status_code=422, detail={"code": "confirmation_required"})
+        try:
+            await service.mcp_management.install(
+                preset_id,
+                workspace=service._mcp_workspace_context(workspace),
+                authorization=MCPInstallAuthorization(
+                    approved_action_id=f"user-confirmed:{uuid4()}"
+                ),
+            )
+        except UnknownMCPPresetError as error:
+            raise HTTPException(status_code=404, detail={"code": "mcp_preset_not_found"}) from error
+        except MCPPresetUnavailableError as error:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "mcp_preset_unavailable"},
+            ) from error
+        except MCPInstallationError as error:
+            raise HTTPException(status_code=503, detail={"code": "mcp_install_failed"}) from error
+        return next(
+            item
+            for item in await mcp_catalog_views(service, workspace.id)
+            if item.preset_id == preset_id
+        )
+
+    @app.post("/v1/mcp/{preset_id}/enable", response_model=MCPPresetView)
+    async def enable_mcp_preset(
+        preset_id: str,
+        request: MCPMutationRequest,
+    ) -> MCPPresetView:
+        service = await runtime()
+        workspace = await selected_workspace(service, request.workspace_id)
+        try:
+            await service.enable_mcp(preset_id, workspace)
+        except UnknownMCPPresetError as error:
+            raise HTTPException(status_code=404, detail={"code": "mcp_preset_not_found"}) from error
+        except MCPNotInstalledError as error:
+            raise HTTPException(status_code=409, detail={"code": "mcp_not_installed"}) from error
+        return next(
+            item
+            for item in await mcp_catalog_views(service, workspace.id)
+            if item.preset_id == preset_id
+        )
+
+    @app.post("/v1/mcp/{preset_id}/disable", response_model=MCPPresetView)
+    async def disable_mcp_preset(
+        preset_id: str,
+        request: MCPMutationRequest,
+    ) -> MCPPresetView:
+        service = await runtime()
+        workspace = await selected_workspace(service, request.workspace_id)
+        try:
+            await service.mcp_management.disable(preset_id, workspace_id=workspace.id)
+        except UnknownMCPPresetError as error:
+            raise HTTPException(status_code=404, detail={"code": "mcp_preset_not_found"}) from error
+        except MCPNotInstalledError as error:
+            raise HTTPException(status_code=409, detail={"code": "mcp_not_installed"}) from error
+        return next(
+            item
+            for item in await mcp_catalog_views(service, workspace.id)
+            if item.preset_id == preset_id
+        )
 
     @app.get("/v1/runs/{run_id}", response_model=Run)
     async def get_run(run_id: str) -> Run:
@@ -393,6 +721,17 @@ def create_app(
         workspace = await selected_workspace(service, workspace_id)
         return await service.rhythm.current(workspace.id)
 
+    @app.get("/v1/rhythm/insights", response_model=RhythmInsights)
+    async def rhythm_insights(workspace_id: str | None = None) -> RhythmInsights:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        insights = RhythmInsightsService(
+            rhythm=service.rhythm,
+            ledger=service.ledger,
+            profiles=service.memory.assertions,
+        )
+        return await insights.current(workspace.id)
+
     @app.get("/v1/desktop/snapshot", response_model=DesktopSnapshot)
     async def desktop_snapshot(workspace_id: str | None = None) -> DesktopSnapshot:
         service = await runtime()
@@ -427,8 +766,6 @@ def create_app(
             providers[f"mcp.{connection.client.server_name}"] = health
         onboarding = await service.onboarding.get(workspace.id)
         model_status = await service.model_configurations.status(workspace.id)
-        if not model_status.configured and workspace.id != service.default_workspace.id:
-            model_status = await service.model_configurations.status(service.default_workspace.id)
         return SystemStatus(
             workspace_id=workspace.id,
             onboarding_completed=onboarding.completed,

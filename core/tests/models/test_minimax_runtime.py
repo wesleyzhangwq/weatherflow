@@ -44,7 +44,9 @@ async def test_runtime_activates_and_rebuilds_persisted_minimax_adapter(
         base_url="https://api.minimax.test/v1",
     )
 
-    assert first.model_configuration == configuration
+    assert (
+        await first.model_configurations.repository.get(first.default_workspace.id) == configuration
+    )
     run, _ = await first.submit_run(
         user_intent="hello",
         client_request_id="frozen-model-route",

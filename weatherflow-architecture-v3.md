@@ -85,13 +85,34 @@ The daemon is also usable through CLI and MCP. No client owns business state.
 22. Provider/model selection is frozen per Run at durable acceptance. Workspace
     configuration is only the default for future Runs; SharedTurnLoop resolves
     the immutable Run route and never reads or mutates one process-global adapter.
+23. The Cockpit status-weather view is presentation-only. It combines the
+    current HumanStateSnapshot, privacy-safe recent behavior aggregates, and
+    active evidence-backed profile assertions. Any future deliberate-state
+    correction belongs behind a typed conversation or Capsule contract rather
+    than a second check-in form.
+24. An Automation is a persisted schedule that submits an ordinary idempotent
+    Run. It cannot execute tools directly, create a second workflow engine, or
+    bypass the Run Coordinator, frozen capability snapshot, Trust Plane, or
+    approval lifecycle. Missed schedules coalesce instead of replaying a burst.
+25. A Skill selected from a local catalog is installed explicitly as an
+    immutable verified Workspace snapshot. The source checkout is not a runtime
+    dependency, installation does not grant authority, and changes apply only
+    to future Runs.
+26. Desktop-managed MCP connections come from a curated, version-pinned catalog
+    and require explicit installation and enablement. Renderer input cannot
+    supply arbitrary commands or environment variables. MCP tools remain
+    subject to Workspace scopes and execution-time Trust checks, and connection
+    changes affect only future Runs.
+27. Cockpit groups user-managed agent facilities in one left-navigation Tools
+    section: Automations, Skills, MCP Servers, LLM Models, and Composio. System
+    and privacy preferences remain in Settings; conversation remains primary.
 
 ## 4. v3.0 scope
 
 v3.0 includes the Python daemon, Tauri three-surface desktop, durable harness,
 Rhythm Intelligence, risk-based supervised autonomy, Developer/Research/
-Personal Operations capability packs, Skills, MCP, Agent Definitions, local
-ownership, diagnostics, and macOS packaging.
+Personal Operations capability packs, Skills, MCP, Agent Definitions,
+schedule-to-Run Automations, local ownership, diagnostics, and macOS packaging.
 
 v3.0 excludes Windows/Linux support, mobile/cloud/team features, content-level
 desktop monitoring, recursive agent networks, a workflow canvas, broad email or
@@ -204,6 +225,12 @@ compatibility.
   initiate/v1/v2 fallback, generic
   Composio model tool, Trigger lifecycle, WeatherFlow account login, or cloud
   backend is introduced. Connection never grants execution authority.
+- 2026-07-14: Reframed Cockpit's status-weather destination as a read-only
+  personal insight surface. The page has exactly three product roles: show the
+  current human-state weather and dimensions, summarize recent privacy-safe
+  activity/task behavior, and display only active long-term profile assertions
+  with confidence and evidence counts. The former check-in/correction form was
+  removed because conversation is the primary deliberate-input surface.
 - 2026-07-13: Standardized macOS development on a stable local code-signing
   requirement. `pnpm dev:app` signs Cargo's final debug executable immediately
   before launch with the fixed identifier `ai.weatherflow.desktop.dev` and a
@@ -212,3 +239,15 @@ compatibility.
   Developer ID signing or notarization. This keeps Keychain/TCC authorization
   stable across rebuilds without changing credential ownership or exposing
   secret material.
+- 2026-07-14: Approved the Cockpit Tools surface and schedule-to-Run Automation
+  contract. Users may explicitly install verified immutable Skill snapshots
+  from the local `wesley-skills` catalog, install and enable version-pinned MCP
+  presets, and manage Automations alongside LLM and Composio configuration.
+  Automations only submit ordinary Runs through the existing coordinator;
+  Skills and MCP remain descriptive capability inputs and never grant authority.
+- 2026-07-14: Refined the floating Companion into one compact, fixed square
+  weather tile. The tile remains the single click-or-drag target and keeps the
+  weather glyph visually dominant; the native window is tightly fitted to the
+  visible tile so transparent margins do not create a hidden pointer-catching
+  region. Hover feedback changes only surface, border, and elevation and never
+  shifts the tile's position. Run and sensor state remain small secondary dots.

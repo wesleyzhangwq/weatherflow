@@ -92,6 +92,10 @@ class ProfileAssertionRepository:
         async with self.database.connect() as connection:
             return await self.get_in(connection, assertion_id)
 
+    async def list_workspace(self, workspace_id: str) -> list[ProfileAssertion]:
+        async with self.database.connect() as connection:
+            return await self.list_workspace_in(connection, workspace_id)
+
     async def get_in(
         self, connection: aiosqlite.Connection, assertion_id: str
     ) -> ProfileAssertion | None:

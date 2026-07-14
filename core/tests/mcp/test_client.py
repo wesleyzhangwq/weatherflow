@@ -72,6 +72,11 @@ class OfflineTransport:
         return None
 
 
+class NotificationTransport(FakeTransport):
+    async def notify(self, method, params=None):
+        self.calls.append((method, params))
+
+
 async def test_discovery_normalizes_annotations_without_granting_scope() -> None:
     registry = MCPRegistry()
     connected = await registry.connect("fixture", FakeTransport())
@@ -89,6 +94,14 @@ async def test_discovery_normalizes_annotations_without_granting_scope() -> None
     )
     assert result.output["structured_content"] == {"count": 1}
     assert result.output["content"][0]["text"] == "source result"
+
+
+async def test_discovery_completes_mcp_initialize_handshake() -> None:
+    transport = NotificationTransport()
+
+    await MCPRegistry().connect("fixture", transport)
+
+    assert ("notifications/initialized", {}) in transport.calls
 
 
 async def test_disconnect_marks_cached_schema_unavailable_and_redacts_transport() -> None:

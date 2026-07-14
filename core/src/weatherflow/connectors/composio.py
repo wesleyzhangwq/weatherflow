@@ -10,6 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from weatherflow.connectors.models import ConnectionPhase, ConnectorKind
 from weatherflow.extensions import CredentialBroker, CredentialRef
 
+# Reviewed against Composio's public toolkit catalog on 2026-07-14. Upgrades are
+# deliberate so an upstream schema change cannot silently alter automatic fetch.
+_PINNED_READ_ACTION_VERSIONS = {
+    "GITHUB_GET_THE_AUTHENTICATED_USER": "20260703_00",
+    "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260703_00",
+    "GMAIL_FETCH_EMAILS": "20260703_00",
+    "GOOGLECALENDAR_EVENTS_LIST": "20260703_00",
+}
+
 
 class ComposioErrorCode(StrEnum):
     AUTH = "auth"
@@ -153,6 +162,9 @@ class ComposioGateway:
         arguments: dict[str, Any],
     ) -> Any:
         _safe_action(action)
+        version = _PINNED_READ_ACTION_VERSIONS.get(action)
+        if version is None:
+            raise ComposioGatewayError(ComposioErrorCode.INPUT)
         payload = await self._with_key(
             lambda key: self._request(
                 key,
@@ -160,7 +172,7 @@ class ComposioGateway:
                 f"/api/v3.1/tools/execute/{action}",
                 json={
                     "connected_account_id": connected_account_id,
-                    "version": "latest",
+                    "version": version,
                     "arguments": arguments,
                 },
             )

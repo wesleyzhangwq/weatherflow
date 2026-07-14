@@ -99,3 +99,85 @@ async def test_activity_metadata_requires_explicit_workspace_consent(
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == "metadata_sensor_consent_required"
     assert accepted.status_code == 201
+
+
+async def test_rhythm_insights_are_read_only_and_privacy_safe(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    transport = ASGITransport(app=create_app(container=container))
+    now = datetime.now(UTC)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/v1/onboarding/complete",
+            json={
+                "confirm_local_ownership": True,
+                "enable_metadata_sensor": True,
+            },
+        )
+        await client.post(
+            "/v1/rhythm/signals",
+            json={
+                "kind": "checkin",
+                "text": "private deliberate state text must not appear in behavior history",
+                "observed_at": (now - timedelta(minutes=6)).isoformat(),
+            },
+        )
+        activity = await client.post(
+            "/v1/rhythm/signals",
+            json={
+                "kind": "activity_metadata",
+                "observed_at": now.isoformat(),
+                "window_start": (now - timedelta(minutes=5)).isoformat(),
+                "window_end": now.isoformat(),
+                "active_seconds": 240,
+                "idle_seconds": 60,
+                "app_switch_count": 4,
+                "category_seconds": {"development": 240},
+            },
+        )
+
+        assert activity.status_code == 201
+        events = await container.ledger.list_stream(
+            "workspace", container.default_workspace.id, limit=1000
+        )
+        activity_event = next(
+            event for event in events if event.type == "rhythm.signal.activity_metadata"
+        )
+        assertion = await container.memory.create_assertion(
+            workspace_id=container.default_workspace.id,
+            claim="长时间专注后更适合先安排短暂恢复。",
+            confidence=0.82,
+            evidence_event_ids=(activity_event.id,),
+            origin="derived",
+        )
+
+        response = await client.get("/v1/rhythm/insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current"]["snapshot"]["id"] == activity.json()["snapshot"]["id"]
+    assert payload["recent_behaviors"] == [
+        {
+            "id": activity_event.id,
+            "kind": "activity",
+            "observed_at": now.isoformat().replace("+00:00", "Z"),
+            "active_minutes": 4,
+            "idle_minutes": 1,
+            "app_switch_count": 4,
+            "dominant_category": "development",
+            "outcome": None,
+            "duration_minutes": None,
+            "step_count": None,
+        }
+    ]
+    assert payload["profile"] == [
+        {
+            "id": assertion.id,
+            "claim": assertion.claim,
+            "confidence": assertion.confidence,
+            "origin": assertion.origin,
+            "evidence_count": 1,
+            "updated_at": assertion.updated_at.isoformat().replace("+00:00", "Z"),
+        }
+    ]
+    assert "private deliberate state text" not in response.text

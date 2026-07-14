@@ -76,6 +76,28 @@ class EventLedger:
             limit,
         )
 
+    async def list_stream_recent(
+        self,
+        stream_kind: str,
+        stream_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[Event]:
+        if limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        async with self.database.connect() as connection:
+            rows = await (
+                await connection.execute(
+                    """
+                    SELECT * FROM events
+                    WHERE stream_kind = ? AND stream_id = ?
+                    ORDER BY recorded_at DESC, id DESC LIMIT ?
+                    """,
+                    (stream_kind, stream_id, limit),
+                )
+            ).fetchall()
+        return [self._from_row(row) for row in rows]
+
     async def list_stream_in(
         self,
         connection: aiosqlite.Connection,

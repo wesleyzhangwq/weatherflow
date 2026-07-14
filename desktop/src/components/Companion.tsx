@@ -82,12 +82,14 @@ export function Companion({ snapshot, offline = false, sensorAvailable = true, o
   return (
     <main className="companion-shell" data-weather={weather} data-agent-state={state}>
       <button
-        className="weather-button"
+        className="weather-button weather-tile"
+        data-shape="square"
         aria-label={`当前天气：${weatherLabels[weather]}`}
-        title={`${weatherLabels[weather]} · 点击输入，拖动移动，右键打开控制台`}
+        title={`${weatherLabels[weather]} · 点击输入，拖动移动`}
         onMouseDown={pointerDown}
         onMouseMove={pointerMove}
         onMouseUp={pointerUp}
+        onMouseLeave={() => { pointerOrigin.current = null; }}
         onClick={click}
         onContextMenu={(event) => { event.preventDefault(); onOpenCockpit(); }}
       >

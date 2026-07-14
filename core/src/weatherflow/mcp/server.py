@@ -195,6 +195,8 @@ async def serve_stdio(container: RuntimeContainer) -> None:
             return
         try:
             request = json.loads(line)
+            if isinstance(request, dict) and "id" not in request:
+                continue
             response = await server.handle(request)
         except (json.JSONDecodeError, TypeError):
             response = WeatherFlowMCPServer._error(None, -32700, "parse error")

@@ -1,7 +1,9 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from weatherflow.automations import ScheduleSpec
 from weatherflow.capabilities import ToolEffect
 from weatherflow.models import ModelConfiguration, ModelProvider, ModelStatus, ProviderPreset
 from weatherflow.rhythm import CurrentRhythm
@@ -124,3 +126,64 @@ class ConnectorDisconnectRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     confirm: bool = False
+
+
+class AutomationCreateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_id: str
+    name: str = Field(min_length=1, max_length=160)
+    prompt: str = Field(min_length=1, max_length=20_000)
+    schedule: ScheduleSpec
+
+
+class AutomationUpdateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_version: int = Field(ge=0)
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
+    schedule: ScheduleSpec | None = None
+
+
+class VersionedRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_version: int = Field(ge=0)
+    confirm: bool = True
+
+
+class SkillMutationRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_id: str
+    expected_workspace_version: int = Field(ge=0)
+    confirm: bool = False
+
+
+class MCPMutationRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_id: str
+    confirm: bool = False
+
+
+class MCPPresetView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    preset_id: str
+    title: str
+    description: str
+    publisher: str
+    source_url: str
+    version: str
+    capabilities: tuple[str, ...]
+    risk_note: str
+    available: bool
+    unavailable_reason: str | None = None
+    installed: bool
+    enabled: bool
+    health: Literal["not_installed", "disabled", "healthy", "unavailable"]
+    tool_ids: tuple[str, ...] = ()
+    installed_at: datetime | None = None
+    checked_at: datetime | None = None

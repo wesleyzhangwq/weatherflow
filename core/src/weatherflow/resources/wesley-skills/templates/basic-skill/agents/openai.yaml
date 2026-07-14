@@ -1,0 +1,3 @@
+display_name: Basic Skill
+short_description: Template for a repeatable agent workflow.
+default_prompt: Use this skill to perform the repeatable workflow described in SKILL.md.

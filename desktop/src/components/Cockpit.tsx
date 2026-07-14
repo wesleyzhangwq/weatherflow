@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  CalendarBlank, CaretDown, ChatCircleDots, Check, CheckCircle, CloudSun, EnvelopeSimple,
+  Brain, CalendarBlank, CaretDown, ChatCircleDots, Check, CheckCircle, ClockCounterClockwise, CloudSun, EnvelopeSimple,
   FolderOpen, GearSix, GithubLogo, ListChecks, PaperPlaneRight, PlugsConnected, Plus,
-  Robot, ShieldCheck, Sparkle, Wrench,
+  Pulse, Robot, ShieldCheck, Sparkle, Wrench,
 } from "@phosphor-icons/react";
 import { WeatherFlowClient } from "../bridge";
 import { nativeCredentials, nativeWindows, type CredentialProvider } from "../native";
+import { AutomationView, MCPServersView, SkillsView } from "./ToolViews";
 import type {
   Approval, Artifact, ConnectionAttempt, ConnectorKind, ConnectorStatus, DesktopSnapshot,
-  LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, Run, SystemStatus, Workspace,
+  LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, RhythmDimensionEstimate, RhythmDimensionName,
+  RhythmInsights, Run, SystemStatus, Workspace,
 } from "../types";
 
-type ViewId = "chat" | "runs" | "rhythm" | "connections" | "settings";
+type ViewId = "chat" | "runs" | "rhythm" | "automations" | "skills" | "mcp" | "models" | "composio" | "settings";
 
 const runStatusText: Record<Run["status"], string> = {
   queued: "已排队", planning: "规划中", running: "执行中", waiting_approval: "等待批准",
@@ -21,6 +23,10 @@ const runStatusText: Record<Run["status"], string> = {
 const weatherText = { clear: "晴朗 · 心流", fair: "微晴 · 稳定", fog: "薄雾 · 分散", storm: "风暴 · 过载", still: "静滞 · 受阻", night: "夜色 · 恢复", mixed: "混合 · 待确认" } as const;
 const workModeText: Record<string, string> = { normal: "常规协作", focus: "专注推进", recovery: "轻量恢复", overloaded: "减负协作" };
 const rhythmSummaryText: Record<string, string> = { "Steady rhythm": "节奏稳定" };
+const dimensionText: Record<RhythmDimensionName, string> = { energy: "能量", cognitive_load: "认知负荷", fragmentation: "注意力碎片", momentum: "推进势能", friction: "行动阻力", recovery_need: "恢复需求" };
+const categoryText: Record<string, string> = { development: "开发", communication: "沟通", research: "研究", planning: "规划", creative: "创作", other: "其他" };
+const outcomeText: Record<string, string> = { succeeded: "任务完成", failed: "任务受阻", needs_review: "任务待检查" };
+const originText: Record<string, string> = { user: "由你确认", agent: "对话中形成", derived: "行为证据推断" };
 function presetModelOptions(provider: ModelProviderPreset): ProviderModel[] {
   return provider.suggested_models.map((id) => ({
     id, selectable: true, compatibility: "agent_ready", note: null,
@@ -50,11 +56,12 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
   const [providers, setProviders] = useState<ModelProviderPreset[]>([]);
   const [resetPreview, setResetPreview] = useState<ResetPreview | null>(null);
   const [operation, setOperation] = useState<string | null>(null);
-  const [rhythmText, setRhythmText] = useState("");
-  const [rhythmKind, setRhythmKind] = useState<"checkin" | "correction">("checkin");
+  const [rhythmInsights, setRhythmInsights] = useState<RhythmInsights | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [sending, setSending] = useState(false);
   const run = useMemo(() => runs.find((item) => item.id === selectedRunId) ?? runs[0] ?? snapshot?.latest_run ?? null, [runs, selectedRunId, snapshot]);
+  const selectedWorkspace = workspaces.find((item) => item.id === selectedWorkspaceId)
+    ?? (snapshot && snapshot.workspace.id === selectedWorkspaceId ? snapshot.workspace : null);
   const pending = approvals.filter((item) => item.status === "pending");
 
   const refresh = useCallback(async (preferredRunId?: string | null) => {
@@ -90,6 +97,17 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
       void client.modelProviders().then((items) => setProviders(items));
     }
   }, [client, providers.length]);
+  useEffect(() => {
+    if (view !== "rhythm" || typeof (client as Partial<WeatherFlowClient>).rhythmInsights !== "function") return;
+    let current = true;
+    setRhythmInsights(null);
+    void client.rhythmInsights(selectedWorkspaceId).then((insights) => {
+      if (current) setRhythmInsights(insights);
+    }).catch(() => {
+      if (current) setRhythmInsights(null);
+    });
+    return () => { current = false; };
+  }, [client, selectedWorkspaceId, snapshot?.rhythm.snapshot.id, view]);
 
   const submitChat = async (event: FormEvent) => {
     event.preventDefault();
@@ -119,11 +137,6 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
     const workspace = await onAuthorizeWorkspace(path);
     setOperation(`已授权项目 ${workspace.name}：${workspace.action_roots[0]}`);
   };
-  const submitRhythm = async (event: FormEvent) => {
-    event.preventDefault(); const text = rhythmText.trim(); if (!text) return;
-    await client.ingestSignal({ kind: rhythmKind, text, observed_at: new Date().toISOString() }, selectedWorkspaceId);
-    setRhythmText(""); setOperation(rhythmKind === "correction" ? "已用你的修正更新当前判断。" : "已记录本次状态签到。"); await refresh();
-  };
   const downloadArtifact = async (artifact: Artifact) => {
     const blob = await client.artifactContent(artifact.id); const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = artifact.name; anchor.click(); URL.revokeObjectURL(url);
@@ -137,7 +150,12 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
           <NavButton active={view === "chat"} icon={<ChatCircleDots />} label="对话" onClick={() => setView("chat")} />
           <NavButton active={view === "runs"} icon={<ListChecks />} label="任务" badge={pending.length || undefined} onClick={() => setView("runs")} />
           <NavButton active={view === "rhythm"} icon={<CloudSun />} label="状态天气" onClick={() => setView("rhythm")} />
-          <NavButton active={view === "connections"} icon={<PlugsConnected />} label="连接" onClick={() => setView("connections")} />
+          <span className="nav-group-label">工具</span>
+          <NavButton active={view === "automations"} icon={<ClockCounterClockwise />} label="自动化" onClick={() => setView("automations")} />
+          <NavButton active={view === "skills"} icon={<Brain />} label="Skills" onClick={() => setView("skills")} />
+          <NavButton active={view === "mcp"} icon={<Pulse />} label="MCP Server" onClick={() => setView("mcp")} />
+          <NavButton active={view === "models"} icon={<Robot />} label="LLM 模型" onClick={() => setView("models")} />
+          <NavButton active={view === "composio"} icon={<PlugsConnected />} label="Composio" onClick={() => setView("composio")} />
           <NavButton active={view === "settings"} icon={<GearSix />} label="设置" onClick={() => setView("settings")} />
         </nav>
         <div className="sidebar-project">
@@ -148,11 +166,15 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
       </aside>
 
       <section className="app-workspace">
-        {view === "chat" && <ChatView client={client} providers={providers} workspaceId={selectedWorkspaceId} runs={runs} run={run} pending={pending} artifacts={artifacts} chatInput={chatInput} sending={sending} workspaceReady={Boolean(selectedWorkspaceId)} snapshot={snapshot} system={system} onInput={setChatInput} onSubmit={submitChat} onSelectRun={selectRun} onDecide={decide} onDownload={downloadArtifact} onModelChanged={refresh} onOpenSettings={() => setView("settings")} />}
+        {view === "chat" && <ChatView client={client} providers={providers} workspaceId={selectedWorkspaceId} runs={runs} run={run} pending={pending} artifacts={artifacts} chatInput={chatInput} sending={sending} workspaceReady={Boolean(selectedWorkspaceId)} snapshot={snapshot} system={system} onInput={setChatInput} onSubmit={submitChat} onSelectRun={selectRun} onDecide={decide} onDownload={downloadArtifact} onModelChanged={refresh} onOpenSettings={() => setView("models")} />}
         {view === "runs" && <RunsView runs={runs} run={run} timeline={timeline} artifacts={artifacts} pending={pending} onSelect={selectRun} onDecide={decide} onDownload={downloadArtifact} />}
-        {view === "rhythm" && <RhythmView snapshot={snapshot} rhythmKind={rhythmKind} rhythmText={rhythmText} onKind={setRhythmKind} onText={setRhythmText} onSubmit={submitRhythm} />}
-        {view === "connections" && <ConnectionsView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
-        {view === "settings" && <SettingsView client={client} system={system} providers={providers} workspaceId={selectedWorkspaceId} offline={offline} snapshot={snapshot} resetPreview={resetPreview} onResetPreview={setResetPreview} onOperation={setOperation} onModelChanged={refresh} />}
+        {view === "rhythm" && <RhythmView snapshot={snapshot} insights={rhythmInsights} />}
+        {view === "automations" && <AutomationView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
+        {view === "skills" && <SkillsView client={client} workspace={selectedWorkspace} onOperation={setOperation} />}
+        {view === "mcp" && <MCPServersView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
+        {view === "models" && <SettingsView section="models" client={client} system={system} providers={providers} workspaceId={selectedWorkspaceId} offline={offline} snapshot={snapshot} resetPreview={resetPreview} onResetPreview={setResetPreview} onOperation={setOperation} onModelChanged={refresh} />}
+        {view === "composio" && <ConnectionsView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
+        {view === "settings" && <SettingsView section="system" client={client} system={system} providers={providers} workspaceId={selectedWorkspaceId} offline={offline} snapshot={snapshot} resetPreview={resetPreview} onResetPreview={setResetPreview} onOperation={setOperation} onModelChanged={refresh} />}
         {operation && <div className="operation-toast" role="status">{operation}</div>}
       </section>
     </main>
@@ -287,14 +309,29 @@ function RunsView({ runs, run, timeline, artifacts, pending, onSelect, onDecide,
   return <div className="page-view"><header className="page-header"><span>任务</span><h1>执行、批准与产出</h1><p>这里展示智能体的工作状态；你的状态天气始终独立，不会被任务成败覆盖。</p></header><div className="runs-layout"><nav className="run-list" aria-label="任务列表">{runs.length === 0 ? <div className="run-list-empty">暂无任务</div> : runs.map((item) => <button className={item.id === run?.id ? "selected" : ""} key={item.id} onClick={() => onSelect(item.id)} aria-pressed={item.id === run?.id} aria-label={`${item.user_intent}，${runStatusText[item.status]}`}><span>{item.user_intent}</span><small><i className={`run-dot ${item.status}`} />{runStatusText[item.status]} · {formatRelativeTime(item.updated_at)}</small></button>)}</nav><section className="run-detail">{run ? <><div className="run-detail-heading"><span className={`status-pill ${run.status}`}>{runStatusText[run.status]}</span><time>{formatRelativeTime(run.updated_at)}</time></div><h2>{run.user_intent}</h2><div className="run-result"><span>当前结果</span><p>{runMessage(run)}</p></div><div className="section-heading"><h3>执行记录</h3><small>{timeline.length} 个事件</small></div>{timeline.length ? <ol className="timeline">{timeline.slice(-12).reverse().map((event) => <li key={event.id}><i /><div><strong>{formatEventType(event.type)}</strong><time>{new Date(event.recorded_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div></li>)}</ol> : <div className="detail-empty">等待第一条执行记录</div>}</> : <div className="detail-empty centered">选择一个任务查看完整执行记录</div>}</section><aside className="run-context"><div className="context-heading"><Wrench /><span>任务上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside></div></div>;
 }
 
-function RhythmView({ snapshot, rhythmKind, rhythmText, onKind, onText, onSubmit }: { snapshot: DesktopSnapshot | null; rhythmKind: "checkin" | "correction"; rhythmText: string; onKind: (value: "checkin" | "correction") => void; onText: (value: string) => void; onSubmit: (event: FormEvent) => void }) {
-  const scene = snapshot?.rhythm.weather.scene ?? "mixed";
-  const intensity = Math.round((snapshot?.rhythm.weather.intensity ?? 0) * 100);
-  const rawSummary = snapshot?.rhythm.snapshot.summary;
-  const summary = rawSummary ? rhythmSummaryText[rawSummary] ?? rawSummary : "等待你的第一次签到";
-  const rawWorkMode = snapshot?.rhythm.policy.work_mode;
+function RhythmView({ snapshot, insights }: { snapshot: DesktopSnapshot | null; insights: RhythmInsights | null }) {
+  const current = insights?.current ?? snapshot?.rhythm;
+  const scene = current?.weather.scene ?? "mixed";
+  const intensity = Math.round((current?.weather.intensity ?? 0) * 100);
+  const rawSummary = current?.snapshot.summary;
+  const summary = rawSummary ? rhythmSummaryText[rawSummary] ?? rawSummary : "当前证据不足，WeatherFlow 会保持谨慎判断。";
+  const rawWorkMode = current?.policy.work_mode;
   const workMode = rawWorkMode ? workModeText[rawWorkMode] ?? rawWorkMode : "等待判断";
-  return <div className="page-view rhythm-view"><header className="page-header"><span>状态天气</span><h1>WeatherFlow 现在如何理解你</h1><p>天气只改变协作的节奏、提问频率和输出密度，不会改变你的目标。</p></header><div className="rhythm-content"><section className="rhythm-hero" data-scene={scene}><div className="rhythm-weather-icon"><CloudSun size={48} /></div><div className="rhythm-summary"><small>当前天气</small><h2>{weatherText[scene]}</h2><p>{summary}</p></div><dl><div><dt>协作模式</dt><dd>{workMode}</dd></div><div><dt>天气强度</dt><dd>{intensity}%</dd></div><div><dt>有效至</dt><dd>{snapshot ? new Date(snapshot.rhythm.snapshot.valid_until).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div></dl></section><section className="rhythm-checkin"><div><span className="eyebrow">主动信号</span><h2>{rhythmKind === "correction" ? "修正 WeatherFlow 的判断" : "告诉 WeatherFlow 你现在的真实状态"}</h2><p>{rhythmKind === "correction" ? "你的修正优先于自动推断。" : "一句自然语言就够了，例如“今天有点过载，先帮我收窄任务”。"}</p></div><form className="rhythm-form-large" onSubmit={onSubmit}><div className="segmented-control" role="group" aria-label="状态信号类型"><button type="button" className={rhythmKind === "checkin" ? "selected" : ""} aria-pressed={rhythmKind === "checkin"} onClick={() => onKind("checkin")}>主动签到</button><button type="button" className={rhythmKind === "correction" ? "selected" : ""} aria-pressed={rhythmKind === "correction"} onClick={() => onKind("correction")}>修正判断</button></div><textarea aria-label="状态签到" value={rhythmText} onChange={(event) => onText(event.target.value)} placeholder="你现在真实的状态怎么样？" /><button className="primary" disabled={!rhythmText.trim()}>保存状态</button></form></section></div></div>;
+  const dimensions = Object.entries(current?.snapshot.dimensions ?? {}) as [RhythmDimensionName, RhythmDimensionEstimate][];
+  return <div className="page-view rhythm-view"><header className="page-header"><span>状态天气</span><h1>你的节奏与长期模式</h1><p>这里集中展示 WeatherFlow 对你当前状态、近期行为和长期偏好的理解；所有内容只读、可追溯，不承担对话输入。</p></header><div className="rhythm-content">
+    <section className="status-overview"><div className="insight-section-heading"><div><span>此刻</span><h2>当前状态</h2></div><small>{current?.snapshot.observed_at ? `更新于 ${formatRelativeTime(current.snapshot.observed_at)}` : "等待状态证据"}</small></div><div className="rhythm-hero" data-scene={scene}><div className="rhythm-weather-icon"><CloudSun size={42} /></div><div className="rhythm-summary"><small>当前天气</small><h3>{weatherText[scene]}</h3><p>{summary}</p></div><dl><div><dt>协作模式</dt><dd>{workMode}</dd></div><div><dt>天气强度</dt><dd>{intensity}%</dd></div><div><dt>判断时效</dt><dd>{current ? new Date(current.snapshot.valid_until).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div></dl></div>
+      <div className="rhythm-dimensions">{dimensions.length ? dimensions.map(([name, estimate]) => <article key={name}><div><span>{dimensionText[name]}</span><strong>{Math.round(estimate.value * 100)}%</strong></div><div className="dimension-track"><i style={{ width: `${Math.round(estimate.value * 100)}%` }} /></div><small>置信度 {Math.round(estimate.confidence * 100)}%</small></article>) : <div className="rhythm-empty compact">状态维度正在积累证据，暂不展示精确数值。</div>}</div>
+    </section>
+    <div className="rhythm-insight-grid"><section className="insight-panel"><div className="insight-section-heading"><div><span>近期记录</span><h2>近期行为</h2></div><ClockCounterClockwise /></div>{insights?.recent_behaviors.length ? <ol className="behavior-list">{insights.recent_behaviors.map((behavior) => <li key={behavior.id}><i><Pulse /></i><div><strong>{behavior.kind === "activity" ? `${categoryText[behavior.dominant_category ?? "other"]}活动` : outcomeText[behavior.outcome ?? "needs_review"]}</strong><p>{behavior.kind === "activity" ? `活跃 ${formatMinutes(behavior.active_minutes)} · 空闲 ${formatMinutes(behavior.idle_minutes)} · 切换 ${behavior.app_switch_count ?? 0} 次` : `持续 ${formatMinutes(behavior.duration_minutes)} · ${behavior.step_count ?? 0} 个步骤`}</p><time>{formatRelativeTime(behavior.observed_at)}</time></div></li>)}</ol> : <div className="rhythm-empty"><Pulse /><strong>还没有可展示的近期行为</strong><p>WeatherFlow 只记录活跃、空闲、类别和切换次数等本机元数据，不采集窗口标题或屏幕内容。</p></div>}</section>
+      <section className="insight-panel"><div className="insight-section-heading"><div><span>当前项目 · 跨时间形成</span><h2>长期画像</h2></div><Brain /></div>{insights?.profile.length ? <div className="profile-list">{insights.profile.map((item) => <article key={item.id}><p>{item.claim}</p><footer><span>{originText[item.origin]} · {item.evidence_count} 条证据</span><strong>{Math.round(item.confidence * 100)}% 可信</strong></footer></article>)}</div> : <div className="rhythm-empty"><Brain /><strong>还没有形成长期画像</strong><p>只有经过多次、可追溯证据支持的稳定模式才会出现在这里；当前天气不会被当作长期结论。</p></div>}</section></div>
+    <p className="rhythm-privacy-note"><ShieldCheck /> 近期行为只保留聚合元数据；长期画像来自可追溯的本机证据，并遵循你的删除与保留设置。</p>
+  </div></div>;
+}
+
+function formatMinutes(value: number | null) {
+  if (value === null) return "—";
+  if (value < 1) return "不足 1 分钟";
+  return `${value.toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 分钟`;
 }
 
 function formatRelativeTime(value: string) {
@@ -314,7 +351,7 @@ function runMessage(run: Run): string {
     run.status === "failed"
     && ["KeyringError", "CredentialUnavailableError", "MiniMaxAuthenticationError"].includes(run.error_class ?? "")
   ) {
-    return "无法读取模型密钥，请到“设置”重新粘贴 API Key。";
+    return "无法读取模型密钥，请到“LLM 模型”重新粘贴 API Key。";
   }
   return `任务${runStatusText[run.status]}`;
 }
@@ -500,7 +537,7 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
   </div>;
 }
 
-function SettingsView({ client, system, providers, workspaceId, offline, snapshot, resetPreview, onResetPreview, onOperation, onModelChanged }: { client: WeatherFlowClient; system: SystemStatus | null; providers: ModelProviderPreset[]; workspaceId?: string | null; offline: boolean; snapshot: DesktopSnapshot | null; resetPreview: ResetPreview | null; onResetPreview: (value: ResetPreview | null) => void; onOperation: (value: string) => void; onModelChanged: () => Promise<void> }) {
+function SettingsView({ section, client, system, providers, workspaceId, offline, snapshot, resetPreview, onResetPreview, onOperation, onModelChanged }: { section: "models" | "system"; client: WeatherFlowClient; system: SystemStatus | null; providers: ModelProviderPreset[]; workspaceId?: string | null; offline: boolean; snapshot: DesktopSnapshot | null; resetPreview: ResetPreview | null; onResetPreview: (value: ResetPreview | null) => void; onOperation: (value: string) => void; onModelChanged: () => Promise<void> }) {
   const [selectedProvider, setSelectedProvider] = useState(system?.model?.provider ?? "minimax");
   const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean>>({});
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModel[]>>({});
@@ -612,8 +649,13 @@ function SettingsView({ client, system, providers, workspaceId, offline, snapsho
   const reviewReset = async () => onResetPreview(await client.previewReset("behavior", workspaceId));
   const reset = async () => { const result = await client.reset("behavior", workspaceId); onResetPreview(null); onOperation(`已删除 ${result.deleted_count} 条行为记录。`); };
 
+  if (section === "system") return <div className="page-view settings-view system-settings-view">
+    <header className="page-header"><span>设置</span><h1>本机、隐私与诊断</h1><p>查看 WeatherFlow 的本机边界，并管理可删除的数据与诊断信息。</p></header>
+    <section className="settings-section privacy-section"><div className="section-title"><h2>本机与隐私</h2></div><dl><div><dt>项目</dt><dd>{snapshot?.workspace.action_roots[0] ?? "加载中"}</dd></div><div><dt>当前模型</dt><dd>{system?.model?.configured ? `${system.model.provider} · ${system.model.model}` : "尚未配置"}</dd></div><div><dt>行为感知</dt><dd>{system?.behavior_sensor.enabled ? "已启用元数据" : "等待本机行为授权"}</dd></div><div><dt>本机桥接</dt><dd>{offline ? "正在恢复" : "已认证"}</dd></div></dl><div className="settings-actions"><button onClick={() => void exportDiagnostics()}>导出本机诊断</button>{!resetPreview ? <button onClick={() => void reviewReset()}>检查行为数据清理</button> : <button className="danger" onClick={() => void reset()}>删除 {resetPreview.count} 条行为记录</button>}</div></section>
+  </div>;
+
   return <div className="page-view settings-view">
-    <header className="page-header"><span>设置</span><h1>选择并配置语言模型提供商</h1><p>一把 API Key 可以访问同一厂商的多个模型。配置一次后保持开启，对话时由你随时切换。</p></header>
+    <header className="page-header"><span>LLM 模型</span><h1>选择并配置语言模型提供商</h1><p>一把 API Key 可以访问同一厂商的多个模型。配置一次后保持开启，对话时由你随时切换。</p></header>
     <section className="settings-section model-provider-section">
       <div className="section-title"><h2>LLM 提供商</h2><p>只显示 WeatherFlow 已适配的国内常用厂商；开关表示密钥已由本机安全保存。</p></div>
       {system?.model?.configured && !system.model.credential_available && <div className="settings-warning" role="alert"><strong>模型密钥不可用</strong><span>请重新输入 API Key。WeatherFlow 会直接通过系统安全存储处理，不需要你打开“钥匙串访问”。</span></div>}
@@ -635,6 +677,5 @@ function SettingsView({ client, system, providers, workspaceId, offline, snapsho
         </>}
       </div>}
     </section>
-    <section className="settings-section privacy-section"><div className="section-title"><h2>本机与隐私</h2></div><dl><div><dt>项目</dt><dd>{snapshot?.workspace.action_roots[0] ?? "加载中"}</dd></div><div><dt>当前模型</dt><dd>{system?.model?.configured ? `${system.model.provider} · ${system.model.model}` : "尚未配置"}</dd></div><div><dt>行为感知</dt><dd>{system?.behavior_sensor.enabled ? "已启用元数据" : "仅主动签到"}</dd></div><div><dt>本机桥接</dt><dd>{offline ? "正在恢复" : "已认证"}</dd></div></dl><div className="settings-actions"><button onClick={() => void exportDiagnostics()}>导出本机诊断</button>{!resetPreview ? <button onClick={() => void reviewReset()}>检查行为数据清理</button> : <button className="danger" onClick={() => void reset()}>删除 {resetPreview.count} 条行为记录</button>}</div></section>
   </div>;
 }

@@ -48,7 +48,8 @@ def gateway_transport(requests: list[httpx.Request]) -> httpx.MockTransport:
         if request.url.path == "/api/v3.1/tools/execute/GITHUB_GET_THE_AUTHENTICATED_USER":
             body = request.content.decode()
             assert '"connected_account_id":"ca_github"' in body
-            assert '"version":"latest"' in body
+            assert '"version":"20260703_00"' in body
+            assert '"version":"latest"' not in body
             return httpx.Response(200, json={"successful": True, "data": {"login": "wesz"}})
         if request.url.path == "/api/v3.1/connected_accounts/ca_github/revoke":
             return httpx.Response(200, json={"revoked": True})

@@ -55,8 +55,10 @@ The following decisions are binding for v3.0.
 - Use a **dual-surface model**:
   - a floating weather glyph for ambient presence and fast input;
   - a full Cockpit for tasks, approvals, artifacts, history, and settings.
-- Human state is rendered as one **simple weather icon** without a mascot,
-  orbit, particle system, or decorative container.
+- Human state is rendered as one **simple weather icon** centered inside a
+  compact fixed square tile, without a mascot, orbit, or particle system. The
+  native window fits the visible tile closely rather than adding a broad
+  transparent hit region.
 - Agent work state is rendered separately through one small status dot. Agent
   state never replaces human-state weather.
 - The whole weather icon distinguishes click from drag: pointer movement beyond
@@ -537,7 +539,7 @@ contain human-state-to-weather logic.
 
 1. **Companion Window**
    - transparent, borderless, movable, optionally always-on-top;
-   - micro-weather for human state;
+   - one compact square tile containing micro-weather for human state;
    - outer ring/badge for Run state;
    - never produces proactive text.
 2. **Command Capsule**
@@ -548,10 +550,32 @@ contain human-state-to-weather logic.
 3. **Cockpit Window**
    - normal application window with persistent left navigation;
    - conversation-first primary view;
-   - dedicated tasks, rhythm, approvals/artifacts, integrations, and settings views;
+   - dedicated tasks, read-only status weather, approvals/artifacts,
+     integrations, and settings views;
    - opens only through explicit user action.
 
-### 8.2 Run presentation states
+The Cockpit left navigation keeps conversation, Runs, and status weather as the
+primary product surfaces. A labeled Tools section contains Automations, Skills,
+MCP Servers, LLM Models, and Composio. Settings contains system, privacy, and
+diagnostic preferences rather than duplicating those tool configuration pages.
+
+### 8.2 Status-weather presentation
+
+- Status weather is a read-only personal-insight destination; it has no
+  check-in, correction, composer, or other command-entry control.
+- The current-state section shows WeatherPresentation, HumanStateSnapshot
+  summary/dimensions, confidence, freshness, collaboration mode, and validity.
+- Recent behavior shows only privacy-safe aggregate activity and task behavior.
+  It never admits raw screen, window title, keystroke, clipboard, audio, or
+  deliberate check-in text.
+- Long-term profile shows active evidence-backed Profile Assertions with
+  confidence, origin, evidence count, and update time. Empty states must not
+  manufacture durable claims from a single current-state snapshot.
+- Conversation and the Command Capsule remain the product's deliberate input
+  surfaces. If deliberate state correction is added there, it requires an
+  explicit typed backend contract; the status-weather page must stay read-only.
+
+### 8.3 Run presentation states
 
 | Run state | Companion treatment |
 |---|---|
@@ -564,7 +588,7 @@ contain human-state-to-weather logic.
 
 Human-state weather remains visible through every Run state.
 
-### 8.3 Native Bridge responsibilities
+### 8.4 Native Bridge responsibilities
 
 - tray and application lifecycle;
 - global shortcut;
@@ -582,7 +606,7 @@ Human-state weather remains visible through every Run state.
 The activity adapter emits metadata only. No raw content is passed to the
 daemon.
 
-### 8.4 Daemon bridge
+### 8.5 Daemon bridge
 
 Local macOS development uses a fixed code requirement. `pnpm dev:app` must sign
 the final Cargo debug executable after linking and before execution with the
@@ -625,8 +649,41 @@ GET  /v1/rhythm/current
 GET  /v1/desktop/snapshot
 GET  /v1/workspaces
 POST /v1/workspaces
+GET  /v1/automations
+POST /v1/automations
+PATCH /v1/automations/{automation_id}
+POST /v1/automations/{automation_id}/run
+GET  /v1/automations/{automation_id}/history
+GET  /v1/skills/catalog
+POST /v1/skills/{skill_id}/install
+DELETE /v1/skills/{skill_id}
+GET  /v1/mcp/catalog
+POST /v1/mcp/{server_id}/install
+POST /v1/mcp/{server_id}/enable
+POST /v1/mcp/{server_id}/disable
 WS   /v1/events?cursor={event_id}
 ```
+
+### 8.6 Automations and tool administration
+
+An Automation stores a name, prompt, Workspace, enabled/paused state, timezone,
+schedule specification, next occurrence, and Run history. A scheduler may wake
+an enabled Automation, but it can only submit the prompt as an ordinary durable
+Run with a deterministic client request ID. The selected Workspace model and
+capabilities are resolved and frozen when that Run is accepted. At startup, at
+most one overdue occurrence is submitted per Automation; subsequent occurrences
+advance from the schedule without catch-up floods.
+
+Manual run, pause, resume, edit, and delete are explicit user operations. An
+Automation never calls a tool directly, auto-opens Cockpit, produces proactive
+text, or changes approval requirements. Its list/detail UI follows the normal
+Cockpit navigation and exposes current state and linked Run history.
+
+Skills and MCP Servers are administered per Workspace. Install and enable
+controls show source, version, requested capabilities, and health. Renderer
+clients send only fixed catalog identifiers and user-owned Workspace choices;
+they never supply executable commands, arbitrary package URLs, secret values,
+or authority annotations.
 
 ## 9. Capability Plane and Trust Plane
 
@@ -637,6 +694,19 @@ WS   /v1/events?cursor={event_id}
 - Skills;
 - Agent Definitions;
 - first-party and installed Capability Packs.
+
+The initial Skill catalog is sourced from the local `wesley-skills` checkout.
+WeatherFlow validates each selected package, copies it into the verified
+content-addressed extension store, and records an immutable Workspace reference.
+Installed Runs do not read the source checkout, and a catalog update never
+changes an existing Run or installed snapshot implicitly.
+
+The desktop MCP catalog is curated and version-pinned. Installation destinations
+live under WeatherFlow's internal root. Presets define their executable and safe
+arguments in Python; the renderer can select a preset and bounded Workspace
+options only. Enabling a preset discovers and normalizes its tools for future
+Runs. Disabling it closes the transport and removes it from future capability
+resolution without mutating frozen Run snapshots.
 
 ### 9.2 ToolSpec
 
@@ -690,6 +760,8 @@ A Workspace owns:
 - connector account/repository/calendar scopes;
 - network policy;
 - installed packs and agent definitions;
+- installed Skill snapshots and enabled MCP preset references;
+- persisted Automations that target the Workspace;
 - default budgets;
 - active session grants.
 
@@ -1072,6 +1144,8 @@ must judge policy, state transition, provenance, and recovery contracts.
   validation.
 - one-click Cockpit connection and silent auto-fetch for the bounded GitHub,
   Gmail, and Google Calendar connector set.
+- verified local Skill catalog installation, curated pinned MCP administration,
+  and persisted schedule-to-Run Automations with history.
 
 Each phase must end in a runnable, verified increment. No phase may add a second
 execution path to bypass the Run Coordinator.
@@ -1098,6 +1172,9 @@ execution path to bypass the Run Coordinator.
     provider-required continuation data is persisted only by the SharedTurnLoop
     through the encrypted, retention-bounded continuation store. Credentials
     resolve only at their transport boundary.
+18. Automations submit ordinary Runs and cannot execute capabilities directly.
+19. Skill and MCP catalog installation is explicit, immutable per installed
+    snapshot or pinned preset, and never grants authority.
 
 ## 18. Design completion criteria
 

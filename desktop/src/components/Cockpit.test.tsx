@@ -12,6 +12,66 @@ const snapshot: DesktopSnapshot = {
   metadata_sensor_enabled: false,
 };
 
+const rhythmInsights = {
+  current: snapshot.rhythm,
+  recent_behaviors: [{
+    id: "behavior-1", kind: "activity" as const, observed_at: "2026-07-13T09:30:00Z",
+    active_minutes: 48, idle_minutes: 12, app_switch_count: 7,
+    dominant_category: "development", outcome: null, duration_minutes: null, step_count: null,
+  }],
+  profile: [{
+    id: "profile-1", claim: "上午更适合完成需要持续专注的工作。", confidence: 0.84,
+    origin: "derived" as const, evidence_count: 5, updated_at: "2026-07-13T09:30:00Z",
+  }],
+};
+
+it("uses status weather as a read-only state, behavior, and profile view", async () => {
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    rhythmInsights: vi.fn().mockResolvedValue(rhythmInsights),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "状态天气" }));
+
+  expect(await screen.findByRole("heading", { name: "当前状态" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "近期行为" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "长期画像" })).toBeInTheDocument();
+  expect(screen.getByText("上午更适合完成需要持续专注的工作。")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "状态签到" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "主动签到" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "保存状态" })).not.toBeInTheDocument();
+});
+
+it("groups user-managed agent facilities under the Tools navigation", async () => {
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    modelProviders: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+
+  expect(screen.getByText("工具")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "自动化" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Skills" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "MCP Server" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "LLM 模型" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Composio" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "连接" })).not.toBeInTheDocument();
+});
+
 it("shows explicit operational detail and handles approval", async () => {
   const client = {
     approvals: vi.fn().mockResolvedValue([{ id: "a1", action_id: "x1", run_id: "r1", status: "pending", version: 0 }]),
@@ -30,7 +90,7 @@ it("shows explicit operational detail and handles approval", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "批准" }));
   await waitFor(() => expect(client.decide).toHaveBeenCalledWith("a1", "approve", 0));
   fireEvent.click(screen.getByRole("button", { name: "设置" }));
-  expect(screen.getByText("仅主动签到")).toBeInTheDocument();
+  expect(screen.getByText("等待本机行为授权")).toBeInTheDocument();
 });
 
 it("requires review then a second explicit click before behavior reset", async () => {
@@ -91,7 +151,7 @@ it("shows provider switches and enables a provider after one key configuration",
   } as unknown as WeatherFlowClient;
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
-  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "LLM 模型" }));
   const deepseek = await screen.findByRole("switch", { name: "DeepSeek" });
   expect(deepseek).toHaveAttribute("aria-checked", "false");
   fireEvent.click(deepseek);
@@ -186,7 +246,7 @@ it("allows MiniMax M2 models backed by encrypted provider continuations", async 
   } as unknown as WeatherFlowClient;
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
-  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "LLM 模型" }));
 
   const m27 = await screen.findByRole("button", { name: "使用 MiniMax-M2.7" });
   expect(m27).toBeEnabled();
@@ -239,7 +299,7 @@ it("configures Composio and exposes only the three approved read connectors", as
   const opened = vi.fn();
   window.addEventListener("weatherflow:open_connector_url", opened);
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
-  fireEvent.click(screen.getByRole("button", { name: "连接" }));
+  fireEvent.click(screen.getByRole("button", { name: "Composio" }));
 
   expect(await screen.findByText("Composio Direct 连接")).toBeInTheDocument();
   expect(screen.getByText("GitHub")).toBeInTheDocument();
@@ -291,7 +351,7 @@ it("resumes authoritative polling for a pending connector after the view reopens
   } as unknown as WeatherFlowClient;
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
-  fireEvent.click(screen.getByRole("button", { name: "连接" }));
+  fireEvent.click(screen.getByRole("button", { name: "Composio" }));
   await act(async () => { await Promise.resolve(); });
   expect(screen.getByRole("button", { name: "连接 GitHub" })).toBeDisabled();
   await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
@@ -460,7 +520,7 @@ it("turns a keychain failure into an actionable model recovery message", async (
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
 
-  expect(await screen.findByText("无法读取模型密钥，请到“设置”重新粘贴 API Key。")) .toBeInTheDocument();
+  expect(await screen.findByText("无法读取模型密钥，请到“LLM 模型”重新粘贴 API Key。")) .toBeInTheDocument();
 });
 
 it("explains how to recover when the configured model credential is unavailable", async () => {
@@ -476,7 +536,7 @@ it("explains how to recover when the configured model credential is unavailable"
   } as unknown as WeatherFlowClient;
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
 
-  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "LLM 模型" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "WeatherFlow 会直接通过系统安全存储处理，不需要你打开“钥匙串访问”",

@@ -18,10 +18,12 @@ describe("Companion", () => {
   it("keeps weather separate from agent status and never speaks proactively", () => {
     const { container } = render(<Companion snapshot={snapshot} onStartDrag={() => undefined} onOpenCapsule={() => undefined} onOpenCockpit={() => undefined} />);
     const shell = container.querySelector(".companion-shell");
+    const weatherTile = screen.getByLabelText("当前天气：风暴");
     expect(shell).toHaveAttribute("data-weather", "storm");
     expect(shell).toHaveAttribute("data-agent-state", "approval");
+    expect(weatherTile).toHaveClass("weather-tile");
+    expect(weatherTile).toHaveAttribute("data-shape", "square");
     expect(screen.getByLabelText("等待批准")).toBeInTheDocument();
-    expect(screen.getByLabelText("当前天气：风暴")).toBeInTheDocument();
     expect(container.querySelector(".character-image")).not.toBeInTheDocument();
     expect(container.querySelector(".weather-particle")).not.toBeInTheDocument();
     expect(container.querySelector(".speech-bubble")).not.toBeInTheDocument();

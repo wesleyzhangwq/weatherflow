@@ -42,6 +42,7 @@ async def test_run_api_is_idempotent_and_exposes_timeline(tmp_path: Path) -> Non
     assert repeated.status_code == 201
     assert repeated.json()["id"] == run_id
     assert fetched.json()["status"] == "succeeded"
+    assert container.automation_scheduler.running is False
     event_types = [event["type"] for event in timeline.json()]
     assert event_types[0] == "run.created"
     assert "run.result_committed" in event_types

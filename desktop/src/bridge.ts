@@ -1,4 +1,4 @@
-import type { Approval, Artifact, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, LedgerEvent, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, Run, SystemStatus, Workspace } from "./types";
+import type { Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, SkillCatalogEntry, SystemStatus, Workspace } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
@@ -8,7 +8,9 @@ declare global {
 }
 
 export function bridgeConfig(): BridgeConfig {
-  return explicitBridgeConfig() ?? { baseUrl: "http://127.0.0.1:8765" };
+  return explicitBridgeConfig() ?? {
+    baseUrl: import.meta.env.VITE_WEATHERFLOW_BRIDGE_URL ?? "http://127.0.0.1:8765",
+  };
 }
 
 export async function resolveBridgeConfig(): Promise<BridgeConfig> {
@@ -77,6 +79,7 @@ export class WeatherFlowClient {
   ingestSignal(signal: Record<string, unknown>, workspaceId?: string | null): Promise<unknown> {
     return this.request(this.scoped("/v1/rhythm/signals", workspaceId), { method: "POST", body: JSON.stringify(signal) });
   }
+  rhythmInsights(workspaceId?: string | null): Promise<RhythmInsights> { return this.request(this.scoped("/v1/rhythm/insights", workspaceId)); }
   status(workspaceId?: string | null): Promise<SystemStatus> { return this.request(this.scoped("/v1/system/status", workspaceId)); }
   async modelProviders(): Promise<ModelProviderPreset[]> { return (await this.request<{ providers: ModelProviderPreset[] }>("/v1/models/providers")).providers; }
   providerModels(provider: string): Promise<ProviderModelCatalog> {
@@ -126,6 +129,45 @@ export class WeatherFlowClient {
   }
   disconnectConnector(connector: ConnectorKind): Promise<void> {
     return this.request(`/v1/connectors/${connector}/disconnect`, { method: "POST", body: JSON.stringify({ confirm: true }) });
+  }
+  automations(workspaceId: string): Promise<Automation[]> {
+    return this.request(this.scoped("/v1/automations", workspaceId));
+  }
+  createAutomation(input: { workspace_id: string; name: string; prompt: string; schedule: AutomationSchedule }): Promise<Automation> {
+    return this.request("/v1/automations", { method: "POST", body: JSON.stringify(input) });
+  }
+  updateAutomation(automationId: string, input: { expected_version: number; name?: string; prompt?: string; schedule?: AutomationSchedule }): Promise<Automation> {
+    return this.request(`/v1/automations/${encodeURIComponent(automationId)}`, { method: "PATCH", body: JSON.stringify(input) });
+  }
+  setAutomationStatus(automationId: string, operation: "pause" | "resume", version: number): Promise<Automation> {
+    return this.request(`/v1/automations/${encodeURIComponent(automationId)}/${operation}`, { method: "POST", body: JSON.stringify({ expected_version: version }) });
+  }
+  runAutomation(automationId: string): Promise<AutomationRunLink> {
+    return this.request(`/v1/automations/${encodeURIComponent(automationId)}/run`, { method: "POST" });
+  }
+  automationHistory(automationId: string): Promise<AutomationRunLink[]> {
+    return this.request(`/v1/automations/${encodeURIComponent(automationId)}/history`);
+  }
+  deleteAutomation(automationId: string, version: number): Promise<void> {
+    return this.request(`/v1/automations/${encodeURIComponent(automationId)}`, { method: "DELETE", body: JSON.stringify({ expected_version: version, confirm: true }) });
+  }
+  skills(workspaceId: string): Promise<SkillCatalogEntry[]> {
+    return this.request(this.scoped("/v1/skills/catalog", workspaceId));
+  }
+  installSkill(skillId: string, workspaceId: string, workspaceVersion: number): Promise<SkillCatalogEntry> {
+    return this.request(`/v1/skills/${encodeURIComponent(skillId)}/install`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, expected_workspace_version: workspaceVersion, confirm: true }) });
+  }
+  uninstallSkill(skillId: string, workspaceId: string, workspaceVersion: number): Promise<SkillCatalogEntry> {
+    return this.request(`/v1/skills/${encodeURIComponent(skillId)}`, { method: "DELETE", body: JSON.stringify({ workspace_id: workspaceId, expected_workspace_version: workspaceVersion, confirm: true }) });
+  }
+  mcpPresets(workspaceId: string): Promise<MCPPreset[]> {
+    return this.request(this.scoped("/v1/mcp/catalog", workspaceId));
+  }
+  installMCP(presetId: string, workspaceId: string): Promise<MCPPreset> {
+    return this.request(`/v1/mcp/${encodeURIComponent(presetId)}/install`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, confirm: true }) });
+  }
+  setMCPEnabled(presetId: string, workspaceId: string, enabled: boolean): Promise<MCPPreset> {
+    return this.request(`/v1/mcp/${encodeURIComponent(presetId)}/${enabled ? "enable" : "disable"}`, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) });
   }
 
   events(cursor: string | null, onEvent: (event: LedgerEvent) => void, onRefresh: () => void, onDisconnect?: () => void): WebSocket {

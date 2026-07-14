@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,29 @@ async def test_stream_and_correlation_reads_are_ordered(tmp_path: Path) -> None:
 
     assert await ledger.list_stream("run", "run-1") == [first, second]
     assert await ledger.list_correlation("run-1") == [first, second]
+
+
+async def test_recent_stream_read_returns_newest_events_first(tmp_path: Path) -> None:
+    ledger = await initialized_ledger(tmp_path / "weatherflow.db")
+    now = datetime.now(UTC)
+    events = [
+        Event.new(
+            type=f"rhythm.signal.{index}",
+            actor=Actor.SYSTEM,
+            stream_kind="workspace",
+            stream_id="workspace-1",
+            correlation_id="workspace-1",
+            payload={"step": index},
+        ).model_copy(update={"recorded_at": now + timedelta(seconds=index)})
+        for index in range(3)
+    ]
+    for event in events:
+        await ledger.append(event)
+
+    assert await ledger.list_stream_recent("workspace", "workspace-1", limit=2) == [
+        events[2],
+        events[1],
+    ]
 
 
 async def test_list_stream_in_reads_uncommitted_event(tmp_path: Path) -> None:

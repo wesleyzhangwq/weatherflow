@@ -3,6 +3,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+BUNDLED_SKILL_CATALOG_ROOT = Path(__file__).resolve().parent / "resources" / "wesley-skills"
+
 
 class Settings(BaseSettings):
     """Process configuration for the local WeatherFlow daemon."""
@@ -18,3 +20,4 @@ class Settings(BaseSettings):
     data_dir: Path = Path("~/.local/share/weatherflow").expanduser()
     log_level: str = "INFO"
     bridge_token: str | None = None
+    skill_catalog_root: Path = BUNDLED_SKILL_CATALOG_ROOT

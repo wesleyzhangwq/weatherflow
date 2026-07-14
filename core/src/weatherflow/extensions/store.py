@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -17,6 +18,9 @@ from weatherflow.runtime import AgentDefinition
 
 MAX_MANIFEST_BYTES = 64_000
 MAX_PACKAGE_FILE_BYTES = 2_000_000
+PACKAGE_KINDS = frozenset({"agent_definition", "capability_pack", "skill"})
+PACKAGE_NAME = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+PACKAGE_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$")
 
 
 class PackageIntegrityError(ValueError):
@@ -61,6 +65,13 @@ class PackageStore:
             path = (self.internal_root / installed.relative_path).resolve()
             if path.is_relative_to(self.root):
                 shutil.rmtree(path, ignore_errors=True)
+
+    def remove_reference(self, reference: str) -> None:
+        """Remove an inactive immutable snapshot using a validated reference path."""
+
+        root = self._reference_root(reference)
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
 
     def _install_verified(self, source_value: Path) -> InstalledPackage:
         source = source_value.resolve()
@@ -111,21 +122,34 @@ class PackageStore:
         )
 
     def _load_reference(self, reference: str) -> tuple[PackageManifest, Path]:
-        parts = reference.split(":")
-        if len(parts) != 3 or "@" not in parts[1]:
-            raise PackageIntegrityError("invalid extension reference")
-        kind, identity, digest = parts
-        name, version = identity.split("@", 1)
-        if not digest or any(".." in item or "/" in item for item in parts):
-            raise PackageIntegrityError("invalid extension reference")
-        root = (self.root / kind / name / version / digest).resolve()
-        if not root.is_relative_to(self.root) or not root.is_dir():
+        root = self._reference_root(reference)
+        if not root.is_dir():
             raise PackageIntegrityError("extension is not installed")
         manifest = self._read_manifest(root / "manifest.json")
         self._verify_files(root, manifest)
         if manifest.reference() != reference:
             raise PackageIntegrityError("extension reference digest mismatch")
         return manifest, root
+
+    def _reference_root(self, reference: str) -> Path:
+        parts = reference.split(":")
+        if len(parts) != 3 or "@" not in parts[1]:
+            raise PackageIntegrityError("invalid extension reference")
+        kind, identity, digest = parts
+        name, version = identity.split("@", 1)
+        if (
+            not digest
+            or any(".." in item or "/" in item or "\\" in item for item in parts)
+            or kind not in PACKAGE_KINDS
+            or not PACKAGE_NAME.fullmatch(name)
+            or not PACKAGE_VERSION.fullmatch(version)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise PackageIntegrityError("invalid extension reference")
+        root = (self.root / kind / name / version / digest).resolve()
+        if not root.is_relative_to(self.root):
+            raise PackageIntegrityError("extension reference escaped internal root")
+        return root
 
     @staticmethod
     def _read_manifest(path: Path) -> PackageManifest:

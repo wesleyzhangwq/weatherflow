@@ -9,6 +9,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = ROOT / "core" / "src" / "weatherflow" / "__main__.py"
+BUNDLED_SKILLS = (
+    ROOT / "core" / "src" / "weatherflow" / "resources" / "wesley-skills"
+)
 TAURI_BINARY = (
     ROOT
     / "desktop"
@@ -43,6 +46,8 @@ def main() -> int:
         "keyring",
         "--hidden-import",
         "weatherflow.api.app",
+        "--add-data",
+        f"{BUNDLED_SKILLS}:weatherflow/resources/wesley-skills",
         "--distpath",
         str(build_root / "dist"),
         "--workpath",

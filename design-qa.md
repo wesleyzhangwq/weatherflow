@@ -1,162 +1,103 @@
-# WeatherFlow v3 Frontend Design QA
+# WeatherFlow Tools and Automation Design QA
 
-- Source visual truth:
-  - `/Users/wesz_station/Desktop/截屏2026-07-12 18.11.37.png` (OpenHuman conversation)
-  - `/Users/wesz_station/Desktop/截屏2026-07-12 18.09.35.png` (OpenHuman connections)
-- Browser-rendered implementation:
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/10-refined-chat.png`
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/11-refined-tasks.png`
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/12-refined-rhythm.png`
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/13-refined-connections.png`
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/14-refined-settings.png`
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/15-responsive-chat-900x700.png`
-- Side-by-side comparison evidence:
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/compare-chat.png`
-  - `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/frontend-refresh/compare-connections.png`
-- Viewports: default 1280 × 720 and responsive 900 × 700
-- Theme and states: dark mode; existing local Runs; unconfigured Composio project key; configured MiniMax-M3 model; empty approval and artifact context
+- Source visual truth: `/var/folders/4k/fygl6mrx1px2fq_5f83s_hq80000gn/T/codex-clipboard-bb99019d-0f67-4a53-92a6-768b1030af3e.png`
+- Implementation URL: `http://127.0.0.1:1421/?surface=cockpit`
+- Implementation screenshot: `artifacts/design-qa/automation-final.png`
+- Viewport: browser content `1970 x 1236` (viewport override `1970 x 1277`, excluding browser chrome)
+- State: dark desktop Cockpit, authorized Workspace selected, weekly Automation enabled for Friday 06:00
+- Full-view comparison: `artifacts/design-qa/automation-comparison-final.png`
+- Focused comparison: `artifacts/design-qa/automation-focus-comparison-final.png`
+- Additional evidence: `artifacts/design-qa/skills-installed.png`, `artifacts/design-qa/mcp-catalog.png`, `artifacts/design-qa/mcp-tablet.png`
 
-## Full-view comparison evidence
+## Findings
 
-The implementation follows the selected OpenHuman references without copying its
-unsupported product taxonomy: persistent dark sidebar, blue outlined current item,
-conversation as the dominant workspace, compact status rails, a persistent composer,
-and restrained cards and borders. WeatherFlow adds two explicit header signals for
-human weather and Agent task state because the v3 contract requires them to remain
-separate. Connections intentionally exposes only GitHub, Gmail, and Google Calendar.
+No actionable P0, P1, or P2 findings remain.
 
-The source screenshots use a taller frame, so normalized comparisons judge content
-regions and information hierarchy rather than pixel-for-pixel vertical density.
-
-## Focused-region comparison evidence
-
-The combined images keep the sidebar, conversation header, message column, composer,
-Composio key strip, and connector card row legible at the same scale. No additional
-crops were required. The task and rhythm views have no direct OpenHuman target and
-were checked against WeatherFlow's architecture contracts and the shared visual
-tokens instead.
-
-## Required fidelity surfaces
-
-- Fonts and typography: the system/PingFang stack is consistent across Chinese copy;
-  headings use a compact 19–25 px scale, body text uses 11–14 px with readable line
-  height, and long task text is clamped in navigation but fully readable in detail.
-- Spacing and layout: sidebar, header, conversation column, task navigation, detail,
-  context rail, composer, settings sections, and connector cards keep stable tracks.
-  At 900 × 700 there is no document-level horizontal or vertical overflow.
-- Colors and tokens: near-black surfaces, low-contrast borders, muted secondary copy,
-  blue primary/focus states, green success, amber approval, and red review states are
-  shared through WeatherFlow tokens.
-- Image and icon fidelity: all visible UI icons use the existing Phosphor library.
-  The source contains no required raster product art, and no placeholder imagery or
-  handcrafted SVG assets were introduced.
-- Copy and content: product copy is Chinese except provider names, model names, API
-  terms, and dynamic model output. Known backend rhythm labels are translated for
-  display without changing the stored domain value.
-- Accessibility: navigation and task items expose stable accessible names and current
-  state; keyboard focus is visible; segmented state controls expose pressed state;
-  disabled composer and rhythm actions explain their prerequisites.
-
-## Interaction and console checks
-
-- Navigated through conversation, tasks, state weather, connections, and settings.
-- Verified task selection, long-content containment, and readable event translation.
-- Switched state input from active check-in to correction and verified the heading and
-  pressed state update without writing a signal.
-- Verified the empty, disabled, selected, and current-status states visible in the
-  live daemon-backed UI.
-- Verified 900 × 700 responsive navigation after fixing hidden-label accessibility.
-- Browser console errors checked after navigation and interaction: none.
+- Typography: the first implementation pass used 8-11 px text across tool controls and catalog cards, which was materially smaller than the reference and unnecessarily difficult to scan. Tool labels, list rows, form fields, state text, policy copy, catalog descriptions, and buttons now use a 10-13 px UI scale with 13-20 px primary content hierarchy. Native system/PingFang fallbacks, weights, wrapping, and truncation are coherent.
+- Spacing and layout: the three-region structure matches the reference mode: persistent sidebar, searchable schedule list, and focused detail editor. Measured desktop widths have no horizontal overflow. At 1024 px the page width and scroll width are both 792 px; at 800 px they are both 724 px and the Automation layout collapses to one column.
+- Colors and tokens: the implementation keeps the reference's low-chroma dark surfaces and restrained blue selection state while using existing WeatherFlow tokens. Enabled, paused, unavailable, risk, and approval-related states remain semantically distinct.
+- Image and icon fidelity: this product surface contains no photography, illustration, logo treatment, or non-standard image asset that must be reproduced. Visible controls use the existing Phosphor icon family; no emoji, handcrafted SVG, CSS illustration, or placeholder image was introduced.
+- Copy and content: tool navigation and all task-critical copy are Chinese. Automation copy explicitly states that schedules create ordinary Runs and do not bypass Trust approval. Skills explain immutable snapshots and authority boundaries. MCP cards disclose fixed versions, source links, capabilities, and risk notes.
+- Interaction and accessibility: navigation, filters, search, form labels, focus outlines, disabled states, create/edit/pause/run controls, Skill installation, and MCP availability states are present. Form controls are semantic HTML controls. Reduced-motion handling is retained.
 
 ## Comparison history
 
-### Baseline audit
+### Pass 1
 
-- Evidence: `01-baseline-chat.png` through `05-baseline-settings.png`.
-- [P1] Long task intents overran the task list and visually collided with the result
-  and timeline columns.
-- [P1] Conversation was visually sparse and did not show human weather and Agent task
-  state as separate concepts near the primary interaction.
-- [P2] The state-weather screen exposed too little of the backend policy, intensity,
-  and validity data to explain how the product understood the user.
-- [P2] Sending looked available when no Workspace was selected even though submission
-  could not succeed.
+- Evidence: `artifacts/design-qa/automation-after.png`, `artifacts/design-qa/automation-comparison-normalized.png`, `artifacts/design-qa/automation-focus-comparison-normalized.png`.
+- Finding [P2]: tool-page typography and metadata were visibly smaller and lower-contrast than the reference, especially in the Automation editor and catalog cards.
+- Fix: increased tool typography, control heights, muted-text contrast, and key hierarchy in `desktop/src/styles.css`.
+- Finding [P2]: rapid edits across multiple schedule fields could overwrite a preceding field because object-spread state updates captured stale draft state.
+- Fix: changed all Automation draft field updates to functional React state updates in `desktop/src/components/ToolViews.tsx`.
 
-### Refinement pass
+### Pass 2
 
-- Fixed task layout with bounded navigation summaries, independent scrolling, a
-  result card, translated timeline labels, event count, and dedicated context rail.
-- Added separate accessible conversation chips for human weather and task state.
-- Rebuilt the state page around real summary, policy, intensity, validity, check-in,
-  and correction data from the Python snapshot.
-- Disabled sending without a Workspace and exposed the reason beside the composer.
-- Reworked hierarchy, sizing, tokens, focus states, and responsive layout across all
-  five Cockpit sections.
-- Post-fix evidence: `10-refined-chat.png` through `14-refined-settings.png`.
+- Evidence: `artifacts/design-qa/automation-final.png`, `artifacts/design-qa/automation-comparison-final.png`, `artifacts/design-qa/automation-focus-comparison-final.png`.
+- Result: typography is readable, the Friday 06:00 schedule remains visible in both list and editor, no controls clip, and the list/detail proportions preserve the reference interaction model.
+- Final clean browser tab reported zero console errors.
 
-### Responsive pass
+## Primary interactions tested
 
-- [P1] At the collapsed-sidebar breakpoint, hidden navigation text also removed the
-  buttons' accessible names, and the add-project label wrapped vertically.
-- Added explicit navigation labels and restored the icon-only add-project treatment.
-- Post-fix evidence: `15-responsive-chat-900x700.png`; document width and scroll width
-  both equal 900 px, and document height and scroll height both equal 700 px.
+- Created and edited a weekly Automation.
+- Verified schedule list selection and detail editing.
+- Searched the 127-item bundled Skills catalog and installed `test-driven-development` into the selected Workspace.
+- Opened the curated MCP catalog and verified unavailable/available states plus official-source links.
+- Checked Automation and MCP layouts at desktop, 1024 px, and 800 px widths.
+- Verified the final screen in a fresh browser tab with no console errors.
 
 ## Follow-up polish
 
-- P3: re-capture connected, syncing, connector-error, approval, artifact, and offline
-  states after authentic accounts and representative Runs exist locally.
-- P3: dynamic model output can later receive Markdown rendering once that renderer is
-  added as an explicit product contract rather than a presentation-only shortcut.
+- [P3] The WeatherFlow-specific tool title bar is intentionally retained above the list/detail area instead of copying Codex's application chrome exactly.
+- [P3] Run history is empty in the QA fixture; populated history styling is covered by component tests rather than the final screenshot.
 
-## 2026-07-13 multi-provider model configuration pass
+final result: passed
 
-- Source visual truth:
-  `/var/folders/4k/fygl6mrx1px2fq_5f83s_hq80000gn/T/codex-clipboard-76c0e06f-80a2-4098-8e38-01e87dacf9c5.png`
-- Browser-rendered implementation:
-  `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/model-providers/weatherflow-model-settings-pass2b.png`
-- Focused provider-region evidence:
-  `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/model-providers/weatherflow-model-settings-focus-pass2.png`
-- Initial comparison evidence:
-  `/Users/wesz_station/Projects/WeatherFlow/.codex/visual-qa/model-providers/weatherflow-model-settings-pass1b.png`
-- Viewport: 1410 × 796, matching the source screenshot.
-- State: dark Cockpit Settings, MiniMax provider selected, API key absent, fixed
-  official endpoint visible, local development daemon online.
+---
 
-### Full-view and focused comparison
+# WeatherFlow Companion Refinement Design QA
 
-The full-view comparison preserves WeatherFlow's persistent product sidebar while
-adopting the source's large dark provider surface, tinted rounded provider pills,
-right-aligned key-presence switches, clear title band, and restrained borders. The
-provider crop confirms that labels, toggles, key form, and selected state remain
-legible. The smaller provider count and same-page key form are intentional product
-differences: WeatherFlow supports seven bounded domestic providers rather than the
-source's broad catalog, and configuration must remain directly actionable.
+- Source visual truth: `artifacts/design-qa/companion/before-rest.png`
+- Implementation URL: `http://127.0.0.1:1421/?surface=companion`
+- Implementation screenshot: `artifacts/design-qa/companion/after-full.png`
+- Viewport: browser content `240 x 160`; the native Companion contract is `56 x 56`
+- State: dark transparent Companion surface, `mixed` human weather, idle Agent state
+- Full-view and focused comparison: `artifacts/design-qa/companion/comparison.png`
+- Additional interaction evidence: `artifacts/design-qa/companion/after-hover-full.png`
 
-Required fidelity surfaces were rechecked: system/PingFang typography and hierarchy,
-provider and form spacing, dark neutral plus provider-tinted color tokens, Phosphor
-icons with no replacement raster assets, and Chinese product copy. The reference has
-no required imagery, logo, or illustration inside the compared region.
+## Findings
 
-### Comparison history
+No actionable P0, P1, or P2 findings remain.
 
-- [P2] Pass 1 provider controls and type hierarchy were too compact relative to the
-  reference, making the provider surface read like a secondary utility panel.
-- Fix: enlarged the Settings title band, provider heading, pills, type, padding, and
-  toggles; introduced the lighter harness-style title background; retained the fixed
-  WeatherFlow sidebar and in-context API-key panel.
-- Post-fix evidence: `weatherflow-model-settings-pass2b.png` and
-  `weatherflow-model-settings-focus-pass2.png`. No actionable P0/P1/P2 differences
-  remain after accounting for the intentionally bounded provider set and inline
-  configuration flow.
+- Typography: the Companion contains no visible text. Its weather name remains available through the accessible button label and native tooltip.
+- Spacing and layout: the former 72 px native window and 56 px transparent weather button have been replaced by a tightly fitted 56 px window containing one 48 px square tile. The 29 px weather glyph is optically centered and the secondary status dots stay in the corners without competing with it.
+- Colors and tokens: the tile uses the existing low-chroma WeatherFlow dark surfaces and scene-specific weather colors. Rest and hover states differ through restrained surface, border, and elevation changes.
+- Image quality and asset fidelity: the packaged Phosphor weather glyph remains a sharp vector icon. No emoji, handcrafted SVG, CSS illustration, or placeholder asset was introduced.
+- Copy and content: the tooltip now describes the two primary actions concisely: click to input and drag to move. Right-click behavior remains available without adding visual copy.
+- Interaction and accessibility: hover no longer translates or scales the tile, so the target stays spatially stable as the pointer approaches. The default arrow remains until press, where the cursor changes to grabbing. The task dot keeps a 16 px hit target around an 8 px visual indicator.
 
-### Interaction and console checks
+## Comparison history
 
-- Opened Settings from the persistent navigation.
-- Switched the selected provider from MiniMax to DeepSeek and verified the provider
-  name, official endpoint, placeholder, and submit label update together.
-- Entered a non-secret test value and verified the configure action becomes enabled;
-  cleared it without submitting or writing credentials.
-- Browser console warnings and errors checked after interaction: none.
+### Pass 1
+
+- Evidence: `artifacts/design-qa/companion/before-rest.png` and the original hover rules in `desktop/src/styles.css`.
+- Finding [P2]: the weather glyph floated without the requested square visual boundary, while the native window extended substantially beyond the visible object.
+- Finding [P2]: hover introduced a new background and shifted the target upward by 1 px, producing a jump as the pointer entered it.
+- Fix: added a persistent compact square tile, reduced the native window from 72 px to 56 px, reduced the glyph from 44 px to 29 px, and replaced positional hover motion with surface, border, and shadow changes only.
+
+### Pass 2
+
+- Evidence: `artifacts/design-qa/companion/after-full.png`, `artifacts/design-qa/companion/after-hover-full.png`, and `artifacts/design-qa/companion/comparison.png`.
+- Result: the Companion reads as one stable square weather control at rest and on hover. No component drift, clipping, or competing visual element remains.
+
+## Primary interactions tested
+
+- Clicked the unique weather button in the browser-rendered surface; the Companion remained stable and produced no console errors.
+- Verified click-versus-drag suppression through the existing Companion component test.
+- Verified the reduced native hit region through the Rust surface-size contract test.
+- Verified the rest and forced-hover visual states at the same viewport.
+
+## Follow-up polish
+
+- [P3] A future macOS E2E pass can compare the tile over both light and dark desktop wallpapers; the current transparent browser canvas exercises the darker case.
 
 final result: passed

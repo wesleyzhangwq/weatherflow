@@ -1,6 +1,12 @@
 """Privacy-safe human-state estimation and presentation."""
 
 from weatherflow.rhythm.estimator import RhythmEstimator, SignalFact
+from weatherflow.rhythm.insights import (
+    ProfileInsight,
+    RecentBehaviorInsight,
+    RhythmInsights,
+    RhythmInsightsService,
+)
 from weatherflow.rhythm.models import (
     ActivityMetadata,
     AppCategory,
@@ -32,11 +38,15 @@ __all__ = [
     "DimensionName",
     "Freshness",
     "HumanStateSnapshot",
+    "ProfileInsight",
+    "RecentBehaviorInsight",
     "RhythmPolicy",
     "RhythmService",
     "RhythmSnapshotRepository",
     "RhythmEstimator",
     "RhythmSignal",
+    "RhythmInsights",
+    "RhythmInsightsService",
     "SignalFact",
     "TaskBehaviorSignal",
     "Trend",

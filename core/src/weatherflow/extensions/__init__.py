@@ -1,5 +1,11 @@
 """Verified local extension packages and credential references."""
 
+from weatherflow.extensions.catalog import (
+    SkillCatalogEntry,
+    SkillCatalogError,
+    SkillCatalogService,
+    WesleySkillCatalog,
+)
 from weatherflow.extensions.credentials import (
     CredentialBroker,
     CredentialRef,
@@ -43,6 +49,10 @@ __all__ = [
     "PackageIntegrityError",
     "PackageManifest",
     "PackageStore",
+    "SkillCatalogEntry",
+    "SkillCatalogError",
+    "SkillCatalogService",
     "SkillPackageManifest",
+    "WesleySkillCatalog",
     "package_install_tool_spec",
 ]

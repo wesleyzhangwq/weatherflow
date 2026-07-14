@@ -34,9 +34,13 @@ def test_desktop_surfaces_are_compact_movable_and_responsive() -> None:
     native = (ROOT / "desktop/src/native.ts").read_text()
     styles = (ROOT / "desktop/src/styles.css").read_text()
 
-    assert "const STARTUP_SIZE: (f64, f64) = (72.0, 72.0);" in rust
+    assert "const STARTUP_SIZE: (f64, f64) = (56.0, 56.0);" in rust
     assert "startCompanionDrag" in native
     assert "onStartDrag" in companion
+    assert 'className="weather-button weather-tile"' in companion
+    assert 'data-shape="square"' in companion
+    assert ".weather-tile:hover" in styles
+    assert "translateY" not in styles
     assert "character-image" not in companion
     assert "Focused(false)" in rust
     assert "100dvh" in styles

@@ -1,0 +1,4 @@
+interface:
+  display_name: "OPC Automation Map"
+  short_description: "Identify and prioritize automations for a solo operator."
+  default_prompt: "Use this skill to map automation opportunities in an OPC workflow."

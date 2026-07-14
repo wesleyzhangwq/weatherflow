@@ -116,3 +116,41 @@ async def test_provider_catalog_and_generic_configuration_api(
             "base_url": "https://llm.example.cn/v1",
         }
     ]
+
+
+async def test_system_status_never_inherits_another_workspace_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    workspace = await container.authorize_workspace(name="Unconfigured", path=other_root)
+    requested: list[str] = []
+
+    async def model_status(_service: ModelConfigurationService, workspace_id: str) -> ModelStatus:
+        requested.append(workspace_id)
+        if workspace_id == container.default_workspace.id:
+            return ModelStatus(
+                configured=True,
+                provider="minimax",
+                model="MiniMax-M3",
+                base_url="https://api.minimaxi.com/v1",
+                credential_available=True,
+            )
+        return ModelStatus(
+            configured=False,
+            provider="minimax",
+            model=None,
+            base_url=None,
+            credential_available=False,
+        )
+
+    monkeypatch.setattr(ModelConfigurationService, "status", model_status)
+    transport = ASGITransport(app=create_app(container=container))
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/v1/system/status?workspace_id={workspace.id}")
+
+    assert response.status_code == 200
+    assert response.json()["model"]["configured"] is False
+    assert requested == [workspace.id]

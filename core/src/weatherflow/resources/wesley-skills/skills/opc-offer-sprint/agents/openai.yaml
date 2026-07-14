@@ -1,0 +1,4 @@
+interface:
+  display_name: "OPC Offer Sprint"
+  short_description: "Turn market signals into a sellable offer in one sprint."
+  default_prompt: "Use this skill to run an offer sprint for a one-person company."

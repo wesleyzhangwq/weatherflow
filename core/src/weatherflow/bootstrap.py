@@ -8,6 +8,7 @@ from uuid import uuid4
 import httpx
 
 from weatherflow.artifacts import ArtifactManifest, ArtifactRepository, ArtifactStore
+from weatherflow.automations import AutomationRepository, AutomationScheduler, AutomationService
 from weatherflow.capabilities import (
     CapabilityCatalog,
     CapabilityResolver,
@@ -56,7 +57,15 @@ from weatherflow.extensions import (
     KeyringCredentialStore,
     PackageInstallExecutor,
     PackageStore,
+    SkillCatalogService,
+    WesleySkillCatalog,
     package_install_tool_spec,
+)
+from weatherflow.mcp import (
+    MCPConnectionState,
+    MCPManagementService,
+    MCPWorkspaceContext,
+    SQLiteMCPConnectionRepository,
 )
 from weatherflow.mcp.client import ConnectedMCP, MCPRegistry, MCPTransport
 from weatherflow.memory import MemoryStore
@@ -136,9 +145,13 @@ class RuntimeContainer:
     workers: WorkerCoordinator
     use_builtin_pack_resolution: bool
     mcp_connections: tuple[ConnectedMCP, ...]
+    mcp_management: MCPManagementService
+    skill_catalog: SkillCatalogService
+    automation_repository: AutomationRepository
+    automations: AutomationService
+    automation_scheduler: AutomationScheduler
     model_configurations: ModelConfigurationService
     model_routes: RunModelRouteRepository
-    model_configuration: ModelConfiguration | None
     use_configured_model_routing: bool
     credential_store: CredentialStore
     connector_repository: ConnectorRepository
@@ -266,6 +279,15 @@ class RuntimeContainer:
             ledger=ledger,
             gateway=resolved_connector_gateway,
         )
+        skill_catalog = SkillCatalogService(
+            catalog=WesleySkillCatalog(settings.skill_catalog_root),
+            database=database,
+            workspaces=workspaces,
+            ledger=ledger,
+        )
+        mcp_management = MCPManagementService(
+            repository=SQLiteMCPConnectionRepository(database),
+        )
         model_configuration_repository = ModelConfigurationRepository(database)
         model_routes = RunModelRouteRepository(database)
         model_configurations = ModelConfigurationService(
@@ -276,7 +298,6 @@ class RuntimeContainer:
             client=model_http_client,
             routes=model_routes,
         )
-        model_configuration = await model_configuration_repository.get(default_workspace.id)
         use_builtin_pack_resolution = catalog is None
         resolved_catalog = catalog or CapabilityCatalog(
             builtin_tool_specs(
@@ -369,6 +390,31 @@ class RuntimeContainer:
             worker_coordinator=workers,
         )
         workers.bind_loop(loop)
+        automation_repository = AutomationRepository(database)
+        container_ref: RuntimeContainer | None = None
+
+        async def submit_automation_run(
+            *,
+            user_intent: str,
+            client_request_id: str,
+            workspace_id: str,
+        ) -> Run:
+            if container_ref is None:
+                raise RuntimeError("runtime container is not ready")
+            run, _ = await container_ref.submit_run(
+                user_intent=user_intent,
+                client_request_id=client_request_id,
+                workspace_id=workspace_id,
+                execute=False,
+            )
+            container_ref.schedule_run(run.id)
+            return run
+
+        automations = AutomationService(
+            repository=automation_repository,
+            submit_run=submit_automation_run,
+        )
+        automation_scheduler = AutomationScheduler(service=automations)
         container = cls(
             settings=settings,
             database=database,
@@ -400,9 +446,13 @@ class RuntimeContainer:
             workers=workers,
             use_builtin_pack_resolution=use_builtin_pack_resolution,
             mcp_connections=tuple(mcp_connections),
+            mcp_management=mcp_management,
+            skill_catalog=skill_catalog,
+            automation_repository=automation_repository,
+            automations=automations,
+            automation_scheduler=automation_scheduler,
             model_configurations=model_configurations,
             model_routes=model_routes,
-            model_configuration=model_configuration,
             use_configured_model_routing=use_configured_model_routing,
             credential_store=resolved_credential_store,
             connector_repository=connector_repository,
@@ -411,6 +461,7 @@ class RuntimeContainer:
             connector_gateway=resolved_connector_gateway,
             background_tasks={},
         )
+        container_ref = container
         await container._audit_startup_recovery()
         return container
 
@@ -451,11 +502,23 @@ class RuntimeContainer:
             )
         return workspace
 
-    async def start_background(self) -> None:
+    async def start_background(
+        self,
+        *,
+        include_connector_sync: bool = True,
+        include_automation_scheduler: bool = True,
+    ) -> None:
         if self.background_started:
-            self.start_connector_background()
+            if include_automation_scheduler:
+                await self.automation_scheduler.start()
+            if include_connector_sync:
+                self.start_connector_background()
             return
         self.background_started = True
+        for workspace in await self.workspaces.list_all():
+            await self._restore_workspace_mcp(workspace)
+        if include_automation_scheduler:
+            await self.automation_scheduler.start()
         recoverable = {
             RunStatus.QUEUED,
             RunStatus.PLANNING,
@@ -465,7 +528,59 @@ class RuntimeContainer:
         for run in await self.runs.list_recent(limit=1000):
             if run.status in recoverable:
                 self.schedule_run(run.id)
-        self.start_connector_background()
+        if include_connector_sync:
+            self.start_connector_background()
+
+    async def stop_background(self) -> None:
+        self.background_started = False
+        await self.automation_scheduler.stop()
+        await self.mcp_management.close()
+        connector_task = self.connector_sync_task
+        self.connector_sync_task = None
+        tasks = [*self.background_tasks.values()]
+        if connector_task is not None:
+            tasks.append(connector_task)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self.background_tasks.clear()
+
+    async def enable_mcp(self, preset_id: str, workspace: Workspace) -> MCPConnectionState:
+        state = await self.mcp_management.enable(
+            preset_id,
+            workspace=self._mcp_workspace_context(workspace),
+        )
+        self._register_managed_mcp_tools(workspace.id, preset_id)
+        return state
+
+    async def _restore_workspace_mcp(self, workspace: Workspace) -> None:
+        states = await self.mcp_management.restore_enabled(self._mcp_workspace_context(workspace))
+        for state in states:
+            if state.enabled and state.tool_ids:
+                self._register_managed_mcp_tools(workspace.id, state.preset_id)
+
+    def _register_managed_mcp_tools(self, workspace_id: str, preset_id: str) -> None:
+        executor = self.mcp_management.executor(preset_id)
+        for tool in self.mcp_management.active_tools(workspace_id):
+            if tool.source != f"mcp:{preset_id}":
+                continue
+            existing = self.catalog.get(tool.tool_id)
+            if existing is None:
+                self.catalog.register(tool)
+            elif existing.model_dump(mode="json") != tool.model_dump(mode="json"):
+                raise ValueError(f"MCP tool schema drift: {tool.tool_id}")
+            if self.executors.get(tool.tool_id) is None:
+                self.executors.register(tool.tool_id, executor)
+
+    @staticmethod
+    def _mcp_workspace_context(workspace: Workspace) -> MCPWorkspaceContext:
+        return MCPWorkspaceContext(
+            workspace_id=workspace.id,
+            internal_root=Path(workspace.internal_root),
+            action_roots=tuple(Path(root) for root in workspace.action_roots),
+        )
 
     def start_connector_background(self) -> asyncio.Task[None] | None:
         if not self.connector_service.configured():
@@ -615,8 +730,6 @@ class RuntimeContainer:
             model=model,
             base_url=base_url,
         )
-        if workspace_id == self.default_workspace.id:
-            self.model_configuration = configuration
         return configuration
 
     async def submit_run(
@@ -650,7 +763,6 @@ class RuntimeContainer:
             await self.model_configurations.bind_run(
                 run_id=run.id,
                 workspace_id=workspace.id,
-                fallback_workspace_id=self.default_workspace.id,
             )
         unavailable = sorted(
             tool_id
@@ -970,6 +1082,7 @@ class RuntimeContainer:
 
             raise UnknownCapabilityPackError(sorted(unresolved)[0])
         selected.add("extensions.install")
+        selected.update(tool.tool_id for tool in self.mcp_management.active_tools(workspace.id))
         return frozenset(selected)
 
     async def _audit_startup_recovery(self) -> None:

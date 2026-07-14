@@ -13,9 +13,49 @@ export interface WeatherPresentation {
 }
 
 export interface CurrentRhythm {
-  snapshot: { id: string; summary: string; valid_until: string };
+  snapshot: {
+    id: string;
+    summary: string;
+    valid_until: string;
+    observed_at?: string;
+    freshness?: "fresh" | "aging" | "expired";
+    dimensions?: Partial<Record<RhythmDimensionName, RhythmDimensionEstimate>>;
+  };
   policy: { proactivity: "silent"; work_mode: string };
   weather: WeatherPresentation;
+}
+
+export type RhythmDimensionName = "energy" | "cognitive_load" | "fragmentation" | "momentum" | "friction" | "recovery_need";
+export interface RhythmDimensionEstimate {
+  value: number;
+  confidence: number;
+  trend: "rising" | "steady" | "falling";
+  freshness: "fresh" | "aging" | "expired";
+}
+export interface RecentBehaviorInsight {
+  id: string;
+  kind: "activity" | "task";
+  observed_at: string;
+  active_minutes: number | null;
+  idle_minutes: number | null;
+  app_switch_count: number | null;
+  dominant_category: "development" | "communication" | "research" | "planning" | "creative" | "other" | null;
+  outcome: "succeeded" | "failed" | "needs_review" | null;
+  duration_minutes: number | null;
+  step_count: number | null;
+}
+export interface ProfileInsight {
+  id: string;
+  claim: string;
+  confidence: number;
+  origin: "user" | "agent" | "derived";
+  evidence_count: number;
+  updated_at: string;
+}
+export interface RhythmInsights {
+  current: CurrentRhythm;
+  recent_behaviors: RecentBehaviorInsight[];
+  profile: ProfileInsight[];
 }
 
 export interface Run {
@@ -34,6 +74,8 @@ export interface Workspace {
   name: string;
   action_roots: string[];
   installed_packs: string[];
+  installed_skills?: string[];
+  version?: number;
 }
 
 export interface DesktopSnapshot {
@@ -115,3 +157,76 @@ export interface ConnectionAttempt {
 }
 export interface ConnectorSourceItem { source_id: string; occurred_at: string; title: string; summary: string; url: string | null }
 export interface ConnectorSnapshot { workspace_id: string; connector: ConnectorKind; fetched_at: string; expires_at: string; items: ConnectorSourceItem[] }
+
+export type AutomationStatus = "enabled" | "paused";
+export type ScheduleKind = "once" | "hourly" | "daily" | "weekdays" | "weekly";
+export interface AutomationSchedule {
+  kind: ScheduleKind;
+  timezone: string;
+  once_at?: string | null;
+  minute?: number | null;
+  at_time?: string | null;
+  weekday?: number | null;
+}
+export interface Automation {
+  id: string;
+  workspace_id: string;
+  name: string;
+  prompt: string;
+  schedule: AutomationSchedule;
+  status: AutomationStatus;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+export interface AutomationRunLink {
+  id: string;
+  automation_id: string;
+  workspace_id: string;
+  trigger: "scheduled" | "manual";
+  scheduled_for: string;
+  client_request_id: string;
+  status: "pending" | "submitted" | "failed";
+  run_id: string | null;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+}
+export interface SkillCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  description_zh: string | null;
+  boundary_zh: string | null;
+  category: string | null;
+  license: string | null;
+  related: string[];
+  reads: string[];
+  source: "wesley-skills";
+  source_path: string;
+  source_digest: string;
+  validation_status: "valid" | "invalid";
+  validation_errors: string[];
+  installed: boolean;
+  installed_reference: string | null;
+}
+export interface MCPPreset {
+  preset_id: string;
+  title: string;
+  description: string;
+  publisher: string;
+  source_url: string;
+  version: string;
+  capabilities: string[];
+  risk_note: string;
+  available: boolean;
+  unavailable_reason: string | null;
+  installed: boolean;
+  enabled: boolean;
+  health: "not_installed" | "disabled" | "healthy" | "unavailable";
+  tool_ids: string[];
+  installed_at: string | null;
+  checked_at: string | null;
+}

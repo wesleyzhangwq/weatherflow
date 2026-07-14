@@ -3,6 +3,7 @@ import difflib
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -16,9 +17,10 @@ from weatherflow.capabilities.models import (
 from weatherflow.runtime import ToolExecutionContext, ToolExecutionResult
 from weatherflow.workspaces import Workspace, WorkspaceRepository
 
-ALLOWED_COMMANDS = frozenset(
-    {"git", "python", "python3", "pytest", "uv", "npm", "npx", "pnpm", "make"}
-)
+VERSION_ONLY_COMMANDS = frozenset({"python", "python3", "uv", "npm", "pnpm", "make"})
+SAFE_GIT_STATUS_FLAGS = frozenset({"--short", "--branch", "--porcelain"})
+MAX_ARGV_ITEMS = 16
+MAX_ARGUMENT_CHARS = 4_096
 MAX_FILE_BYTES = 1_000_000
 MAX_OUTPUT_CHARS = 16_000
 
@@ -107,7 +109,11 @@ def developer_tool_specs() -> tuple[ToolSpec, ...]:
         ),
         ToolSpec(
             tool_id="developer.run_command",
-            description="Run an allowlisted argv command without a shell",
+            description=(
+                "Run a narrowly classified read-only command without a shell. "
+                "Arbitrary interpreters, project scripts, installs, Git mutations, "
+                "and unknown command forms fail closed."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -163,7 +169,9 @@ class DeveloperExecutor:
             return ToolExecutionResult(output=output)
         if tool.tool_id == "developer.git_status":
             root = Path(workspace.action_roots[0])
-            return await self._run(["git", "status", "--short"], root, tool.timeout_seconds)
+            return await self._run(
+                ["git", "status", "--short"], root, tool.timeout_seconds, workspace
+            )
         if tool.tool_id == "developer.run_command":
             argv = arguments.get("argv")
             if (
@@ -174,7 +182,7 @@ class DeveloperExecutor:
                 raise ValueError("argv must be a non-empty string array")
             cwd_value = str(arguments.get("cwd", workspace.action_roots[0]))
             cwd = await asyncio.to_thread(_resolve_path, workspace, cwd_value)
-            return await self._run(argv, cwd, tool.timeout_seconds)
+            return await self._run(argv, cwd, tool.timeout_seconds, workspace)
         if tool.tool_id == "developer.write_artifact":
             return await self._write_artifact(arguments, context, workspace)
         raise LookupError(tool.tool_id)
@@ -225,27 +233,47 @@ class DeveloperExecutor:
         )
         return _artifact_result(manifest)
 
-    async def _run(self, argv: list[str], cwd: Path, timeout_seconds: int) -> ToolExecutionResult:
-        if argv[0] not in ALLOWED_COMMANDS:
-            raise PermissionError(f"command {argv[0]} is not allowlisted")
+    async def _run(
+        self,
+        argv: list[str],
+        cwd: Path,
+        timeout_seconds: int,
+        workspace: Workspace,
+    ) -> ToolExecutionResult:
+        execution_argv = _classify_command(argv, cwd, workspace)
         environment = {
             key: value
             for key, value in os.environ.items()
-            if key in {"PATH", "HOME", "LANG", "LC_ALL", "CI"}
+            if key in {"PATH", "LANG", "LC_ALL", "CI"}
         }
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=cwd,
-            env=environment,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        environment["PATH"] = _sanitized_path(workspace)
+        environment.update(
+            {
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG": os.devnull,
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_TERMINAL_PROMPT": "0",
+            }
         )
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            raise TimeoutError(f"command exceeded {timeout_seconds}s") from None
+        with tempfile.TemporaryDirectory(prefix="weatherflow-command-home-") as temporary_home:
+            environment["HOME"] = temporary_home
+            process = await asyncio.create_subprocess_exec(
+                *execution_argv,
+                cwd=cwd,
+                env=environment,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=timeout_seconds
+                )
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+                raise TimeoutError(f"command exceeded {timeout_seconds}s") from None
         return ToolExecutionResult(
             output={
                 "argv": argv,
@@ -255,6 +283,100 @@ class DeveloperExecutor:
                 "truncated": len(stdout) > MAX_OUTPUT_CHARS or len(stderr) > MAX_OUTPUT_CHARS,
             }
         )
+
+
+def _classify_command(argv: list[str], cwd: Path, workspace: Workspace) -> list[str]:
+    if (
+        not argv
+        or len(argv) > MAX_ARGV_ITEMS
+        or any(not item or "\x00" in item or len(item) > MAX_ARGUMENT_CHARS for item in argv)
+    ):
+        raise PermissionError("command arguments are empty, malformed, or exceed limits")
+
+    command = argv[0]
+    if command in VERSION_ONLY_COMMANDS:
+        expected_flags = {"--version", "-V"} if command.startswith("python") else {"--version"}
+        if len(argv) != 2 or argv[1] not in expected_flags:
+            raise PermissionError(
+                f"{command} project execution is not available without an OS sandbox"
+            )
+        return [_resolve_executable(command, workspace), argv[1]]
+
+    if command == "git":
+        if argv == ["git", "--version"]:
+            return [_resolve_executable(command, workspace), "--version"]
+        if len(argv) >= 2 and argv[1] == "status":
+            flags = argv[2:]
+            if len(flags) == len(set(flags)) and all(
+                flag in SAFE_GIT_STATUS_FLAGS for flag in flags
+            ):
+                _require_scoped_git_metadata(cwd, workspace)
+                return [
+                    _resolve_executable(command, workspace),
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "status.submoduleSummary=false",
+                    "--no-pager",
+                    "status",
+                    "--ignore-submodules=all",
+                    *flags,
+                ]
+        raise PermissionError("Git mutations and unclassified Git arguments require approval")
+
+    raise PermissionError(f"command {command} is not classified for sandbox execution")
+
+
+def _resolve_executable(command: str, workspace: Workspace) -> str:
+    located = shutil.which(command)
+    if located is None:
+        raise FileNotFoundError(command)
+    resolved = Path(located).resolve()
+    if workspace.allows_action_path(resolved):
+        raise PermissionError(f"Workspace executable {command} is not trusted")
+    return str(resolved)
+
+
+def _sanitized_path(workspace: Workspace) -> str:
+    directories: list[str] = []
+    for value in os.environ.get("PATH", "").split(os.pathsep):
+        if not value:
+            continue
+        directory = Path(value).expanduser().resolve()
+        if workspace.allows_action_path(directory):
+            continue
+        directories.append(str(directory))
+    return os.pathsep.join(directories)
+
+
+def _require_scoped_git_metadata(cwd: Path, workspace: Workspace) -> None:
+    current = cwd.resolve()
+    while workspace.allows_action_path(current):
+        marker = current / ".git"
+        if marker.exists() or marker.is_symlink():
+            if marker.is_dir():
+                metadata = marker.resolve()
+            elif marker.is_file() and marker.stat().st_size <= 4_096:
+                declaration = marker.read_text(encoding="utf-8").strip()
+                prefix = "gitdir:"
+                if not declaration.lower().startswith(prefix):
+                    raise PermissionError("Git metadata declaration is malformed")
+                value = declaration[len(prefix) :].strip()
+                if not value:
+                    raise PermissionError("Git metadata declaration is empty")
+                metadata = Path(value)
+                if not metadata.is_absolute():
+                    metadata = marker.parent / metadata
+                metadata = metadata.resolve()
+            else:
+                raise PermissionError("Git metadata marker is unsupported")
+            if not workspace.allows_action_path(metadata):
+                raise PermissionError("Git metadata resolves outside the authorized Workspace")
+            return
+        if current.parent == current:
+            break
+        current = current.parent
+    raise PermissionError("Git status requires repository metadata inside the Workspace")
 
 
 def _resolve_path(workspace: Workspace, value: str) -> Path:

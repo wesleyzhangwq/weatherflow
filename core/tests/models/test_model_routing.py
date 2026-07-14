@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -43,14 +44,15 @@ async def test_each_run_freezes_its_workspace_model_route(
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    credentials = MappingCredentialStore(
+        {
+            "minimax.api_key": "minimax-key",
+            "deepseek.api_key": "deepseek-key",
+        }
+    )
     container = await RuntimeContainer.create(
         Settings(data_dir=tmp_path),
-        credential_store=MappingCredentialStore(
-            {
-                "minimax.api_key": "minimax-key",
-                "deepseek.api_key": "deepseek-key",
-            }
-        ),
+        credential_store=credentials,
         model_http_client=client,
         provider_continuation_key=bytes(range(32)),
     )
@@ -91,20 +93,28 @@ async def test_each_run_freezes_its_workspace_model_route(
         base_url="https://api.minimaxi.com/v1",
     )
 
-    minimax_outcome = await container.resume_run(minimax_run.id)
-    deepseek_outcome = await container.resume_run(deepseek_run.id)
+    rebuilt = await RuntimeContainer.create(
+        Settings(data_dir=tmp_path),
+        credential_store=credentials,
+        model_http_client=client,
+        provider_continuation_key=bytes(range(32)),
+    )
+    minimax_outcome, deepseek_outcome = await asyncio.gather(
+        rebuilt.resume_run(minimax_run.id),
+        rebuilt.resume_run(deepseek_run.id),
+    )
 
     assert minimax_outcome.status is LoopStatus.SUCCEEDED
     assert minimax_outcome.result_summary == "actual=api.minimaxi.com:MiniMax-M2.7"
     assert deepseek_outcome.status is LoopStatus.SUCCEEDED
     assert deepseek_outcome.result_summary == "actual=api.deepseek.com:deepseek-v4-pro"
-    assert [(host, model) for host, model, _ in requests] == [
-        ("api.minimaxi.com", "MiniMax-M2.7"),
+    assert sorted((host, model) for host, model, _ in requests) == [
         ("api.deepseek.com", "deepseek-v4-pro"),
+        ("api.minimaxi.com", "MiniMax-M2.7"),
     ]
     assert all("runtime-selected model identity" in system for _, _, system in requests)
 
-    minimax_route_events = await container.ledger.list_correlation(minimax_run.id, limit=100)
+    minimax_route_events = await rebuilt.ledger.list_correlation(minimax_run.id, limit=100)
     route_event = next(event for event in minimax_route_events if event.type == "model.route_bound")
     assert route_event.payload == {
         "provider": "minimax",
@@ -112,6 +122,54 @@ async def test_each_run_freezes_its_workspace_model_route(
         "configuration_version": 0,
     }
     assert "credential" not in route_event.model_dump_json()
+
+
+async def test_restart_does_not_leak_first_workspace_model_into_unconfigured_workspace(
+    tmp_path: Path,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path.endswith("/models")
+        return httpx.Response(200, json={"data": [{"id": "MiniMax-M3"}]})
+
+    settings = Settings(data_dir=tmp_path)
+    credentials = MappingCredentialStore({"minimax.api_key": "minimax-key"})
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    first = await RuntimeContainer.create(
+        settings,
+        credential_store=credentials,
+        model_http_client=client,
+        provider_continuation_key=bytes(range(32)),
+    )
+    second_root = tmp_path / "unconfigured-workspace"
+    second_root.mkdir()
+    second = await first.authorize_workspace(name="Unconfigured", path=second_root)
+    await first.configure_model(
+        workspace_id=first.default_workspace.id,
+        provider=ModelProvider.MINIMAX,
+        model="MiniMax-M3",
+        base_url="https://api.minimaxi.com/v1",
+    )
+
+    rebuilt = await RuntimeContainer.create(
+        settings,
+        credential_store=credentials,
+        model_http_client=client,
+        provider_continuation_key=bytes(range(32)),
+    )
+    run, _ = await rebuilt.submit_run(
+        user_intent="stay inside this Workspace model boundary",
+        client_request_id="unconfigured-workspace-route",
+        workspace_id=second.id,
+        execute=False,
+    )
+
+    route = await rebuilt.model_routes.get(run.id)
+    assert route is not None
+    assert route.workspace_id == second.id
+    assert route.configuration_workspace_id is None
+    assert route.provider == "echo"
+    assert route.model == "echo"
 
 
 async def test_run_without_a_frozen_model_route_fails_closed_to_review(

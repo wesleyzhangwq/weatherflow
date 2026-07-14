@@ -156,8 +156,8 @@ class RecordedFlagshipModel:
     def _release_validator(step: int):
         turns = (
             ToolCallTurn(
-                tool_id="developer.run_command",
-                arguments={"argv": ["python", "-c", "print('validation passed')"]},
+                tool_id="developer.read_file",
+                arguments={"path": "RELEASE_NOTES.md"},
             ),
             ToolCallTurn(
                 tool_id="developer.write_artifact",

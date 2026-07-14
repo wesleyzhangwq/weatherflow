@@ -1,10 +1,12 @@
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.eval.models import TrajectoryCheck, TrajectoryReport
 from weatherflow.runs import RunStatus
+from weatherflow.runtime import MessageRole
 
 
 class FlagshipTrajectoryEvaluator:
@@ -154,11 +156,28 @@ class FlagshipTrajectoryEvaluator:
             "action.needs_review",
             "action.execution_failed",
         }
+        worker_tool_errors: list[str] = []
+        for worker_run_id in worker_run_ids:
+            checkpoint = await container.checkpoints.get(worker_run_id)
+            if checkpoint is None:
+                worker_tool_errors.append("missing_checkpoint")
+                continue
+            for message in checkpoint.transcript:
+                if message.role is not MessageRole.TOOL:
+                    continue
+                try:
+                    observation = json.loads(message.content)
+                except json.JSONDecodeError:
+                    worker_tool_errors.append("invalid_observation")
+                    continue
+                if isinstance(observation, dict) and observation.get("error"):
+                    worker_tool_errors.append(str(observation["error"]))
         self._check(
             checks,
             "no_false_success_or_ambiguous_side_effect",
-            not failure_types.intersection(event_types),
+            not failure_types.intersection(event_types) and not worker_tool_errors,
             observed=sorted(failure_types.intersection(event_types)),
+            worker_tool_errors=worker_tool_errors,
         )
         return TrajectoryReport(
             run_id=run_id,

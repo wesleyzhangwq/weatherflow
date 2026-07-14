@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from weatherflow.connectors import (
     ConnectorAccount,
     ConnectorBinding,
@@ -153,3 +155,85 @@ async def test_due_sync_skips_disabled_binding(tmp_path: Path) -> None:
 
     assert synced == []
     assert gateway.calls == []
+
+
+async def test_gmail_snapshot_never_falls_back_to_full_message_body(tmp_path: Path) -> None:
+    workspace, _repository, gateway, service, _now = await setup(tmp_path, ConnectorKind.GMAIL)
+    private_body = "full private email body that must not be persisted"
+
+    async def body_only_response(
+        *, action: str, connected_account_id: str, arguments: dict[str, Any]
+    ) -> Any:
+        del action, connected_account_id
+        assert arguments["include_payload"] is False
+        return {
+            "messages": [
+                {
+                    "id": "mail-without-snippet",
+                    "subject": "Private message",
+                    "body": private_body,
+                    "date": "2026-07-13T04:00:00Z",
+                }
+            ]
+        }
+
+    gateway.execute_read_action = body_only_response  # type: ignore[method-assign]
+
+    snapshot = await service.sync(workspace.id, ConnectorKind.GMAIL)
+
+    assert snapshot.items[0].summary == ""
+    assert private_body not in snapshot.model_dump_json()
+
+
+async def test_due_sync_isolates_unexpected_gateway_or_normalization_failure(
+    tmp_path: Path,
+) -> None:
+    workspace, repository, gateway, service, now = await setup(tmp_path, ConnectorKind.GMAIL)
+    upstream_secret = "upstream response body must not be durable"
+
+    async def fail_once(
+        *, action: str, connected_account_id: str, arguments: dict[str, Any]
+    ) -> Any:
+        del action, connected_account_id, arguments
+        raise ValueError(upstream_secret)
+
+    gateway.execute_read_action = fail_once  # type: ignore[method-assign]
+
+    assert await service.sync_due() == []
+    failed_binding = await repository.get_binding(workspace.id, ConnectorKind.GMAIL)
+    assert failed_binding is not None
+    assert failed_binding.last_error_code == "invalid_response"
+    events = await service.ledger.list_stream("connector", ConnectorKind.GMAIL.value)
+    assert events[-1].payload["error_code"] == "invalid_response"
+    assert upstream_secret not in str(events[-1].payload)
+
+    gateway.execute_read_action = FakeReadGateway().execute_read_action  # type: ignore[method-assign]
+    await repository.save_binding(
+        failed_binding.model_copy(
+            update={
+                "next_sync_at": now - timedelta(seconds=1),
+                "version": failed_binding.version + 1,
+                "updated_at": now,
+            }
+        )
+    )
+
+    recovered = await service.sync_due()
+
+    assert len(recovered) == 1
+    assert recovered[0].connector is ConnectorKind.GMAIL
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("transport failed"), ValueError("bad data")])
+async def test_due_sync_never_propagates_one_binding_failure(
+    tmp_path: Path, failure: Exception
+) -> None:
+    _workspace, _repository, gateway, service, _now = await setup(tmp_path, ConnectorKind.GMAIL)
+
+    async def reject(*, action: str, connected_account_id: str, arguments: dict[str, Any]) -> Any:
+        del action, connected_account_id, arguments
+        raise failure
+
+    gateway.execute_read_action = reject  # type: ignore[method-assign]
+
+    assert await service.sync_due() == []

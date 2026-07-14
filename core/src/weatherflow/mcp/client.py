@@ -27,6 +27,8 @@ class MCPTransport(Protocol):
         self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]: ...
 
+    async def notify(self, method: str, params: dict[str, Any] | None = None) -> None: ...
+
     async def close(self) -> None: ...
 
 
@@ -47,6 +49,9 @@ class MCPClient:
                 "capabilities": {},
             },
         )
+        notify = getattr(self.transport, "notify", None)
+        if notify is not None:
+            await notify("notifications/initialized", {})
         info = initialized.get("serverInfo", {})
         self.server_version = str(info.get("version", "unknown"))[:100]
         listed = await self.transport.request("tools/list", {})

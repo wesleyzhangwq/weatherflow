@@ -53,6 +53,19 @@ class StdioMCPTransport:
                 raise MCPUnavailableError("MCP response result is invalid")
             return result
 
+    async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        async with self._lock:
+            process = await self._ensure_process()
+            if process.stdin is None:
+                raise MCPUnavailableError("stdio unavailable")
+            payload = {
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params or {},
+            }
+            process.stdin.write((json.dumps(payload, separators=(",", ":")) + "\n").encode())
+            await process.stdin.drain()
+
     async def close(self) -> None:
         if self._process is not None and self._process.returncode is None:
             self._process.terminate()

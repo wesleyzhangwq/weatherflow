@@ -49,7 +49,8 @@ def test_tauri_development_hooks_use_pnpm() -> None:
     supervisor = (ROOT / "desktop" / "src-tauri" / "src" / "supervisor.rs").read_text()
     assert "const DEVELOPMENT_PORT: u16 = 8765;" in supervisor
     bridge = (ROOT / "desktop" / "src" / "bridge.ts").read_text()
-    assert 'baseUrl: "http://127.0.0.1:8765"' in bridge
+    assert "VITE_WEATHERFLOW_BRIDGE_URL" in bridge
+    assert '?? "http://127.0.0.1:8765"' in bridge
     assert '"--desktop-bootstrap-stdin"' in supervisor
     assert '"--reload"' not in supervisor
     assert "DaemonChild::External" not in supervisor

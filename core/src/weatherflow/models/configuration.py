@@ -402,18 +402,9 @@ class ModelConfigurationService:
         *,
         run_id: str,
         workspace_id: str,
-        fallback_workspace_id: str | None = None,
     ) -> RunModelRoute:
         configuration = await self.repository.get(workspace_id)
         configuration_workspace_id = workspace_id if configuration is not None else None
-        if (
-            configuration is None
-            and fallback_workspace_id is not None
-            and fallback_workspace_id != workspace_id
-        ):
-            configuration = await self.repository.get(fallback_workspace_id)
-            if configuration is not None:
-                configuration_workspace_id = fallback_workspace_id
         route = (
             RunModelRoute(
                 run_id=run_id,

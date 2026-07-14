@@ -1,0 +1,4 @@
+interface:
+  display_name: "OPC Operating System"
+  short_description: "Run a one-person company operating cadence."
+  default_prompt: "Use this skill to build or run a one-person company operating system."

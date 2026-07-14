@@ -1,0 +1,4 @@
+interface:
+  display_name: "OPC Customer Pipeline"
+  short_description: "Build a lightweight customer discovery and sales pipeline."
+  default_prompt: "Use this skill to create and manage a customer pipeline for a solo founder."

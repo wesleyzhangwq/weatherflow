@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from weatherflow.runtime import (
     ToolExecutionResult,
 )
 from weatherflow.storage import Database
-from weatherflow.workspaces import WorkspaceRepository, WorkspaceVersionConflict
+from weatherflow.workspaces import Workspace, WorkspaceRepository, WorkspaceVersionConflict
 
 
 def package_install_tool_spec() -> ToolSpec:
@@ -116,6 +117,70 @@ class PackageInstaller:
             self.store.remove(installed)
             raise
         return installed
+
+    async def uninstall_skill(
+        self,
+        skill_name: str,
+        *,
+        workspace_id: str,
+        expected_workspace_version: int,
+        uninstalled_by: str,
+    ) -> Workspace:
+        """Deactivate a Skill atomically, then discard its now-unreferenced snapshot."""
+
+        if re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", skill_name) is None:
+            raise ValueError("skill name is invalid")
+        prefix = f"skill:{skill_name}@"
+        removed_references: tuple[str, ...]
+        async with self.database.transaction() as connection:
+            workspace = await self.workspaces.get_in(connection, workspace_id)
+            if workspace is None:
+                raise LookupError(workspace_id)
+            if workspace.version != expected_workspace_version:
+                raise WorkspaceVersionConflict(workspace_id)
+            removed_references = tuple(
+                reference for reference in workspace.extension_refs if reference.startswith(prefix)
+            )
+            if skill_name not in workspace.installed_skills or not removed_references:
+                raise LookupError(skill_name)
+            updated = workspace.model_copy(
+                update={
+                    "version": workspace.version + 1,
+                    "updated_at": datetime.now(UTC),
+                    "installed_skills": tuple(
+                        item for item in workspace.installed_skills if item != skill_name
+                    ),
+                    "extension_refs": tuple(
+                        reference
+                        for reference in workspace.extension_refs
+                        if reference not in removed_references
+                    ),
+                }
+            )
+            await self.workspaces.update_in(
+                connection,
+                updated,
+                expected_version=workspace.version,
+            )
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="extension.uninstalled",
+                    actor=Actor.USER if uninstalled_by == "user" else Actor.SYSTEM,
+                    stream_kind="workspace",
+                    stream_id=workspace.id,
+                    correlation_id=workspace.id,
+                    payload={
+                        "references": list(removed_references),
+                        "kind": "skill",
+                        "name": skill_name,
+                        "uninstalled_by": uninstalled_by,
+                    },
+                ),
+            )
+        for reference in removed_references:
+            self.store.remove_reference(reference)
+        return updated
 
 
 class PackageInstallExecutor:

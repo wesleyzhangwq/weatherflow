@@ -36,6 +36,9 @@ weatherflow = "weatherflow.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+weatherflow = ["resources/wesley-skills/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
@@ -46,6 +49,7 @@ filterwarnings = [
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = ["src/weatherflow/resources/wesley-skills"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

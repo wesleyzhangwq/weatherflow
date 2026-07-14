@@ -8,7 +8,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const STARTUP_SURFACE: &str = "companion";
 const SHORTCUT_SURFACE: &str = "capsule";
-const STARTUP_SIZE: (f64, f64) = (72.0, 72.0);
+const STARTUP_SIZE: (f64, f64) = (56.0, 56.0);
 const CAPSULE_SIZE: (f64, f64) = (460.0, 58.0);
 const COCKPIT_SIZE: (f64, f64) = (1080.0, 760.0);
 
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn companion_and_capsule_use_compact_sizes() {
-        assert_eq!(STARTUP_SIZE, (72.0, 72.0));
+        assert_eq!(STARTUP_SIZE, (56.0, 56.0));
         assert_eq!(CAPSULE_SIZE, (460.0, 58.0));
     }
 

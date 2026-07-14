@@ -351,4 +351,62 @@ MIGRATIONS = (
             ON run_model_routes(workspace_id, bound_at, run_id);
         """,
     ),
+    Migration(
+        version=16,
+        sql="""
+        CREATE TABLE automations (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            next_run_at TEXT,
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_automations_workspace_status
+            ON automations(workspace_id, status, updated_at, id);
+        CREATE INDEX idx_automations_due
+            ON automations(status, next_run_at, id);
+
+        CREATE TABLE automation_run_links (
+            id TEXT PRIMARY KEY,
+            automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            trigger TEXT NOT NULL,
+            scheduled_for TEXT NOT NULL,
+            client_request_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+            error_code TEXT,
+            config TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_automation_run_links_history
+            ON automation_run_links(automation_id, created_at DESC, id DESC);
+        CREATE INDEX idx_automation_run_links_pending
+            ON automation_run_links(status, created_at, id);
+        """,
+    ),
+    Migration(
+        version=17,
+        sql="""
+        CREATE TABLE mcp_connections (
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            preset_id TEXT NOT NULL,
+            preset_version TEXT NOT NULL,
+            installed INTEGER NOT NULL,
+            enabled INTEGER NOT NULL,
+            health TEXT NOT NULL,
+            tool_ids TEXT NOT NULL,
+            installed_at TEXT,
+            checked_at TEXT,
+            PRIMARY KEY(workspace_id, preset_id)
+        );
+        CREATE INDEX idx_mcp_connections_enabled
+            ON mcp_connections(enabled, workspace_id, preset_id);
+        """,
+    ),
 )

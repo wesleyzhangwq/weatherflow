@@ -1,0 +1,3 @@
+display_name: Zouzhe Memorial Report
+short_description: Render the wrap-up report of a completed multi-step task as an imperial memorial (奏折) to the user.
+default_prompt: Use this skill to render the final report of a completed long-running multi-step task as an imperial memorial following SKILL.md, with the 已成/未竟/请旨 sections and a 朱批 area for the user's reply.
