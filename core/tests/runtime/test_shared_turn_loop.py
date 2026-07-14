@@ -90,6 +90,12 @@ class InvalidSafeOutputExecutor:
         )
 
 
+class FailingSafeExecutor:
+    async def execute(self, tool, arguments, context):
+        del tool, arguments, context
+        raise RuntimeError("request failed with sk-must-not-enter-model-context")
+
+
 def object_schema(
     properties: dict[str, object],
     *,
@@ -437,6 +443,32 @@ async def test_safe_tool_timeout_is_observed_and_loop_can_continue(tmp_path: Pat
 
     assert outcome.status is LoopStatus.SUCCEEDED
     assert "tool_timeout" in model.requests[-1].messages[-1].content
+
+
+async def test_safe_tool_exception_is_redacted_before_checkpoint_and_model_context(
+    tmp_path: Path,
+) -> None:
+    read_tool = spec()
+    model = ScriptedModel(
+        [
+            ToolCallTurn(tool_id=read_tool.tool_id, arguments={}),
+            FinalTurn(content="Recovered after safe failure"),
+        ]
+    )
+    loop, executors, _, checkpoints, workspace, agent, run = await setup_loop(
+        tmp_path,
+        model,
+        tools=(read_tool,),
+    )
+    executors.register(read_tool.tool_id, FailingSafeExecutor())
+
+    outcome = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    checkpoint = await checkpoints.get(run.id)
+    assert outcome.status is LoopStatus.SUCCEEDED
+    assert "sk-must-not-enter-model-context" not in model.requests[-1].messages[-1].content
+    assert checkpoint is not None
+    assert "sk-must-not-enter-model-context" not in str(checkpoint.transcript)
 
 
 async def test_safe_tool_invalid_output_is_replaced_before_checkpoint_and_model_context(

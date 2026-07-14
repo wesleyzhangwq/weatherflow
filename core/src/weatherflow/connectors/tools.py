@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 from weatherflow.capabilities import ToolEffect, ToolSpec
 from weatherflow.connectors.models import ConnectionPhase, ConnectorKind
 from weatherflow.connectors.repository import ConnectorRepository
-from weatherflow.runtime import ToolExecutionContext, ToolExecutionResult
+from weatherflow.runtime import PublicToolError, ToolExecutionContext, ToolExecutionResult
 
 MAX_COMPOSIO_RESULT_CHARS = 48_000
 COMPOSIO_TOOLKIT_VERSION = "20260703_00"
@@ -675,30 +675,30 @@ class ComposioToolExecutor:
         if definition is None:
             raise LookupError(tool.tool_id)
         if tool.source_version != COMPOSIO_TOOLKIT_VERSION:
-            raise PermissionError("unreviewed Composio tool version")
+            raise PublicToolError("connector_tool_version_unreviewed")
         route = await self.repository.get_run_route(context.run_id, definition.connector)
         if route is None or route.workspace_id != context.workspace_id:
-            raise PermissionError("connector identity is not frozen for this Run")
+            raise PublicToolError("connector_identity_not_frozen")
         binding = await self.repository.get_binding(context.workspace_id, definition.connector)
         if binding is None or not binding.enabled:
-            raise PermissionError(f"{definition.connector.value} is not connected")
+            raise PublicToolError("connector_not_connected")
         account = await self.repository.get_account_by_id(context.workspace_id, binding.account_id)
         if account is None or account.phase is not ConnectionPhase.ACTIVE:
-            raise PermissionError(f"{definition.connector.value} account is not active")
+            raise PublicToolError("connector_account_inactive")
         if account.connector is not definition.connector:
-            raise PermissionError("connected account does not match tool provider")
+            raise PublicToolError("connector_account_tool_mismatch")
         if (
             account.id != route.account_id
             or account.external_account_id != route.external_account_id
             or binding.account_id != route.account_id
         ):
-            raise PermissionError("connector account changed after Run creation")
+            raise PublicToolError("connector_account_changed")
         if binding.conversation_grant_revision != route.conversation_grant_revision:
-            raise PermissionError("connector conversation grant changed after Run creation")
+            raise PublicToolError("connector_conversation_grant_changed")
         if tool.tool_id not in binding.conversation_tool_ids:
-            raise PermissionError("tool is not granted for conversation use")
+            raise PublicToolError("connector_tool_not_granted")
         if definition.required_scope not in binding.granted_scopes:
-            raise PermissionError("connector scope is not granted")
+            raise PublicToolError("connector_scope_not_granted")
         remote_arguments = {**definition.defaults, **arguments}
         if definition.action == "GMAIL_FETCH_EMAILS":
             remote_arguments["include_payload"] = False
@@ -802,14 +802,14 @@ def _project_value(value: Any, schema: Any, *, depth: int = 0) -> Any:
 
 def _safe_scalar(value: Any) -> Any:
     if isinstance(value, str):
-        return _redact_text(value[:20_000])
+        return sanitize_untrusted_text(value[:20_000])
     if value is None or isinstance(value, bool | int | float):
         return value
     return None
 
 
-def _redact_text(value: str) -> str:
-    sanitized = _URL_RE.sub(lambda match: _strip_url_secrets(match.group(0)), value)
+def sanitize_untrusted_text(value: str) -> str:
+    sanitized = _URL_RE.sub(lambda match: sanitize_untrusted_url(match.group(0)), value)
     sanitized = _SECRET_ASSIGNMENT_RE.sub(
         lambda match: f"{match.group(1)}{match.group(2)}[redacted]",
         sanitized,
@@ -818,7 +818,7 @@ def _redact_text(value: str) -> str:
     return _KNOWN_TOKEN_RE.sub("[redacted]", sanitized)
 
 
-def _strip_url_secrets(value: str) -> str:
+def sanitize_untrusted_url(value: str) -> str:
     trailing = ""
     while value and value[-1] in ".,;:!?)]}":
         trailing = value[-1] + trailing

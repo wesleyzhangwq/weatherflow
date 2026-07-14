@@ -1,12 +1,18 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from weatherflow.automations import ScheduleSpec
 from weatherflow.capabilities import ToolEffect
 from weatherflow.connectors import ConversationAccess
-from weatherflow.models import ModelConfiguration, ModelProvider, ModelStatus, ProviderPreset
+from weatherflow.models import (
+    ModelConfiguration,
+    ModelProvider,
+    ModelStatus,
+    ProviderPreset,
+    normalize_model_base_url,
+)
 from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import Run
 from weatherflow.trust import Approval
@@ -22,13 +28,13 @@ class HealthResponse(BaseModel):
 
 
 class RunCreateRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
-    user_intent: str
-    client_request_id: str | None = None
-    workspace_id: str
-    session_id: str | None = None
-    context_run_id: str | None = None
+    user_intent: str = Field(min_length=1, max_length=20_000)
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=200)
+    workspace_id: str = Field(min_length=1, max_length=200)
+    session_id: str | None = Field(default=None, min_length=1, max_length=200)
+    context_run_id: str | None = Field(default=None, min_length=1, max_length=200)
     execute: bool = False
 
 
@@ -112,11 +118,16 @@ class SystemStatus(BaseModel):
 
 
 class ModelConfigureRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
     provider: ModelProvider
-    model: str
-    base_url: str
+    model: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(min_length=1, max_length=500)
+
+    @field_validator("base_url")
+    @classmethod
+    def valid_base_url(cls, value: str) -> str:
+        return normalize_model_base_url(value)
 
 
 class ModelConfigurationResponse(BaseModel):

@@ -7,7 +7,7 @@ from weatherflow.capabilities.models import ToolSpec
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime.models import ToolExecutionContext, ToolExecutionResult
-from weatherflow.runtime.protocols import ToolExecutor
+from weatherflow.runtime.protocols import PublicToolError, ToolExecutor
 from weatherflow.runtime.validation import ToolOutputValidation, validate_tool_output
 from weatherflow.storage import Database
 from weatherflow.trust import (
@@ -123,20 +123,34 @@ class ActionExecutionCoordinator:
                 executing,
                 f"tool {tool.tool_id} timed out after {tool.timeout_seconds}s",
             )
-        except DefinitiveToolError as error:
+        except PublicToolError as error:
+            safe_error = DefinitiveToolError(str(error))
             failed = await self._finish(
                 executing,
                 ActionStatus.FAILED,
                 event_type="action.execution_failed",
-                error=error,
+                error=safe_error,
             )
             return ActionExecutionOutcome(
                 status=ActionExecutionStatus.FAILED,
                 action=failed,
-                error=str(error),
+                error=str(safe_error),
             )
-        except Exception as error:
-            return await self._needs_review(executing, str(error))
+        except DefinitiveToolError:
+            safe_error = DefinitiveToolError("tool execution failed definitively")
+            failed = await self._finish(
+                executing,
+                ActionStatus.FAILED,
+                event_type="action.execution_failed",
+                error=safe_error,
+            )
+            return ActionExecutionOutcome(
+                status=ActionExecutionStatus.FAILED,
+                action=failed,
+                error=str(safe_error),
+            )
+        except Exception:
+            return await self._needs_review(executing, "tool execution became uncertain")
 
         output_validation = validate_tool_output(tool.output_schema, result.output)
         if not output_validation.valid:

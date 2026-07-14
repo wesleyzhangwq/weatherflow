@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import (
     FastAPI,
     HTTPException,
+    Query,
     Request,
     Response,
     WebSocket,
@@ -53,7 +54,7 @@ from weatherflow.automations import (
     AutomationStatus,
     AutomationVersionConflict,
 )
-from weatherflow.bootstrap import RuntimeContainer
+from weatherflow.bootstrap import ContextRunNotFoundError, RuntimeContainer, WorkspaceNotFoundError
 from weatherflow.config import Settings
 from weatherflow.connectors import (
     ComposioErrorCode,
@@ -72,7 +73,16 @@ from weatherflow.mcp import (
     UnknownMCPPresetError,
 )
 from weatherflow.models import (
+    AnthropicAuthenticationError,
+    AnthropicError,
+    AnthropicRetryableError,
+    MiniMaxAuthenticationError,
+    MiniMaxError,
+    MiniMaxRetryableError,
     ModelProvider,
+    OpenAIAuthenticationError,
+    OpenAIError,
+    OpenAIRetryableError,
     ProviderModelCatalog,
     provider_presets,
 )
@@ -152,6 +162,37 @@ def create_app(
                     "retryable": error.retryable,
                 }
             },
+        )
+
+    @app.exception_handler(MiniMaxError)
+    @app.exception_handler(OpenAIError)
+    @app.exception_handler(AnthropicError)
+    async def model_provider_failure(_request: Request, error: Exception) -> JSONResponse:
+        if isinstance(
+            error,
+            (
+                MiniMaxAuthenticationError,
+                OpenAIAuthenticationError,
+                AnthropicAuthenticationError,
+            ),
+        ):
+            status_code = 401
+            code = "model_provider_authentication_failed"
+            retryable = False
+        elif isinstance(
+            error,
+            (MiniMaxRetryableError, OpenAIRetryableError, AnthropicRetryableError),
+        ):
+            status_code = 503
+            code = "model_provider_unavailable"
+            retryable = True
+        else:
+            status_code = 502
+            code = "model_provider_invalid_response"
+            retryable = False
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": {"code": code, "retryable": retryable}},
         )
 
     @app.middleware("http")
@@ -234,7 +275,12 @@ def create_app(
                     "client_request_id": str(error),
                 },
             ) from error
-        except LookupError as error:
+        except ContextRunNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "context_run_not_found", "context_run_id": str(error)},
+            ) from error
+        except WorkspaceNotFoundError as error:
             raise HTTPException(
                 status_code=404,
                 detail={"code": "workspace_not_found", "workspace_id": str(error)},
@@ -262,7 +308,7 @@ def create_app(
     async def list_runs(
         workspace_id: str | None = None,
         session_id: str | None = None,
-        limit: int = 50,
+        limit: int = Query(default=50, ge=1, le=1000),
     ) -> list[Run]:
         service = await runtime()
         if session_id is not None:
@@ -287,7 +333,7 @@ def create_app(
     @app.get("/v1/sessions", response_model=list[ConversationSession])
     async def list_sessions(
         workspace_id: str,
-        limit: int = 200,
+        limit: int = Query(default=200, ge=1, le=1000),
     ) -> list[ConversationSession]:
         service = await runtime()
         await selected_workspace(service, workspace_id)
@@ -489,7 +535,7 @@ def create_app(
     )
     async def automation_history(
         automation_id: str,
-        limit: int = 100,
+        limit: int = Query(default=100, ge=1, le=1000),
     ) -> list[AutomationRunLink]:
         service = await runtime()
         if await service.automations.get(automation_id) is None:
@@ -509,6 +555,11 @@ def create_app(
                 automation_id,
                 expected_version=request.expected_version,
             )
+        except AutomationNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "automation_not_found", "automation_id": automation_id},
+            ) from error
         except AutomationVersionConflict as error:
             raise HTTPException(
                 status_code=409,
@@ -938,12 +989,18 @@ def create_app(
     ) -> ModelConfigurationResponse:
         service = await runtime()
         workspace = await selected_workspace(service, workspace_id)
-        configuration = await service.configure_model(
-            workspace_id=workspace.id,
-            provider=request.provider,
-            model=request.model,
-            base_url=request.base_url,
-        )
+        try:
+            configuration = await service.configure_model(
+                workspace_id=workspace.id,
+                provider=request.provider,
+                model=request.model,
+                base_url=request.base_url,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "model_configuration_invalid"},
+            ) from error
         return ModelConfigurationResponse(
             configuration=configuration,
             status=await service.model_configurations.status(workspace.id),

@@ -38,6 +38,7 @@ from weatherflow.runtime.protocols import (
     ModelConfigurationRequiredError,
     ModelResolver,
     ModelRouteUnavailableError,
+    PublicToolError,
 )
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.runtime.tools import ToolExecutorNotFound, ToolExecutorRegistry
@@ -590,8 +591,13 @@ class SharedTurnLoop:
                 "error": "tool_timeout",
                 "message": f"{tool.tool_id} timed out after {tool.timeout_seconds}s",
             }
-        except Exception as error:
-            output = {"error": type(error).__name__, "message": str(error)}
+        except PublicToolError as error:
+            output = {"error": error.code, "message": str(error)}
+        except Exception:
+            output = {
+                "error": "tool_execution_failed",
+                "message": "tool execution failed",
+            }
         return await self._record_observation(
             checkpoint,
             turn,

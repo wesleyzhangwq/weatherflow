@@ -15,6 +15,7 @@ from weatherflow.connectors.models import (
     SourceItem,
 )
 from weatherflow.connectors.repository import ConnectorRepository
+from weatherflow.connectors.tools import sanitize_untrusted_text, sanitize_untrusted_url
 from weatherflow.events import Actor, Event, EventLedger, Sensitivity
 
 
@@ -234,9 +235,13 @@ def _normalize_item(
     return SourceItem(
         source_id=source_id,
         occurred_at=occurred,
-        title=title[:500],
-        summary=summary[:2_000],
-        url=_find_string(raw, ("html_url", "htmlLink", "url")),
+        title=sanitize_untrusted_text(title[:500]),
+        summary=sanitize_untrusted_text(summary[:2_000]),
+        url=(
+            sanitize_untrusted_url(url)
+            if (url := _find_string(raw, ("html_url", "htmlLink", "url"))) is not None
+            else None
+        ),
     )
 
 

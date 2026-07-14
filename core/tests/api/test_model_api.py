@@ -7,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from weatherflow.api.app import create_app
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
-from weatherflow.extensions import CredentialRef
+from weatherflow.extensions import CredentialRef, MappingCredentialStore
 from weatherflow.models import (
     ModelConfiguration,
     ModelProvider,
@@ -156,3 +156,58 @@ async def test_system_status_never_inherits_another_workspace_model(
     assert response.status_code == 200
     assert response.json()["model"]["configured"] is False
     assert requested == [workspace.id]
+
+
+@pytest.mark.parametrize(
+    ("model", "base_url"),
+    [
+        ("   ", "https://api.example.com/v1"),
+        ("model-1", "http://api.example.com/v1"),
+        ("model-1", "https://user:password@api.example.com/v1"),
+        ("model-1", "https://api.example.com/v1?api_key=secret"),
+        ("not-a-minimax-model", "https://api.example.com/v1"),
+    ],
+)
+async def test_model_configuration_api_rejects_invalid_input_without_internal_error(
+    tmp_path: Path,
+    model: str,
+    base_url: str,
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    transport = ASGITransport(app=create_app(container=container))
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/models/configure",
+            json={"provider": "minimax", "model": model, "base_url": base_url},
+        )
+
+    assert response.status_code == 422
+
+
+async def test_model_configuration_api_maps_missing_credential_without_internal_error(
+    tmp_path: Path,
+) -> None:
+    container = await RuntimeContainer.create(
+        Settings(data_dir=tmp_path),
+        credential_store=MappingCredentialStore({}),
+    )
+    transport = ASGITransport(app=create_app(container=container))
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/models/configure",
+            json={
+                "provider": "minimax",
+                "model": "MiniMax-M3",
+                "base_url": "https://api.minimax.io/v1",
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "model_provider_authentication_failed",
+            "retryable": False,
+        }
+    }

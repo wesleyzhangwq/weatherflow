@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from weatherflow.automations import (
     AUTOMATION_SCHEMA_SQL,
+    AutomationNotFoundError,
     AutomationRepository,
     AutomationScheduler,
     AutomationService,
@@ -113,6 +114,20 @@ async def test_service_manages_lifecycle_and_manual_run(tmp_path: Path) -> None:
     assert latest is not None
     await service.delete(edited.id, expected_version=latest.version)
     assert await service.get(edited.id) is None
+
+
+async def test_delete_distinguishes_missing_automation_from_version_conflict(
+    tmp_path: Path,
+) -> None:
+    clock = MutableClock(datetime(2026, 7, 14, 7, 0, tzinfo=UTC))
+    _, _, service, _ = await setup(tmp_path, clock)
+
+    try:
+        await service.delete("missing", expected_version=0)
+    except AutomationNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing automation must report not found")
 
 
 async def test_service_revalidates_edits_instead_of_bypassing_domain_constraints(

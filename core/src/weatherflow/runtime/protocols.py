@@ -22,6 +22,20 @@ class ModelConfigurationRequiredError(ModelRouteUnavailableError):
     pass
 
 
+class PublicToolError(RuntimeError):
+    """A reviewed value-free tool diagnostic that may enter model context."""
+
+    def __init__(self, code: str) -> None:
+        if (
+            not 2 <= len(code) <= 64
+            or not code[0].isalpha()
+            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in code)
+        ):
+            raise ValueError("public tool error code must be bounded lowercase snake case")
+        self.code = code
+        super().__init__(code.replace("_", " "))
+
+
 class ModelResolver(Protocol):
     async def resolve(self, run_id: str) -> ModelAdapter | None: ...
 

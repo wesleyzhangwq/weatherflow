@@ -41,3 +41,14 @@ async def test_close_cancels_and_awaits_every_tracked_run(tmp_path: Path) -> Non
     await container.await_background()
     with pytest.raises(RuntimeError, match="closed"):
         container.schedule_run(run.id)
+
+
+async def test_close_releases_runtime_owned_http_clients(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    model_client = container.model_configurations.client
+    connector_client = container.connector_gateway.client
+
+    await container.close()
+
+    assert model_client is not None and model_client.is_closed
+    assert connector_client.is_closed

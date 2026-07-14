@@ -119,6 +119,19 @@ async def test_security_scan_detects_raw_sensor_content_and_secret_values(
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
     clean = await SecurityScanner(container.database).scan()
     assert clean.findings == ()
+    run, _ = await container.submit_run(
+        user_intent="scan durable run fields",
+        client_request_id="security-scan-run",
+        execute=False,
+    )
+    provider_token = "ghp_" + "sensitivevalue12345"
+    artifact = await container.artifact_store.put_bytes(
+        run_id=run.id,
+        workspace=container.default_workspace,
+        name="unsafe-provider-output.txt",
+        media_type="text/plain",
+        data=f"provider output contained {provider_token}".encode(),
+    )
     async with container.database.transaction() as connection:
         await connection.execute(
             "UPDATE checkpoints SET state = ? WHERE run_id = ?",
@@ -139,6 +152,21 @@ async def test_security_scan_detects_raw_sensor_content_and_secret_values(
                 container.default_workspace.id,
             ),
         )
+        await connection.execute(
+            "UPDATE runs SET result_summary = ? WHERE id = ?",
+            (f"provider returned {provider_token}", run.id),
+        )
+        await connection.execute(
+            """
+            INSERT INTO connector_snapshots(workspace_id, connector, fetched_at, snapshot)
+            VALUES (?, 'gmail', ?, ?)
+            """,
+            (
+                container.default_workspace.id,
+                datetime.now(UTC).isoformat(),
+                json.dumps({"summary": f"api_key={provider_token}"}),
+            ),
+        )
 
     scan = await SecurityScanner(container.database).scan()
 
@@ -146,4 +174,14 @@ async def test_security_scan_detects_raw_sensor_content_and_secret_values(
         "forbidden_sensor_field",
         "secret_value",
     }
+    assert {
+        (finding.table, finding.row_id, finding.field)
+        for finding in scan.findings
+        if finding.kind == "secret_value"
+    } >= {
+        ("runs", run.id, "result_summary"),
+        ("connector_snapshots", container.default_workspace.id, "snapshot"),
+        ("artifacts", artifact.id, "content"),
+    }
     assert all("raw content" not in finding.model_dump_json() for finding in scan.findings)
+    assert all(provider_token not in finding.model_dump_json() for finding in scan.findings)

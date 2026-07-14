@@ -18,6 +18,7 @@ from weatherflow.models.configuration import (
     ProviderPreset,
     RunModelRoute,
     RunModelRouteRepository,
+    normalize_model_base_url,
     provider_presets,
 )
 from weatherflow.models.minimax import (
@@ -63,5 +64,6 @@ __all__ = [
     "ProviderPreset",
     "RunModelRoute",
     "RunModelRouteRepository",
+    "normalize_model_base_url",
     "provider_presets",
 ]

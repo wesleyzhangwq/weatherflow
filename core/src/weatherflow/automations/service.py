@@ -116,6 +116,9 @@ class AutomationService:
         )
 
     async def delete(self, automation_id: str, *, expected_version: int) -> None:
+        current = await self._required(automation_id)
+        if current.version != expected_version:
+            raise AutomationVersionConflict(automation_id)
         await self.repository.delete(automation_id, expected_version=expected_version)
 
     async def history(

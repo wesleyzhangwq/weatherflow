@@ -73,3 +73,41 @@ async def test_app_lifespan_awaits_connector_sync_shutdown(tmp_path: Path, monke
 
     assert exited.is_set()
     assert container.connector_sync_task is None
+
+
+async def test_connector_background_loop_survives_one_unexpected_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = MappingCredentialStore(
+        {
+            "composio.project_api_key": "local-secret",
+            "provider_continuations.encryption_key_v1": "a" * 64,
+        }
+    )
+    container = await RuntimeContainer.create(
+        Settings(data_dir=tmp_path),
+        credential_store=store,  # type: ignore[arg-type]
+        connector_gateway=UnusedGateway(),  # type: ignore[arg-type]
+    )
+    recovered = asyncio.Event()
+    calls = 0
+
+    async def sync_due():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient repository failure")
+        recovered.set()
+        await asyncio.Event().wait()
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(container.connector_sync, "sync_due", sync_due)
+    monkeypatch.setattr("weatherflow.bootstrap.asyncio.sleep", no_delay)
+
+    container.start_connector_background()
+    await asyncio.wait_for(recovered.wait(), timeout=1)
+    await container.stop_background()
+
+    assert calls == 2

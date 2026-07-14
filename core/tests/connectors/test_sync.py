@@ -211,6 +211,38 @@ async def test_gmail_snapshot_never_falls_back_to_full_message_body(tmp_path: Pa
     assert private_body not in snapshot.model_dump_json()
 
 
+async def test_connector_snapshot_redacts_tokens_and_url_credentials(tmp_path: Path) -> None:
+    workspace, _repository, gateway, service, _now = await setup(tmp_path, ConnectorKind.GMAIL)
+    token = "ghp_" + "sensitivevalue12345"
+    url_secret = "calendar-secret-value"
+
+    async def sensitive_response(
+        *, action: str, connected_account_id: str, arguments: dict[str, Any]
+    ) -> Any:
+        del action, connected_account_id, arguments
+        return {
+            "messages": [
+                {
+                    "id": "mail-with-secret",
+                    "subject": f"Deploy with {token}",
+                    "snippet": f"Authorization: Bearer {token}",
+                    "url": f"https://mail.example/messages/1?access_token={url_secret}",
+                    "date": "2026-07-13T04:00:00Z",
+                }
+            ]
+        }
+
+    gateway.execute_read_action = sensitive_response  # type: ignore[method-assign]
+
+    snapshot = await service.sync(workspace.id, ConnectorKind.GMAIL)
+    serialized = snapshot.model_dump_json()
+
+    assert token not in serialized
+    assert url_secret not in serialized
+    assert "[redacted]" in serialized
+    assert snapshot.items[0].url == "https://mail.example/messages/1"
+
+
 async def test_due_sync_isolates_unexpected_gateway_or_normalization_failure(
     tmp_path: Path,
 ) -> None:

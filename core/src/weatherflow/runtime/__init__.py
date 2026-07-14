@@ -32,6 +32,7 @@ from weatherflow.runtime.protocols import (
     ModelResolver,
     ModelRouteBinder,
     ModelRouteUnavailableError,
+    PublicToolError,
     ToolExecutor,
 )
 from weatherflow.runtime.repository import (
@@ -79,6 +80,7 @@ __all__ = [
     "ModelResolver",
     "ModelRouteBinder",
     "ModelRouteUnavailableError",
+    "PublicToolError",
     "ModelRequest",
     "ModelTurn",
     "ModelUsage",

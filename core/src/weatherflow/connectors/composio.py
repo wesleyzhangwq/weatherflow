@@ -93,8 +93,13 @@ class ComposioGateway:
     ) -> None:
         self.broker = broker
         self.credential_ref = credential_ref
+        self._owns_client = client is None
         self.client = client or httpx.AsyncClient(timeout=30)
         self.base_url = base_url.rstrip("/")
+
+    async def close(self) -> None:
+        if self._owns_client and not self.client.is_closed:
+            await self.client.aclose()
 
     async def validate(self) -> None:
         await self._with_key(

@@ -386,3 +386,11 @@ compatibility.
   provider-reported usage remain the only data admitted to SharedTurnLoop state.
   Workspace selection still freezes one explicit provider/model route per Run;
   no automatic model routing was introduced.
+- 2026-07-14: Hardened daemon and provider boundaries after the v3 audit. The
+  Python listener now rejects non-loopback bind addresses, explicit bridge
+  tokens cannot be empty, and model base URLs cannot carry userinfo, query, or
+  fragment credentials. Provider, connector, and safe-tool failures expose only
+  typed value-free diagnostics; background connector snapshots apply the same
+  credential-text and URL sanitization as reviewed tool output. The local
+  security scan now covers Run, Action, Approval, Automation, connector, model,
+  and streamed artifact content in addition to events, checkpoints, and memory.

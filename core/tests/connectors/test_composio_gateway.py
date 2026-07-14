@@ -108,6 +108,28 @@ async def test_gateway_uses_connect_link_v3_and_versioned_v31_execution() -> Non
     assert all("initiate" not in path and "/v2" not in path for path in paths)
 
 
+async def test_gateway_closes_only_the_http_client_it_owns() -> None:
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+    )
+    owned = gateway.client
+
+    await gateway.close()
+
+    assert owned.is_closed
+
+    external = httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: None))
+    injected = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=external,
+    )
+    await injected.close()
+    assert external.is_closed is False
+    await external.aclose()
+
+
 async def test_gateway_classifies_and_redacts_upstream_auth_errors() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": {"message": SECRET}})

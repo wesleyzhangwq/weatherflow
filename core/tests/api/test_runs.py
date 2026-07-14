@@ -108,6 +108,67 @@ async def test_run_list_is_scoped_to_workspace(tmp_path: Path) -> None:
     assert [run["client_request_id"] for run in response.json()] == ["list-1"]
 
 
+async def test_api_rejects_invalid_pagination_before_repository_execution(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    transport = ASGITransport(app=create_app(container=container))
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        run_limit = await client.get("/v1/runs", params={"limit": 0})
+        session_limit = await client.get(
+            "/v1/sessions",
+            params={"workspace_id": container.default_workspace.id, "limit": 1001},
+        )
+        history_limit = await client.get(
+            "/v1/automations/missing/history",
+            params={"limit": 0},
+        )
+
+    assert run_limit.status_code == 422
+    assert session_limit.status_code == 422
+    assert history_limit.status_code == 422
+
+
+async def test_run_api_rejects_blank_or_oversized_intent(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    transport = ASGITransport(app=create_app(container=container))
+    base = {"workspace_id": container.default_workspace.id}
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        blank = await client.post("/v1/runs", json={**base, "user_intent": "   "})
+        oversized = await client.post(
+            "/v1/runs",
+            json={**base, "user_intent": "x" * 20_001},
+        )
+
+    assert blank.status_code == 422
+    assert oversized.status_code == 422
+
+
+async def test_run_api_reports_missing_context_run_without_mislabeling_workspace(
+    tmp_path: Path,
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    transport = ASGITransport(app=create_app(container=container))
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/runs",
+            json={
+                "user_intent": "Follow up safely",
+                "workspace_id": container.default_workspace.id,
+                "context_run_id": "missing-context",
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": {
+            "code": "context_run_not_found",
+            "context_run_id": "missing-context",
+        }
+    }
+
+
 async def test_follow_up_run_keeps_durable_context_link(tmp_path: Path) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path), model=EchoModelAdapter())
     source, _ = await container.submit_run(

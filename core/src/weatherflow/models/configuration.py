@@ -178,8 +178,18 @@ def provider_presets() -> tuple[ProviderPreset, ...]:
     )
 
 
+def normalize_model_base_url(value: str) -> str:
+    normalized = value.rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.query or parsed.fragment:
+        raise ValueError("model base URL must be an HTTPS origin/path without query")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("model base URL cannot contain credentials")
+    return normalized
+
+
 class ModelConfiguration(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
     workspace_id: str
     provider: ModelProvider
@@ -192,11 +202,7 @@ class ModelConfiguration(BaseModel):
     @field_validator("base_url")
     @classmethod
     def valid_https_base_url(cls, value: str) -> str:
-        normalized = value.rstrip("/")
-        parsed = urlparse(normalized)
-        if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
-            raise ValueError("model base URL must be an HTTPS origin/path without query")
-        return normalized
+        return normalize_model_base_url(value)
 
 
 class ModelStatus(BaseModel):
@@ -371,8 +377,13 @@ class ModelConfigurationService:
         self.repository = repository
         self.ledger = ledger
         self.credential_store = credential_store
-        self.client = client
+        self._owns_client = client is None
+        self.client = client or httpx.AsyncClient()
         self.routes = routes or RunModelRouteRepository(database)
+
+    async def close(self) -> None:
+        if self._owns_client and not self.client.is_closed:
+            await self.client.aclose()
 
     async def configure_minimax(
         self,
@@ -652,9 +663,6 @@ def _route_from_row(row: Any) -> RunModelRoute:
     )
 
 
-def _model_incompatibility(provider: ModelProvider, model: str) -> str | None:
-    return None
-
-
 def _provider_model(provider: ModelProvider, model: str) -> ProviderModel:
+    del provider
     return ProviderModel(id=model)

@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import getpass
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -104,15 +105,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         settings = Settings(host=args.host, port=args.port, data_dir=args.data_dir)
-        uvicorn.run(
-            "weatherflow.api.app:app",
-            host=settings.host,
-            port=settings.port,
-            reload=args.reload,
-            reload_dirs=[str(Path(__file__).resolve().parent)] if args.reload else None,
-            timeout_graceful_shutdown=2,
-            log_level=settings.log_level.lower(),
-        )
+        if args.reload:
+            previous_data_dir = os.environ.get("WF_DATA_DIR")
+            os.environ["WF_DATA_DIR"] = str(settings.data_dir)
+            try:
+                uvicorn.run(
+                    "weatherflow.api.app:create_app",
+                    factory=True,
+                    host=settings.host,
+                    port=settings.port,
+                    reload=True,
+                    reload_dirs=[str(Path(__file__).resolve().parent)],
+                    timeout_graceful_shutdown=2,
+                    log_level=settings.log_level.lower(),
+                )
+            finally:
+                if previous_data_dir is None:
+                    os.environ.pop("WF_DATA_DIR", None)
+                else:
+                    os.environ["WF_DATA_DIR"] = previous_data_dir
+        else:
+            uvicorn.run(
+                create_app(settings),
+                host=settings.host,
+                port=settings.port,
+                reload=False,
+                reload_dirs=None,
+                timeout_graceful_shutdown=2,
+                log_level=settings.log_level.lower(),
+            )
         return 0
     return asyncio.run(_run_command(args))
 
@@ -131,6 +152,7 @@ async def _run_command(args: argparse.Namespace) -> int:
         previous = store.resolve(reference)
         store.set(reference, api_key)
         del api_key
+        container = None
         try:
             container = await RuntimeContainer.create(
                 Settings(data_dir=args.data_dir), credential_store=store
@@ -145,49 +167,55 @@ async def _run_command(args: argparse.Namespace) -> int:
             else:
                 store.set(reference, previous)
             raise
+        finally:
+            if container is not None:
+                await container.close()
         print(configuration.model_dump_json(exclude={"credential_ref"}))
         return 0
     container = await RuntimeContainer.create(Settings(data_dir=args.data_dir))
-    if args.command == "model-status":
-        status = await container.model_configurations.status(container.default_workspace.id)
-        print(status.model_dump_json())
-        return 0
-    if args.command == "mcp-server":
-        from weatherflow.mcp.server import serve_stdio
+    try:
+        if args.command == "model-status":
+            status = await container.model_configurations.status(container.default_workspace.id)
+            print(status.model_dump_json())
+            return 0
+        if args.command == "mcp-server":
+            from weatherflow.mcp.server import serve_stdio
 
-        await serve_stdio(container)
-        return 0
-    if args.command == "run":
-        run, _ = await container.submit_run(
-            user_intent=args.intent,
-            client_request_id=args.client_request_id,
-            workspace_id=args.workspace_id,
-            execute=not args.no_execute,
-        )
-        stored = await container.runs.get(run.id)
-        if stored is None:
-            return 1
-        print(stored.model_dump_json())
-        return 0
-    if args.command == "status":
-        run = await container.runs.get(args.run_id)
-        if run is None:
-            return 1
-        print(run.model_dump_json())
-        return 0
-    if args.command == "timeline":
-        events = await container.ledger.list_correlation(args.run_id, limit=1000)
-        print(json.dumps([event.model_dump(mode="json") for event in events]))
-        return 0
-    if args.command in {"approve", "deny"}:
-        bundle = await container.approval_coordinator.decide(
-            approval_id=args.approval_id,
-            expected_version=args.expected_version,
-            approved=args.command == "approve",
-            decided_by="user",
-            rationale=args.rationale,
-        )
-        await container.resume_run(bundle.run.id)
-        print(bundle.model_dump_json())
-        return 0
-    return 1
+            await serve_stdio(container)
+            return 0
+        if args.command == "run":
+            run, _ = await container.submit_run(
+                user_intent=args.intent,
+                client_request_id=args.client_request_id,
+                workspace_id=args.workspace_id,
+                execute=not args.no_execute,
+            )
+            stored = await container.runs.get(run.id)
+            if stored is None:
+                return 1
+            print(stored.model_dump_json())
+            return 0
+        if args.command == "status":
+            run = await container.runs.get(args.run_id)
+            if run is None:
+                return 1
+            print(run.model_dump_json())
+            return 0
+        if args.command == "timeline":
+            events = await container.ledger.list_correlation(args.run_id, limit=1000)
+            print(json.dumps([event.model_dump(mode="json") for event in events]))
+            return 0
+        if args.command in {"approve", "deny"}:
+            bundle = await container.approval_coordinator.decide(
+                approval_id=args.approval_id,
+                expected_version=args.expected_version,
+                approved=args.command == "approve",
+                decided_by="user",
+                rationale=args.rationale,
+            )
+            await container.resume_run(bundle.run.id)
+            print(bundle.model_dump_json())
+            return 0
+        return 1
+    finally:
+        await container.close()

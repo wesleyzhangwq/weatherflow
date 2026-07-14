@@ -106,6 +106,47 @@ def test_keyring_store_resolves_by_reference_without_secret_repr() -> None:
     assert backend.values == {("ai.weatherflow.minimax", "api_key"): SECRET}
 
 
+def test_model_base_url_rejects_embedded_credentials() -> None:
+    with pytest.raises(ValueError, match="credentials"):
+        ModelConfiguration(
+            workspace_id="workspace-1",
+            provider=ModelProvider.MINIMAX,
+            model="MiniMax-M3",
+            base_url="https://operator:embedded-secret@api.minimax.test/v1",
+            credential_ref=CredentialRef(provider="minimax", name="api_key"),
+            updated_at=datetime.now(UTC),
+        )
+
+
+async def test_model_service_reuses_and_closes_its_owned_http_client(tmp_path: Path) -> None:
+    database = Database(tmp_path / "weatherflow.db")
+    await database.initialize()
+    service = ModelConfigurationService(
+        database=database,
+        repository=ModelConfigurationRepository(database),
+        ledger=EventLedger(database),
+        credential_store=KeyringCredentialStore(backend=FakeKeyring()),
+    )
+    configuration = ModelConfiguration(
+        workspace_id="workspace-1",
+        provider=ModelProvider.MINIMAX,
+        model="MiniMax-M3",
+        base_url="https://api.minimax.test/v1",
+        credential_ref=CredentialRef(provider="minimax", name="api_key"),
+        updated_at=datetime.now(UTC),
+    )
+
+    first = service.adapter(configuration)
+    second = service.adapter(configuration)
+    client = service.client
+
+    assert client is not None
+    assert first.client is client
+    assert second.client is client
+    await service.close()
+    assert client.is_closed
+
+
 async def test_validated_minimax_configuration_persists_reference_only(
     tmp_path: Path,
 ) -> None:

@@ -200,6 +200,28 @@ async def test_execution_errors_are_classified(tmp_path: Path, error, expected) 
         assert run is not None and run.status is RunStatus.NEEDS_REVIEW
 
 
+async def test_uncertain_executor_error_does_not_persist_exception_secrets(tmp_path: Path) -> None:
+    coordinator, actions, runs, action, workspace = await setup(tmp_path)
+    secret = "sk-must-not-enter-durable-state"
+
+    outcome = await coordinator.execute(
+        action_id=action.id,
+        tool=external_tool(),
+        workspace=workspace,
+        executor=Executor(RuntimeError(f"connection failed with {secret}")),
+    )
+
+    stored_action = await actions.get(action.id)
+    stored_run = await runs.get(action.run_id)
+    events = await coordinator.ledger.list_correlation(action.run_id, limit=1000)
+    durable = "".join(event.model_dump_json() for event in events)
+    assert outcome.status is ActionExecutionStatus.NEEDS_REVIEW
+    assert secret not in str(outcome)
+    assert stored_action is not None and secret not in str(stored_action)
+    assert stored_run is not None and secret not in str(stored_run)
+    assert secret not in durable
+
+
 async def test_recovering_executing_action_never_calls_executor(tmp_path: Path) -> None:
     coordinator, actions, runs, action, workspace = await setup(tmp_path)
     async with coordinator.database.transaction() as connection:

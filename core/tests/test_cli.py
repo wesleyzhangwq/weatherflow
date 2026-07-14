@@ -20,12 +20,13 @@ def test_serve_command_uses_settings_defaults(monkeypatch) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr("weatherflow.cli.uvicorn.run", fake_run)
+    monkeypatch.setattr("weatherflow.cli.create_app", lambda settings: "configured-app")
 
     exit_code = main(["serve"])
 
     assert exit_code == 0
     assert captured == {
-        "app": "weatherflow.api.app:app",
+        "app": "configured-app",
         "host": "127.0.0.1",
         "port": 8765,
         "reload": False,
@@ -33,6 +34,27 @@ def test_serve_command_uses_settings_defaults(monkeypatch) -> None:
         "timeout_graceful_shutdown": 2,
         "log_level": "info",
     }
+
+
+def test_serve_command_passes_explicit_data_dir_to_fastapi(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_create_app(settings):
+        captured["settings"] = settings
+        return "configured-app"
+
+    def fake_run(app, **kwargs: object) -> None:
+        captured["app"] = app
+        captured["run"] = kwargs
+
+    monkeypatch.setattr("weatherflow.cli.create_app", fake_create_app)
+    monkeypatch.setattr("weatherflow.cli.uvicorn.run", fake_run)
+
+    exit_code = main(["--data-dir", str(tmp_path), "serve"])
+
+    assert exit_code == 0
+    assert captured["app"] == "configured-app"
+    assert captured["settings"].data_dir == tmp_path
 
 
 def test_parser_requires_a_command_without_version() -> None:
@@ -82,6 +104,9 @@ def test_minimax_configuration_uses_hidden_prompt_and_redacted_output(monkeypatc
             captured.update(kwargs)
             return Configuration()
 
+        async def close(self) -> None:
+            captured["closed"] = "true"
+
     async def create(settings, *, credential_store):
         assert credential_store is store
         return Container()
@@ -96,6 +121,7 @@ def test_minimax_configuration_uses_hidden_prompt_and_redacted_output(monkeypatc
     assert captured == {
         "model": "MiniMax-M3",
         "base_url": "https://api.minimax.io/v1",
+        "closed": "true",
     }
     assert store.value == "hidden-key"
     assert "hidden-key" not in capsys.readouterr().out

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -116,6 +117,16 @@ from weatherflow.trust import (
     SupervisedPolicy,
 )
 from weatherflow.workspaces import Workspace, WorkspaceRepository
+
+logger = logging.getLogger(__name__)
+
+
+class WorkspaceNotFoundError(LookupError):
+    pass
+
+
+class ContextRunNotFoundError(LookupError):
+    pass
 
 
 class EchoModelAdapter:
@@ -600,7 +611,13 @@ class RuntimeContainer:
         try:
             await self._shutdown_background()
         finally:
-            self.background_closing = False
+            closures = [self.model_configurations.close()]
+            if isinstance(self.connector_gateway, ComposioGateway):
+                closures.append(self.connector_gateway.close())
+            try:
+                await asyncio.gather(*closures)
+            finally:
+                self.background_closing = False
 
     async def _shutdown_background(self) -> None:
         self.background_started = False
@@ -686,7 +703,12 @@ class RuntimeContainer:
 
     async def _connector_sync_loop(self) -> None:
         while True:
-            await self.connector_sync.sync_due()
+            try:
+                await self.connector_sync.sync_due()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("connector sync loop recovered from an unexpected failure")
             await asyncio.sleep(30)
 
     def schedule_run(self, run_id: str) -> asyncio.Task[LoopOutcome]:
@@ -876,12 +898,12 @@ class RuntimeContainer:
             else self.default_workspace
         )
         if workspace is None:
-            raise LookupError(workspace_id)
+            raise WorkspaceNotFoundError(workspace_id)
         context_run = None
         if context_run_id is not None:
             context_run = await self.runs.get(context_run_id)
             if context_run is None or context_run.workspace_id != workspace.id:
-                raise LookupError(context_run_id)
+                raise ContextRunNotFoundError(context_run_id)
         connector_bindings = await self._active_conversation_bindings(workspace.id)
         requested_tool_ids = await self._requested_tool_ids(
             workspace, connector_bindings=connector_bindings
