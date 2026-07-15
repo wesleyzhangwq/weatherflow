@@ -29,6 +29,7 @@ SAFE_ENVIRONMENT_KEYS = frozenset(
         "LANG",
         "LC_ALL",
         "LC_CTYPE",
+        "MEMORY_FILE_PATH",
         "NO_COLOR",
         "PATH",
         "PYENV_ROOT",

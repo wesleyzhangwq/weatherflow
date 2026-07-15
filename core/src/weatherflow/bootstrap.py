@@ -300,12 +300,6 @@ class RuntimeContainer:
             ledger=ledger,
             workspaces=workspaces,
         )
-        privacy = PrivacyService(
-            database=database,
-            ledger=ledger,
-            memory=memory,
-            workspaces=workspaces,
-        )
         onboarding = OnboardingService(database=database, ledger=ledger)
         connector_repository = ConnectorRepository(database)
         installation_id = await connector_repository.installation_user_id()
@@ -340,6 +334,41 @@ class RuntimeContainer:
         mcp_management = MCPManagementService(
             repository=SQLiteMCPConnectionRepository(database),
             sandbox=sandbox,
+        )
+
+        async def mcp_memory_count(workspace_id: str) -> int:
+            workspace = await workspaces.get(workspace_id)
+            if workspace is None:
+                raise LookupError(workspace_id)
+            return await mcp_management.persistent_state_count(
+                "memory",
+                workspace=MCPWorkspaceContext(
+                    workspace_id=workspace.id,
+                    internal_root=Path(workspace.internal_root),
+                    action_roots=tuple(Path(root) for root in workspace.action_roots),
+                ),
+            )
+
+        async def reset_mcp_memory(workspace_id: str) -> int:
+            workspace = await workspaces.get(workspace_id)
+            if workspace is None:
+                raise LookupError(workspace_id)
+            return await mcp_management.reset_persistent_state(
+                "memory",
+                workspace=MCPWorkspaceContext(
+                    workspace_id=workspace.id,
+                    internal_root=Path(workspace.internal_root),
+                    action_roots=tuple(Path(root) for root in workspace.action_roots),
+                ),
+            )
+
+        privacy = PrivacyService(
+            database=database,
+            ledger=ledger,
+            memory=memory,
+            workspaces=workspaces,
+            external_memory_count=mcp_memory_count,
+            external_memory_reset=reset_mcp_memory,
         )
         model_configuration_repository = ModelConfigurationRepository(database)
         model_routes = RunModelRouteRepository(database)

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bridgeConfig, WeatherFlowClient } from "./bridge";
+import { bridgeConfig, resolveBridgeConfig, WeatherFlowClient } from "./bridge";
 
 describe("WeatherFlowClient", () => {
   beforeEach(() => vi.restoreAllMocks());
@@ -25,6 +25,10 @@ describe("WeatherFlowClient", () => {
 
   it("keeps the browser fallback explicit for non-Tauri development", () => {
     expect(bridgeConfig()).toEqual({ baseUrl: "http://127.0.0.1:8765" });
+  });
+
+  it("uses the explicit browser fallback outside the Tauri shell", async () => {
+    await expect(resolveBridgeConfig()).resolves.toEqual({ baseUrl: "http://127.0.0.1:8765" });
   });
 
   it("does not treat the Tauri development shell as an unauthenticated browser fallback", async () => {

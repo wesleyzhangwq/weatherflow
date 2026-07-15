@@ -531,9 +531,11 @@ it("creates, renames, pins, and sends from a durable session", async () => {
   } as unknown as WeatherFlowClient;
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  expect(screen.getByRole("button", { name: "移动端新对话" })).toBeInTheDocument();
   fireEvent.click(await screen.findByRole("button", { name: "新对话" }));
   await waitFor(() => expect(createSession).toHaveBeenCalledWith("w1"));
   expect(screen.getByText("说出你真正想完成的事")).toBeInTheDocument();
+  expect(screen.getByText("添加附件")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "会话选项：新对话" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "重命名" }));

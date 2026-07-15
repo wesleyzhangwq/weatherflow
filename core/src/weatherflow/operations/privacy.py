@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,24 +18,36 @@ class PrivacyService:
         ledger: EventLedger,
         memory: MemoryStore,
         workspaces: WorkspaceRepository,
+        external_memory_count: Callable[[str], Awaitable[int]] | None = None,
+        external_memory_reset: Callable[[str], Awaitable[int]] | None = None,
     ) -> None:
         self.database = database
         self.ledger = ledger
         self.memory = memory
         self.workspaces = workspaces
+        self.external_memory_count = external_memory_count
+        self.external_memory_reset = external_memory_reset
 
     async def preview_reset(self, workspace_id: str, category: ResetCategory) -> ResetPreview:
         async with self.database.connect() as connection:
             count = await self._count_in(connection, workspace_id, category)
+        if category in {ResetCategory.MEMORY, ResetCategory.WORKSPACE}:
+            count += await self._external_memory_count(workspace_id)
         return ResetPreview(category=category, count=count)
 
     async def reset(self, workspace_id: str, category: ResetCategory) -> ResetResult:
         workspace = await self.workspaces.get(workspace_id)
         if workspace is None:
             raise LookupError(workspace_id)
+        external_memory_count = 0
+        external_memory_deleted = 0
+        if category in {ResetCategory.MEMORY, ResetCategory.WORKSPACE}:
+            external_memory_count = await self._external_memory_count(workspace_id)
+            if self.external_memory_reset is not None:
+                external_memory_deleted = await self.external_memory_reset(workspace_id)
         artifact_paths: list[Path] = []
         async with self.database.transaction() as connection:
-            count = await self._count_in(connection, workspace_id, category)
+            count = await self._count_in(connection, workspace_id, category) + external_memory_count
             run_rows = await (
                 await connection.execute(
                     "SELECT id FROM runs WHERE workspace_id = ?", (workspace_id,)
@@ -51,7 +64,7 @@ class PrivacyService:
                 if category is ResetCategory.WORKSPACE
                 else (category,)
             )
-            deleted = 0
+            deleted = external_memory_deleted
             for selected in categories:
                 if selected is ResetCategory.BEHAVIOR:
                     cursor = await connection.execute(
@@ -168,6 +181,11 @@ class PrivacyService:
             await asyncio.to_thread(path.unlink, missing_ok=True)
         result_count = deleted if category is not ResetCategory.WORKSPACE else count
         return ResetResult(category=category, deleted_count=result_count)
+
+    async def _external_memory_count(self, workspace_id: str) -> int:
+        if self.external_memory_count is None:
+            return 0
+        return await self.external_memory_count(workspace_id)
 
     async def expire(self, workspace_id: str) -> ResetResult:
         now = datetime.now(UTC)

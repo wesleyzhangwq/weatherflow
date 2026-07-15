@@ -63,6 +63,10 @@ async def test_resets_are_independent_and_audit_contains_counts_not_content(
         summary="private memory body",
         source_event_ids=(source_id,),
     )
+    memory_preset = container.mcp_management.catalog.require("memory")
+    mcp_memory_file = memory_preset.state_root(Path(workspace.internal_root)) / "memory.jsonl"
+    mcp_memory_file.parent.mkdir(parents=True)
+    mcp_memory_file.write_text('{"type":"entity"}\n{"type":"relation"}\n')
 
     behavior_preview = await container.privacy.preview_reset(workspace.id, ResetCategory.BEHAVIOR)
     behavior_result = await container.privacy.reset(workspace.id, ResetCategory.BEHAVIOR)
@@ -71,9 +75,12 @@ async def test_resets_are_independent_and_audit_contains_counts_not_content(
     assert behavior_result.deleted_count == behavior_preview.count
     assert len(await container.memory.episodes.list_workspace(workspace.id)) == 1
 
+    memory_preview = await container.privacy.preview_reset(workspace.id, ResetCategory.MEMORY)
     memory_result = await container.privacy.reset(workspace.id, ResetCategory.MEMORY)
-    assert memory_result.deleted_count == 1
+    assert memory_preview.count == 3
+    assert memory_result.deleted_count == memory_preview.count
     assert await container.memory.episodes.list_workspace(workspace.id) == []
+    assert not mcp_memory_file.exists()
     events = await container.ledger.list_stream("workspace", workspace.id, limit=1000)
     audit_payload = "".join(
         json.dumps(event.payload) for event in events if event.type == "privacy.reset_completed"

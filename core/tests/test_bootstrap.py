@@ -99,7 +99,7 @@ class FixedMCPTransport:
             return {
                 "tools": [
                     {
-                        "name": "read_file",
+                        "name": "read_text_file",
                         "description": "Read one file",
                         "inputSchema": {"type": "object"},
                         "annotations": {"readOnlyHint": True},
@@ -253,7 +253,7 @@ async def test_enabled_curated_mcp_tools_receive_effective_workspace_scope(
     snapshot = await container.snapshots.get_by_run_id(run.id)
 
     assert snapshot is not None
-    assert "mcp.filesystem.read_file" in {tool.tool_id for tool in snapshot.tools}
+    assert "mcp.filesystem.read_text_file" in {tool.tool_id for tool in snapshot.tools}
     assert "mcp:filesystem:use" not in workspace.granted_scopes
 
 
