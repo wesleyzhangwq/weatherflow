@@ -14,6 +14,7 @@ export function bridgeConfig(): BridgeConfig {
 }
 
 export async function resolveBridgeConfig(): Promise<BridgeConfig> {
+  if (!("__TAURI_INTERNALS__" in window)) return bridgeConfig();
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const embedded = explicitBridgeConfig();
     if (embedded) return embedded;

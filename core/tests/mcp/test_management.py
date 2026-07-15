@@ -22,8 +22,9 @@ from weatherflow.sandbox import SandboxNetworkMode, SandboxResult
 
 
 class FakeTransport:
-    def __init__(self) -> None:
+    def __init__(self, *, tool_name: str = "read_text_file") -> None:
         self.closed = False
+        self.tool_name = tool_name
 
     async def request(self, method, params=None):
         if method == "initialize":
@@ -32,7 +33,7 @@ class FakeTransport:
             return {
                 "tools": [
                     {
-                        "name": "read_file",
+                        "name": self.tool_name,
                         "description": "Read one authorized file",
                         "inputSchema": {"type": "object"},
                         "annotations": {"readOnlyHint": True},
@@ -76,7 +77,12 @@ class RecordingInstallSandbox:
 
     async def execute(self, request):
         self.requests.append(request)
-        executable = Path(request.cwd) / "node_modules" / ".bin" / "mcp-server-filesystem"
+        binary_name = (
+            "mcp-server-memory"
+            if request.argv[-1].startswith("@modelcontextprotocol/server-memory@")
+            else "mcp-server-filesystem"
+        )
+        executable = Path(request.cwd) / "node_modules" / ".bin" / binary_name
         executable.parent.mkdir(parents=True)
         executable.write_text("fixture")
         return SandboxResult(
@@ -91,9 +97,9 @@ class RecordingInstallSandbox:
 
 
 class InteractiveStdioProcess:
-    def __init__(self) -> None:
+    def __init__(self, *, tool_name: str = "read_text_file") -> None:
         self.stdout = asyncio.StreamReader()
-        self.stdin = InteractiveStdin(self.stdout)
+        self.stdin = InteractiveStdin(self.stdout, tool_name=tool_name)
         self.returncode = None
         self.closed = False
 
@@ -104,8 +110,9 @@ class InteractiveStdioProcess:
 
 
 class InteractiveStdin:
-    def __init__(self, stdout: asyncio.StreamReader) -> None:
+    def __init__(self, stdout: asyncio.StreamReader, *, tool_name: str) -> None:
         self.stdout = stdout
+        self.tool_name = tool_name
 
     def write(self, value: bytes) -> None:
         payload = json.loads(value)
@@ -117,7 +124,7 @@ class InteractiveStdin:
             result = {
                 "tools": [
                     {
-                        "name": "read_file",
+                        "name": self.tool_name,
                         "description": "Read one file",
                         "inputSchema": {"type": "object"},
                         "annotations": {"readOnlyHint": True},
@@ -134,9 +141,10 @@ class InteractiveStdin:
 
 
 class RecordingStdioSandbox:
-    def __init__(self) -> None:
+    def __init__(self, *, tool_name: str = "read_text_file") -> None:
         self.requests = []
         self.processes = []
+        self.tool_name = tool_name
 
     @property
     def backend_id(self) -> str:
@@ -150,7 +158,7 @@ class RecordingStdioSandbox:
 
     async def spawn_stdio(self, request):
         self.requests.append(request)
-        process = InteractiveStdioProcess()
+        process = InteractiveStdioProcess(tool_name=self.tool_name)
         self.processes.append(process)
         return process
 
@@ -169,14 +177,25 @@ def test_catalog_is_fixed_version_pinned_and_renderer_safe() -> None:
     catalog = CuratedMCPCatalog.default()
 
     assert {item.preset_id for item in catalog.summaries()} == {
+        "context7",
         "fetch",
         "filesystem",
+        "git-readonly",
+        "memory",
         "playwright",
+        "time",
     }
     assert catalog.require("filesystem").package_version == "2026.7.10"
+    assert catalog.require("memory").package_version == "2026.7.4"
+    assert catalog.require("memory").available is True
+    assert catalog.require("memory").state_filename == "memory.jsonl"
+    assert "read_graph" in catalog.require("memory").allowed_tool_names
     assert catalog.require("playwright").package_version == "0.0.78"
     assert catalog.require("playwright").available is False
     assert catalog.require("fetch").available is False
+    assert catalog.require("time").available is False
+    assert catalog.require("git-readonly").available is False
+    assert catalog.require("context7").available is False
     assert "private" in (catalog.require("fetch").unavailable_reason or "").lower()
 
     public = catalog.require("filesystem").to_summary().model_dump()
@@ -272,7 +291,7 @@ async def test_enable_uses_fixed_filesystem_argv_and_disable_closes_transport(
     assert status.enabled is True
     assert status.health is MCPManagedHealth.HEALTHY
     assert [tool.tool_id for tool in service.active_tools(workspace.workspace_id)] == [
-        "mcp.filesystem.read_file"
+        "mcp.filesystem.read_text_file"
     ]
 
     disabled = await service.disable("filesystem", workspace_id=workspace.workspace_id)
@@ -315,6 +334,119 @@ async def test_default_stdio_server_is_offline_and_read_only_inside_sandbox(
     assert request.writable_roots == ()
     assert request.network is SandboxNetworkMode.OFFLINE
     assert sandbox.processes[0].closed is True
+
+
+async def test_memory_stdio_server_gets_only_private_state_write_access(
+    tmp_path: Path,
+) -> None:
+    sandbox = RecordingStdioSandbox(tool_name="read_graph")
+    service = MCPManagementService(
+        repository=InMemoryMCPConnectionRepository(),
+        package_installer=FakePackageInstaller(),
+        sandbox=sandbox,
+    )
+    workspace = workspace_context(tmp_path)
+    await service.install(
+        "memory",
+        workspace=workspace,
+        authorization=MCPInstallAuthorization(approved_action_id="action-1"),
+    )
+
+    enabled = await service.enable("memory", workspace=workspace)
+
+    assert enabled.health is MCPManagedHealth.HEALTHY
+    request = sandbox.requests[0]
+    preset = CuratedMCPCatalog.default().require("memory")
+    state_root = preset.state_root(workspace.internal_root)
+    assert request.cwd == str(state_root)
+    assert request.readable_roots == (
+        str(preset.installation_root(workspace.internal_root)),
+        str(state_root),
+    )
+    assert request.writable_roots == (str(state_root),)
+    assert request.environment["MEMORY_FILE_PATH"] == str(state_root / "memory.jsonl")
+    assert str(workspace.action_roots[0]) not in request.readable_roots
+    assert request.network is SandboxNetworkMode.OFFLINE
+
+
+async def test_preset_tool_allowlist_fails_closed_on_unexpected_discovery(
+    tmp_path: Path,
+) -> None:
+    service = MCPManagementService(
+        repository=InMemoryMCPConnectionRepository(),
+        package_installer=FakePackageInstaller(),
+        transport_factory=lambda argv: FakeTransport(tool_name="surprise_write"),
+    )
+    workspace = workspace_context(tmp_path)
+    await service.install(
+        "filesystem",
+        workspace=workspace,
+        authorization=MCPInstallAuthorization(approved_action_id="action-1"),
+    )
+
+    enabled = await service.enable("filesystem", workspace=workspace)
+
+    assert enabled.health is MCPManagedHealth.UNAVAILABLE
+    assert enabled.tool_ids == ()
+    assert service.active_tools(workspace.workspace_id) == ()
+
+
+async def test_memory_state_reset_counts_deletes_and_restarts_enabled_server(
+    tmp_path: Path,
+) -> None:
+    transports: list[FakeTransport] = []
+
+    def transport_factory(argv):
+        transport = FakeTransport(tool_name="read_graph")
+        transports.append(transport)
+        return transport
+
+    service = MCPManagementService(
+        repository=InMemoryMCPConnectionRepository(),
+        package_installer=FakePackageInstaller(),
+        transport_factory=transport_factory,
+    )
+    workspace = workspace_context(tmp_path)
+    await service.install(
+        "memory",
+        workspace=workspace,
+        authorization=MCPInstallAuthorization(approved_action_id="action-1"),
+    )
+    await service.enable("memory", workspace=workspace)
+    preset = CuratedMCPCatalog.default().require("memory")
+    state_root = preset.state_root(workspace.internal_root)
+    state_root.mkdir(parents=True, exist_ok=True)
+    state_file = state_root / "memory.jsonl"
+    state_file.write_text('{"type":"entity"}\n{"type":"relation"}\n')
+
+    assert await service.persistent_state_count("memory", workspace=workspace) == 2
+    deleted = await service.reset_persistent_state("memory", workspace=workspace)
+
+    assert deleted == 2
+    assert not state_file.exists()
+    assert transports[0].closed is True
+    assert len(transports) == 2
+    assert service.connection(workspace.workspace_id, "memory") is not None
+
+
+async def test_memory_state_reset_deletes_malformed_private_state(
+    tmp_path: Path,
+) -> None:
+    service = MCPManagementService(
+        repository=InMemoryMCPConnectionRepository(),
+        package_installer=FakePackageInstaller(),
+        transport_factory=lambda argv: FakeTransport(tool_name="read_graph"),
+    )
+    workspace = workspace_context(tmp_path)
+    preset = CuratedMCPCatalog.default().require("memory")
+    state_file = preset.state_root(workspace.internal_root) / "memory.jsonl"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_bytes(b"\xff\n")
+
+    deleted = await service.reset_persistent_state("memory", workspace=workspace)
+
+    assert deleted == 1
+    assert not state_file.exists()
 
 
 async def test_missing_stdio_sandbox_marks_managed_server_unavailable(
@@ -412,7 +544,10 @@ async def test_npm_installer_executes_only_through_dedicated_sandbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sandbox = RecordingInstallSandbox()
-    monkeypatch.setattr("weatherflow.mcp.management.shutil.which", lambda name: "/usr/bin/npm")
+    monkeypatch.setattr(
+        "weatherflow.mcp.management.shutil.which",
+        lambda name: f"/usr/bin/{name}",
+    )
     internal = tmp_path / "internal"
 
     installed = await NpmMCPPresetPackageInstaller(sandbox=sandbox).install(
@@ -428,4 +563,61 @@ async def test_npm_installer_executes_only_through_dedicated_sandbox(
     assert request.argv[1] == "install"
     assert request.network is SandboxNetworkMode.HTTPS_EGRESS
     assert request.writable_roots == (request.cwd,)
-    assert request.readable_roots == (str(internal.resolve()),)
+    assert request.readable_roots == (request.cwd, "/usr")
+    assert str(internal.resolve()) not in request.readable_roots
+
+
+async def test_npm_installer_scopes_a_user_managed_node_runtime_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = tmp_path / "node-runtime"
+    bin_root = runtime / "bin"
+    npm_module = runtime / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    npm_module.parent.mkdir(parents=True)
+    npm_module.write_text("#!/usr/bin/env node\n")
+    bin_root.mkdir()
+    (bin_root / "node").write_text("node")
+    (bin_root / "npm").symlink_to(npm_module)
+    monkeypatch.setattr(
+        "weatherflow.mcp.management.shutil.which",
+        lambda name: str(bin_root / name),
+    )
+    sandbox = RecordingInstallSandbox()
+    internal = tmp_path / "internal"
+
+    await NpmMCPPresetPackageInstaller(sandbox=sandbox).install(
+        CuratedMCPCatalog.default().require("memory"),
+        internal_root=internal,
+        approved_action_id="action-1",
+    )
+
+    request = sandbox.requests[0]
+    assert request.readable_roots == (request.cwd, str(runtime.resolve()))
+    assert request.writable_roots == (request.cwd,)
+    assert request.environment["PATH"].split(":", 1)[0] == str(bin_root)
+
+
+async def test_npm_installer_uses_the_pinned_official_memory_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = RecordingInstallSandbox()
+    monkeypatch.setattr(
+        "weatherflow.mcp.management.shutil.which",
+        lambda name: f"/usr/bin/{name}",
+    )
+    internal = tmp_path / "internal"
+    preset = CuratedMCPCatalog.default().require("memory")
+
+    installed = await NpmMCPPresetPackageInstaller(sandbox=sandbox).install(
+        preset,
+        internal_root=internal,
+        approved_action_id="action-1",
+    )
+
+    assert installed == preset.installation_root(internal)
+    request = sandbox.requests[0]
+    assert request.argv[-1] == "@modelcontextprotocol/server-memory@2026.7.4"
+    assert "--ignore-scripts" in request.argv
+    assert preset.executable_path(internal).is_file()

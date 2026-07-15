@@ -53,7 +53,8 @@ class MCPInstallAuthorization:
 
 @dataclass(frozen=True, slots=True)
 class _PreparedNpmInstall:
-    npm: str
+    npm: str | None
+    runtime_root: Path | None
     target: Path
     temporary: Path | None
     environment: dict[str, str]
@@ -155,6 +156,8 @@ class NpmMCPPresetPackageInstaller:
         )
         if prepared.temporary is None:
             return prepared.target
+        assert prepared.npm is not None
+        assert prepared.runtime_root is not None
         package_spec = f"{preset.package_name}@{preset.package_version}"
         try:
             if self.sandbox is None:
@@ -175,7 +178,10 @@ class NpmMCPPresetPackageInstaller:
                         package_spec,
                     ),
                     cwd=str(prepared.temporary),
-                    readable_roots=(str(resolved_internal_root),),
+                    readable_roots=(
+                        str(prepared.temporary),
+                        str(prepared.runtime_root),
+                    ),
                     writable_roots=(str(prepared.temporary),),
                     environment={
                         key: value
@@ -212,12 +218,16 @@ class NpmMCPPresetPackageInstaller:
         )
 
     def _prepare_install(self, preset: MCPPreset, internal_root: Path) -> _PreparedNpmInstall:
-        npm = shutil.which("npm")
-        if npm is None:
-            raise MCPInstallationError("npm is required to install this MCP preset")
         target = preset.installation_root(internal_root)
         if self.is_installed(preset, internal_root=internal_root):
-            return _PreparedNpmInstall(npm=npm, target=target, temporary=None, environment={})
+            return _PreparedNpmInstall(
+                npm=None,
+                runtime_root=None,
+                target=target,
+                temporary=None,
+                environment={},
+            )
+        npm, runtime_root = self._resolve_node_runtime()
         internal_root = internal_root.expanduser().resolve()
         internal_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         base = self._ensure_private_tree(
@@ -226,23 +236,42 @@ class NpmMCPPresetPackageInstaller:
         )
         if target.is_symlink():
             raise MCPInstallationError("MCP installation target cannot be a symlink")
-        private_home = self._ensure_private_tree(internal_root, ("mcp", "_home"))
-        npmrc = private_home / ".npmrc"
-        npmrc.touch(mode=0o600, exist_ok=True)
         temporary = base / f".{preset.package_version}.tmp-{uuid4().hex}"
         temporary.mkdir(mode=0o700)
         return _PreparedNpmInstall(
             npm=npm,
+            runtime_root=runtime_root,
             target=target,
             temporary=temporary,
             environment={
-                "PATH": os.environ.get("PATH", ""),
-                "HOME": str(private_home),
+                "PATH": f"{Path(npm).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
                 "LANG": os.environ.get("LANG", "C.UTF-8"),
-                "NPM_CONFIG_USERCONFIG": str(npmrc),
-                "NPM_CONFIG_CACHE": str(private_home / ".npm"),
             },
         )
+
+    @staticmethod
+    def _resolve_node_runtime() -> tuple[str, Path]:
+        npm_value = shutil.which("npm")
+        node_value = shutil.which("node")
+        if npm_value is None or node_value is None:
+            raise MCPInstallationError("Node.js and npm are required to install this MCP preset")
+        npm = Path(npm_value).expanduser().absolute()
+        node = Path(node_value).expanduser().absolute()
+        if npm.parent != node.parent or npm.parent.name != "bin":
+            raise MCPInstallationError("npm and node must come from one fixed runtime prefix")
+        runtime_root = npm.parent.parent.resolve()
+        resolved_npm = npm.resolve()
+        resolved_node = node.resolve()
+        if not resolved_npm.is_relative_to(runtime_root) or not resolved_node.is_relative_to(
+            runtime_root
+        ):
+            raise MCPInstallationError("Node.js runtime paths escaped their fixed prefix")
+        npm_relative = resolved_npm.relative_to(runtime_root)
+        system_runtime = runtime_root in {Path("/usr"), Path("/usr/local"), Path("/opt/homebrew")}
+        bundled_npm = npm_relative.parts[:3] == ("lib", "node_modules", "npm")
+        if not system_runtime and not bundled_npm:
+            raise MCPInstallationError("npm is outside a reviewable Node.js runtime prefix")
+        return str(npm), runtime_root
 
     @staticmethod
     def _finalize_install(preset: MCPPreset, prepared: _PreparedNpmInstall) -> None:
@@ -379,52 +408,64 @@ class MCPManagementService:
         if not preset.available:
             raise MCPPresetUnavailableError(preset.unavailable_reason or preset_id)
         async with self._lock(workspace.workspace_id, preset_id):
-            current = await self.repository.get(workspace.workspace_id, preset_id)
-            if (
-                current is None
-                or not current.installed
-                or not self.package_installer.is_installed(
-                    preset, internal_root=workspace.internal_root
-                )
-            ):
-                raise MCPNotInstalledError(preset_id)
-            await self._close_connection(workspace.workspace_id, preset_id)
-            argv = preset.launch_argv(
-                workspace.internal_root,
-                action_roots=workspace.action_roots,
+            return await self._enable_locked(preset, workspace)
+
+    async def _enable_locked(
+        self,
+        preset: MCPPreset,
+        workspace: MCPWorkspaceContext,
+    ) -> MCPConnectionState:
+        current = await self.repository.get(workspace.workspace_id, preset.preset_id)
+        if (
+            current is None
+            or not current.installed
+            or not self.package_installer.is_installed(
+                preset, internal_root=workspace.internal_root
             )
-            transport: MCPTransport | None = None
-            try:
-                transport = self._transport_for(preset, workspace, argv)
-                connected = await self.registry.connect(preset_id, transport)
-            except (MCPUnavailableError, ConnectionError, OSError, ValueError):
-                if transport is not None:
-                    await transport.close()
-                state = replace(
-                    current,
-                    enabled=True,
-                    health=MCPManagedHealth.UNAVAILABLE,
-                    tool_ids=(),
-                    checked_at=datetime.now(UTC),
-                )
-                await self.repository.save(state)
-                return state
-            healthy = bool(connected.tools) and all(
-                tool.health is not ToolHealth.UNAVAILABLE for tool in connected.tools
-            )
-            if healthy:
-                self._connections[(workspace.workspace_id, preset_id)] = connected
-            else:
+        ):
+            raise MCPNotInstalledError(preset.preset_id)
+        await self._close_connection(workspace.workspace_id, preset.preset_id)
+        argv = preset.launch_argv(
+            workspace.internal_root,
+            action_roots=workspace.action_roots,
+        )
+        transport: MCPTransport | None = None
+        try:
+            transport = self._transport_for(preset, workspace, argv)
+            connected = await self.registry.connect(preset.preset_id, transport)
+            discovered_names = {
+                tool.tool_id.removeprefix(f"mcp.{preset.preset_id}.") for tool in connected.tools
+            }
+            if discovered_names - set(preset.allowed_tool_names):
+                raise ValueError("MCP server returned a tool outside its catalog allowlist")
+        except (MCPUnavailableError, ConnectionError, OSError, ValueError):
+            if transport is not None:
                 await transport.close()
             state = replace(
                 current,
                 enabled=True,
-                health=(MCPManagedHealth.HEALTHY if healthy else MCPManagedHealth.UNAVAILABLE),
-                tool_ids=tuple(tool.tool_id for tool in connected.tools),
+                health=MCPManagedHealth.UNAVAILABLE,
+                tool_ids=(),
                 checked_at=datetime.now(UTC),
             )
             await self.repository.save(state)
             return state
+        healthy = bool(connected.tools) and all(
+            tool.health is not ToolHealth.UNAVAILABLE for tool in connected.tools
+        )
+        if healthy:
+            self._connections[(workspace.workspace_id, preset.preset_id)] = connected
+        else:
+            await transport.close()
+        state = replace(
+            current,
+            enabled=True,
+            health=(MCPManagedHealth.HEALTHY if healthy else MCPManagedHealth.UNAVAILABLE),
+            tool_ids=(tuple(tool.tool_id for tool in connected.tools) if healthy else ()),
+            checked_at=datetime.now(UTC),
+        )
+        await self.repository.save(state)
+        return state
 
     def _transport_for(
         self,
@@ -437,18 +478,29 @@ class MCPManagementService:
         if self.sandbox is None:
             raise MCPUnavailableError("MCP stdio sandbox is unavailable")
         installation_root = preset.installation_root(workspace.internal_root)
-        readable_roots = (
-            str(installation_root),
-            *(str(path) for path in workspace.action_roots),
-        )
+        state_root: Path | None = None
+        if preset.state_filename is not None:
+            state_root = NpmMCPPresetPackageInstaller._ensure_private_tree(
+                workspace.internal_root,
+                ("mcp", "state", preset.preset_id),
+            )
+        readable_roots = (str(installation_root),)
+        if preset.requires_action_roots:
+            readable_roots += tuple(str(path) for path in workspace.action_roots)
+        if state_root is not None:
+            readable_roots += (str(state_root),)
         environment = {
             key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL"}
         }
+        if preset.state_environment_key is not None:
+            state_file = preset.state_file(workspace.internal_root)
+            assert state_file is not None
+            environment[preset.state_environment_key] = str(state_file)
         sandbox_request = SandboxRequest(
             argv=argv,
-            cwd=str(installation_root),
+            cwd=str(state_root or installation_root),
             readable_roots=readable_roots,
-            writable_roots=(),
+            writable_roots=((str(state_root),) if state_root is not None else ()),
             environment=environment,
             network=SandboxNetworkMode.OFFLINE,
             limits=SandboxLimits(
@@ -464,6 +516,84 @@ class MCPManagementService:
             sandbox=self.sandbox,
             sandbox_request=sandbox_request,
         )
+
+    async def persistent_state_count(
+        self,
+        preset_id: str,
+        *,
+        workspace: MCPWorkspaceContext,
+    ) -> int:
+        preset = self.catalog.require(preset_id)
+        async with self._lock(workspace.workspace_id, preset_id):
+            return await asyncio.to_thread(
+                self._persistent_state_count,
+                preset,
+                workspace.internal_root,
+            )
+
+    async def reset_persistent_state(
+        self,
+        preset_id: str,
+        *,
+        workspace: MCPWorkspaceContext,
+    ) -> int:
+        preset = self.catalog.require(preset_id)
+        async with self._lock(workspace.workspace_id, preset_id):
+            count = await asyncio.to_thread(
+                self._persistent_state_count,
+                preset,
+                workspace.internal_root,
+            )
+            current = await self.repository.get(workspace.workspace_id, preset_id)
+            await self._close_connection(workspace.workspace_id, preset_id)
+            await asyncio.to_thread(
+                self._delete_persistent_state,
+                preset,
+                workspace.internal_root,
+            )
+            if (
+                current is not None
+                and current.enabled
+                and current.installed
+                and self.package_installer.is_installed(
+                    preset, internal_root=workspace.internal_root
+                )
+            ):
+                await self._enable_locked(preset, workspace)
+            return count
+
+    @staticmethod
+    def _persistent_state_count(preset: MCPPreset, internal_root: Path) -> int:
+        state_file = preset.state_file(internal_root)
+        if state_file is None:
+            return 0
+        root = internal_root.expanduser().resolve()
+        state_root = preset.state_root(internal_root)
+        if NpmMCPPresetPackageInstaller._has_directory_symlink(root, state_root.parent):
+            raise MCPInstallationError("MCP state path cannot contain symlinks")
+        if state_root.is_symlink() or state_file.is_symlink():
+            return 1
+        if not state_file.exists():
+            return 0
+        if not state_file.is_file():
+            return 1
+        with state_file.open("rb") as handle:
+            return sum(1 for line in handle if line.strip())
+
+    @staticmethod
+    def _delete_persistent_state(preset: MCPPreset, internal_root: Path) -> None:
+        if preset.state_filename is None:
+            return
+        root = internal_root.expanduser().resolve()
+        state_root = preset.state_root(root)
+        if not state_root.exists() and not state_root.is_symlink():
+            return
+        if NpmMCPPresetPackageInstaller._has_directory_symlink(root, state_root.parent):
+            raise MCPInstallationError("MCP state path cannot contain symlinks")
+        if state_root.is_symlink():
+            state_root.unlink()
+            return
+        shutil.rmtree(state_root)
 
     async def disable(self, preset_id: str, *, workspace_id: str) -> MCPConnectionState:
         self.catalog.require(preset_id)

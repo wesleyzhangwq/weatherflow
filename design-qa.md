@@ -51,7 +51,6 @@ No actionable P0, P1, or P2 findings remain.
 - [P3] Run history is empty in the QA fixture; populated history styling is covered by component tests rather than the final screenshot.
 
 final result: passed
-
 ---
 
 # Conversation Sessions and OAuth Catalog Design QA
@@ -136,5 +135,36 @@ No actionable P0, P1, or P2 findings remain.
 ## Follow-up polish
 
 - [P3] A future macOS E2E pass can compare the tile over both light and dark desktop wallpapers; the current transparent browser canvas exercises the darker case.
+
+final result: passed
+
+---
+
+# Design QA
+
+Reference: `/Users/wesz_station/.codex/generated_images/019f6640-089d-7bb2-aced-749dd4314040/exec-ef99d9a1-99fe-4c26-9646-49c8bdf0a4d7.png`
+
+Final implementation capture: `/Users/wesz_station/.codex/visualizations/2026/07/15/019f6640-089d-7bb2-aced-749dd4314040/weatherflow-warm-cockpit-final.png`
+
+Combined comparison: `/Users/wesz_station/.codex/visualizations/2026/07/15/019f6640-089d-7bb2-aced-749dd4314040/weatherflow-reference-comparison-final.png`
+
+## Comparison passes
+
+1. Matched the four-column desktop frame at 1487 × 1058, then corrected the title block, empty state, sidebar project controls, and composer proportions against a side-by-side source comparison.
+2. Rechecked the combined reference and implementation after the corrections. The final pass preserves the selected warm paper palette, serif display hierarchy, coral active states, quiet borders, shallow elevation, and Phosphor icon family without gradients or substitute artwork.
+3. Verified 1024 × 768, 720 × 900, and 480 × 900 layouts. All reported `scrollWidth` values equal their viewport widths. At 480 px the conversation rail collapses and a functional compact new-conversation control remains available.
+
+## Final audit
+
+- Fonts and typography: passed. Display copy uses the selected Chinese serif treatment; navigation and controls use the existing system sans stack with stable wrapping.
+- Spacing and layout: passed. Desktop column boundaries, header alignment, empty-state rhythm, context dividers, and 680 px composer match the reference intent.
+- Viewport resilience: passed. No horizontal overflow or clipped composer controls at the tested desktop, tablet, narrow, and mobile widths.
+- Colors and tokens: passed. Warm ivory, eggshell, beige borders, coral emphasis, blue human-weather state, and green task/private-state colors remain semantically distinct.
+- Image and asset fidelity: passed. The target contains no raster imagery; all visible symbols use the existing Phosphor icon library and no custom SVG, CSS art, or placeholder illustration was introduced.
+- Copy and content: passed. Existing WeatherFlow authority, approval, privacy, and task-state language remains intact.
+- Icons: passed. Sidebar, status, context, attachment, send, and MCP icons use one consistent stroke family and remain aligned across breakpoints.
+- States and interactions: passed. Navigation, light theme, new conversation, message input, Ask/Bypass, session deletion, and MCP catalog states were exercised in the running app.
+- Accessibility: passed. Semantic labels, disabled states, focus-visible outlines, reduced-motion support, and practical mobile controls remain present.
+- Runtime check: passed. The final browser state reported no console warnings or errors from the application.
 
 final result: passed

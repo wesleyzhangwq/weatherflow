@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Brain, CaretDown, ChatCircleDots, Check, CheckCircle, ClockCounterClockwise, Cloud, CloudSun,
-  Desktop, DotsThree, FolderOpen, GearSix, ListChecks, MagnifyingGlass, MicrosoftOutlookLogo,
-  MicrosoftTeamsLogo, Moon, PaperPlaneRight, PencilSimple, PlugsConnected, Plus, Pulse, PushPin, Robot,
-  ShieldCheck, SlackLogo, Sparkle, Sun, Trash, Wrench,
+  Desktop, DotsThree, FolderOpen, GearSix, ListChecks, ListDashes, MagnifyingGlass, MicrosoftOutlookLogo,
+  MicrosoftTeamsLogo, Moon, Paperclip, PaperPlaneRight, PencilSimple, PlugsConnected, Plus, Pulse, PushPin,
+  Robot, ShieldCheck, SlackLogo, Sun, Trash, Waves, Wrench,
 } from "@phosphor-icons/react";
 import {
   SiAirtable, SiAsana, SiClickup, SiConfluence, SiDiscord, SiDropbox, SiGithub, SiGitlab, SiGmail,
@@ -252,7 +252,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
   return (
     <main className="cockpit-shell">
       <aside className="app-sidebar">
-        <div className="brand"><Sparkle size={22} weight="fill" /><div><strong>WeatherFlow</strong><small>个人智能体</small></div></div>
+        <div className="brand"><Waves size={25} /><div><strong>WeatherFlow</strong><small>个人智能体</small></div></div>
         <nav aria-label="主导航">
           <NavButton active={view === "chat"} icon={<ChatCircleDots />} label="对话" onClick={() => setView("chat")} />
           <NavButton active={view === "runs"} icon={<ListChecks />} label="任务" badge={pending.length || undefined} onClick={() => setView("runs")} />
@@ -267,7 +267,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
         </nav>
         <div className="sidebar-project">
           <select aria-label="当前项目" value={selectedWorkspaceId ?? ""} onChange={(event) => onSelectWorkspace?.(event.target.value)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select>
-          <button onClick={() => void chooseWorkspace()}><FolderOpen /> 添加项目</button>
+          <button aria-label="添加项目" title="添加项目" onClick={() => void chooseWorkspace()}><FolderOpen /><span>添加项目</span></button>
         </div>
         <div className={`local-status ${offline ? "offline" : ""}`}><i />{offline ? "内核离线" : "本机运行 · 数据私有"}</div>
       </aside>
@@ -312,9 +312,10 @@ function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, a
           <div className="signal-chip weather" aria-label="人的状态天气" data-scene={scene}><CloudSun /><span><small>你的天气</small>{weatherText[scene]}</span></div>
           <div className="signal-chip task" aria-label="智能体任务状态"><span className={`run-dot ${run?.status ?? "idle"}`} /><span><small>当前任务</small>{run ? runStatusText[run.status] : "空闲"}</span></div>
         </div>
+        {sessionsEnabled && <button className="mobile-new-session" type="button" aria-label="移动端新对话" disabled={!workspaceReady} onClick={() => void onCreateSession()}><Plus /><span>新对话</span></button>}
       </header>
       <div className="conversation-scroll">
-        {displayedRuns.length === 0 && <div className="chat-empty"><div className="empty-icon"><ChatCircleDots size={30} /></div><p className="eyebrow">从对话开始</p><h2>说出你真正想完成的事</h2><p>WeatherFlow 会结合你的状态调整协作方式，在后台保存任务进度，只在需要决定时打断你。</p><div className="empty-promises"><span><ShieldCheck /> 关键操作先批准</span><span><CheckCircle /> 任务进度可恢复</span></div></div>}
+        {displayedRuns.length === 0 && <div className="chat-empty"><h2>说出你真正想完成的事</h2><p>WeatherFlow 会结合你的状态调整协作方式，在后台保存任务进度，只在需要决定时打断你。</p><div className="empty-promises"><span><ShieldCheck /> 关键操作先批准</span><span><CheckCircle /> 任务进度可恢复</span></div></div>}
         {displayedRuns.map((item) => <article className={`conversation-turn ${item.id === run?.id ? "selected" : ""}`} key={item.id}>
           <button className="conversation-select" aria-label={`查看任务：${item.user_intent}`} onClick={() => onSelectRun(item.id)}>
             <span className="message-label">你</span><div className="user-message">{item.user_intent}</div>
@@ -322,10 +323,12 @@ function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, a
           </button>
         </article>)}
       </div>
-      <form className="chat-composer" onSubmit={(event) => { if (composing.current) { event.preventDefault(); return; } onSubmit(event); }}><button type="button" aria-label="添加附件"><Plus /></button><textarea aria-label="对话输入" rows={1} value={chatInput} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !composing.current) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={!workspaceReady ? "先在左下角选择或添加项目" : sessionsEnabled && !activeSession ? "先新建一个对话" : "给 WeatherFlow 发消息…"} /><button className="send-button" aria-label="发送" disabled={sending || !chatReady || !chatInput.trim()}><PaperPlaneRight weight="fill" /></button></form>
-      <footer className="composer-meta">{chatReady ? <div className="composer-controls"><ModelSwitcher client={client} providers={providers} workspaceId={workspaceId} system={system} disabled={sending} onChanged={onModelChanged} onOpenSettings={onOpenSettings} /><ToolModeToggle value={toolMode} disabled={sending} onChange={onToolMode} /></div> : <span>{workspaceReady ? "新建或选择一个对话，才能发送消息" : "先选择或添加一个项目，才能开始任务"}</span>}<span>Enter 发送 · Shift + Enter 换行</span></footer>
+      <div className="composer-shell">
+        <form className="chat-composer" onSubmit={(event) => { if (composing.current) { event.preventDefault(); return; } onSubmit(event); }}><textarea aria-label="对话输入" rows={1} value={chatInput} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !composing.current) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={!workspaceReady ? "先在左下角选择或添加项目" : sessionsEnabled && !activeSession ? "先新建一个对话…" : "给 WeatherFlow 发消息…"} /><button className="send-button" aria-label="发送" disabled={sending || !chatReady || !chatInput.trim()}><PaperPlaneRight weight="fill" /></button></form>
+        <footer className="composer-meta">{workspaceReady ? <div className="composer-controls"><button className="attachment-button" type="button"><Paperclip /><span>添加附件</span></button><ModelSwitcher client={client} providers={providers} workspaceId={workspaceId} system={system} disabled={sending} onChanged={onModelChanged} onOpenSettings={onOpenSettings} /><ToolModeToggle value={toolMode} disabled={sending} onChange={onToolMode} /></div> : <span>先选择或添加一个项目，才能开始任务</span>}<span>Enter 发送 · Shift + Enter 换行</span></footer>
+      </div>
     </section>
-    <aside className="chat-context"><div className="context-heading"><Wrench /><span>当前上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside>
+    <aside className="chat-context"><div className="context-heading"><ListDashes /><span>当前上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside>
   </div>;
 }
 

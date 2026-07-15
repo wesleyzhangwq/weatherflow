@@ -112,6 +112,11 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     contributes only its fixed `mcp:{preset}:use` effective scope while a new
     capability snapshot is resolved; this derived scope comes from durable
     enabled state plus the curated catalog, never from server annotations.
+    Discovery also fails closed when a server exposes any tool outside the
+    preset's Python-owned tool-name allowlist. Stateful presets may write only
+    to their own Workspace-private internal state root; those files participate
+    in the matching explicit privacy-reset category and never make a Workspace
+    action root writable.
 27. Cockpit groups user-managed agent facilities in one left-navigation Tools
     section: Automations, Skills, MCP Servers, LLM Models, and Composio. System
     and privacy preferences remain in Settings; conversation remains primary.
@@ -476,3 +481,15 @@ compatibility.
   through `DeveloperExecutor -> MacOSSeatbeltSandbox` with loopback-only
   networking and return code 0, proving the repository can build and test itself
   inside the new OS boundary.
+- 2026-07-15: Expanded the curated MCP catalog without weakening the subprocess
+  boundary. The official npm Knowledge Graph Memory preset is the only newly
+  runnable server: it is offline, tool-name allowlisted, and can write only its
+  Workspace-private MCP state directory, which is included in explicit memory
+  and Workspace privacy resets. Time, read-only Git, and Context7 remain visible
+  but unavailable until the packaged app owns, respectively, a separate Python
+  MCP runtime, safe multi-root repository routing, and redirect-safe host-bound
+  egress. The approved npm installer resolves `node` and `npm` from one fixed
+  runtime prefix, exposes that prefix read-only, and exposes only its private
+  versioned temporary destination as writable/readable application data; it no
+  longer exposes the whole Workspace internal root. Host `uvx` and unrestricted
+  HTTPS are not fallback paths.

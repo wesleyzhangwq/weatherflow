@@ -583,11 +583,20 @@ subprocess.
 
 Managed MCP processes use separate profiles from Developer commands. Approved,
 version-pinned npm installation receives only the internal temporary install
-root plus outbound HTTPS and ignores package scripts. The installed filesystem
-stdio server is offline and read-only over its fixed installation and Workspace
-roots. Backend absence marks it unavailable. Browser MCP remains unavailable
-until WeatherFlow owns a redirect-safe public-network broker; an unrestricted
-network profile is not an acceptable compatibility path.
+root, one fixed read-only Node.js runtime prefix, and outbound HTTPS; it ignores
+package scripts and cannot read the rest of the Workspace internal root. The
+installed filesystem stdio server is offline and read-only over its fixed
+installation and Workspace roots. The official Knowledge Graph Memory preset is
+also offline; it cannot read Workspace action roots and may write only its
+Workspace-private MCP state root.
+That state participates in explicit memory and Workspace privacy resets. Every
+runnable preset owns a fixed tool-name allowlist, and unexpected discovery makes
+the whole connection unavailable. Backend absence marks it unavailable. Browser
+and remote-documentation MCP remain unavailable until WeatherFlow owns a
+redirect-safe public-network broker; an unrestricted network profile is not an
+acceptable compatibility path. Python reference servers remain unavailable
+until a separate sandboxed runtime is part of the packaged app; host `uvx` is
+not a release fallback.
 
 The Developer Pack may admit direct Workspace executables and reviewed build/
 test frontends only after this backend is available. Shell command strings,
@@ -905,6 +914,10 @@ resolution without mutating frozen Run snapshots. A healthy enabled preset
 contributes its catalog-fixed `mcp:{preset}:use` scope only as an effective input
 to that future snapshot resolution. It does not mutate durable Workspace grants,
 and discovery metadata or MCP annotations cannot select or expand the scope.
+Discovered tool names must be a subset of the preset's Python-owned allowlist;
+an unexpected name fails the connection closed. A stateful preset receives a
+separate internal state root, never a writable Workspace action root, and its
+state is owned by the corresponding explicit privacy-reset lifecycle.
 
 ### 9.2 ToolSpec
 
