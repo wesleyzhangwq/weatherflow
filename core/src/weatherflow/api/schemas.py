@@ -5,7 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from weatherflow.automations import ScheduleSpec
 from weatherflow.capabilities import ToolEffect
-from weatherflow.connectors import ConversationAccess
 from weatherflow.models import (
     ModelConfiguration,
     ModelProvider,
@@ -14,7 +13,7 @@ from weatherflow.models import (
     normalize_model_base_url,
 )
 from weatherflow.rhythm import CurrentRhythm
-from weatherflow.runs import Run
+from weatherflow.runs import Run, ToolMode
 from weatherflow.runtime import RunControlKind
 from weatherflow.trust import Approval
 from weatherflow.workspaces import Workspace
@@ -36,6 +35,7 @@ class RunCreateRequest(BaseModel):
     workspace_id: str = Field(min_length=1, max_length=200)
     session_id: str | None = Field(default=None, min_length=1, max_length=200)
     context_run_id: str | None = Field(default=None, min_length=1, max_length=200)
+    tool_mode: ToolMode = ToolMode.ASK
     execute: bool = False
 
 
@@ -162,12 +162,6 @@ class ConnectorSettingsRequest(BaseModel):
 
     auto_fetch_enabled: bool
     interval_minutes: int = Field(ge=15, le=1440)
-
-
-class ConnectorConversationAccessRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    conversation_access: ConversationAccess
 
 
 class ConnectorDisconnectRequest(BaseModel):

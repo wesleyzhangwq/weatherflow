@@ -14,9 +14,9 @@ import { nativeCredentials, nativeWindows, type CredentialProvider } from "../na
 import { getThemePreference, setThemePreference, type ThemePreference } from "../theme";
 import { AutomationView, MCPServersView, SkillsView } from "./ToolViews";
 import type {
-  Approval, Artifact, ConnectionAttempt, ConnectorConversationAccess, ConnectorKind, ConnectorStatus, DesktopSnapshot,
+  Approval, Artifact, ConnectionAttempt, ConnectorKind, ConnectorStatus, DesktopSnapshot,
   LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, RhythmDimensionEstimate, RhythmDimensionName,
-  RhythmInsights, Run, Session, SystemStatus, Workspace,
+  RhythmInsights, Run, Session, SystemStatus, ToolMode, Workspace,
 } from "../types";
 
 type ViewId = "chat" | "runs" | "rhythm" | "automations" | "skills" | "mcp" | "models" | "oauth" | "settings";
@@ -75,6 +75,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
   const [rhythmInsights, setRhythmInsights] = useState<RhythmInsights | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [toolMode, setToolMode] = useState<ToolMode>("ask");
   const sessionsEnabled = Boolean(selectedWorkspaceId) && typeof (client as Partial<WeatherFlowClient>).sessions === "function";
   const activeSession = useMemo(() => sessions.find((item) => item.id === selectedSessionId) ?? null, [selectedSessionId, sessions]);
   const activeSessionRunId = useMemo(() => {
@@ -171,7 +172,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
     setSending(true); setOperation(null);
     try {
       const contextRunId = sessionsEnabled ? activeSession?.latest_run_id ?? null : run?.id;
-      const accepted = await client.createRun(intent, crypto.randomUUID(), selectedWorkspaceId, contextRunId, sessionsEnabled ? activeSession?.id : undefined);
+      const accepted = await client.createRun(intent, crypto.randomUUID(), selectedWorkspaceId, contextRunId, sessionsEnabled ? activeSession?.id : undefined, toolMode);
       selectedRunIdRef.current = accepted.id;
       setSelectedRunId(accepted.id);
       setRuns((current) => [accepted, ...current.filter((item) => item.id !== accepted.id)]);
@@ -272,7 +273,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
       </aside>
 
       <section className="app-workspace">
-        {view === "chat" && <ChatView client={client} providers={providers} workspaceId={selectedWorkspaceId} sessions={sessions} sessionsEnabled={sessionsEnabled} activeSession={activeSession} runs={runs} run={run} pending={pending} artifacts={artifacts} chatInput={chatInput} sending={sending} workspaceReady={Boolean(selectedWorkspaceId)} snapshot={snapshot} system={system} onInput={setChatInput} onSubmit={submitChat} onSelectRun={selectRun} onSelectSession={selectSession} onCreateSession={createConversation} onUpdateSession={updateConversation} onDeleteSession={deleteConversation} onDecide={decide} onDownload={downloadArtifact} onModelChanged={refresh} onOpenSettings={() => setView("models")} />}
+        {view === "chat" && <ChatView client={client} providers={providers} workspaceId={selectedWorkspaceId} sessions={sessions} sessionsEnabled={sessionsEnabled} activeSession={activeSession} runs={runs} run={run} pending={pending} artifacts={artifacts} chatInput={chatInput} sending={sending} toolMode={toolMode} workspaceReady={Boolean(selectedWorkspaceId)} snapshot={snapshot} system={system} onInput={setChatInput} onToolMode={setToolMode} onSubmit={submitChat} onSelectRun={selectRun} onSelectSession={selectSession} onCreateSession={createConversation} onUpdateSession={updateConversation} onDeleteSession={deleteConversation} onDecide={decide} onDownload={downloadArtifact} onModelChanged={refresh} onOpenSettings={() => setView("models")} />}
         {view === "runs" && <RunsView runs={runs} run={run} timeline={timeline} artifacts={artifacts} pending={pending} onSelect={selectRun} onDecide={decide} onDownload={downloadArtifact} />}
         {view === "rhythm" && <RhythmView snapshot={snapshot} insights={rhythmInsights} />}
         {view === "automations" && <AutomationView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
@@ -291,7 +292,7 @@ function NavButton({ active, icon, label, badge, onClick }: { active: boolean; i
   return <button className={active ? "active" : ""} aria-label={label} onClick={onClick}>{icon}<span>{label}</span>{badge && <b>{badge}</b>}</button>;
 }
 
-function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, activeSession, runs, run, pending, artifacts, chatInput, sending, workspaceReady, snapshot, system, onInput, onSubmit, onSelectRun, onSelectSession, onCreateSession, onUpdateSession, onDeleteSession, onDecide, onDownload, onModelChanged, onOpenSettings }: { client: WeatherFlowClient; providers: ModelProviderPreset[]; workspaceId?: string | null; sessions: Session[]; sessionsEnabled: boolean; activeSession: Session | null; runs: Run[]; run: Run | null; pending: Approval[]; artifacts: Artifact[]; chatInput: string; sending: boolean; workspaceReady: boolean; snapshot: DesktopSnapshot | null; system: SystemStatus | null; onInput: (value: string) => void; onSubmit: (event: FormEvent) => void; onSelectRun: (id: string) => void; onSelectSession: (session: Session) => void; onCreateSession: () => Promise<void>; onUpdateSession: (sessionId: string, update: { title?: string; pinned?: boolean }) => Promise<void>; onDeleteSession: (session: Session) => Promise<void>; onDecide: (approval: Approval, decision: "approve" | "deny") => void; onDownload: (artifact: Artifact) => void; onModelChanged: () => Promise<void>; onOpenSettings: () => void }) {
+function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, activeSession, runs, run, pending, artifacts, chatInput, sending, toolMode, workspaceReady, snapshot, system, onInput, onToolMode, onSubmit, onSelectRun, onSelectSession, onCreateSession, onUpdateSession, onDeleteSession, onDecide, onDownload, onModelChanged, onOpenSettings }: { client: WeatherFlowClient; providers: ModelProviderPreset[]; workspaceId?: string | null; sessions: Session[]; sessionsEnabled: boolean; activeSession: Session | null; runs: Run[]; run: Run | null; pending: Approval[]; artifacts: Artifact[]; chatInput: string; sending: boolean; toolMode: ToolMode; workspaceReady: boolean; snapshot: DesktopSnapshot | null; system: SystemStatus | null; onInput: (value: string) => void; onToolMode: (value: ToolMode) => void; onSubmit: (event: FormEvent) => void; onSelectRun: (id: string) => void; onSelectSession: (session: Session) => void; onCreateSession: () => Promise<void>; onUpdateSession: (sessionId: string, update: { title?: string; pinned?: boolean }) => Promise<void>; onDeleteSession: (session: Session) => Promise<void>; onDecide: (approval: Approval, decision: "approve" | "deny") => void; onDownload: (artifact: Artifact) => void; onModelChanged: () => Promise<void>; onOpenSettings: () => void }) {
   const scene = snapshot?.rhythm.weather.scene ?? "mixed";
   const composing = useRef(false);
   const displayedRuns = sessionsEnabled
@@ -322,9 +323,16 @@ function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, a
         </article>)}
       </div>
       <form className="chat-composer" onSubmit={(event) => { if (composing.current) { event.preventDefault(); return; } onSubmit(event); }}><button type="button" aria-label="添加附件"><Plus /></button><textarea aria-label="对话输入" rows={1} value={chatInput} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !composing.current) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={!workspaceReady ? "先在左下角选择或添加项目" : sessionsEnabled && !activeSession ? "先新建一个对话" : "给 WeatherFlow 发消息…"} /><button className="send-button" aria-label="发送" disabled={sending || !chatReady || !chatInput.trim()}><PaperPlaneRight weight="fill" /></button></form>
-      <footer className="composer-meta">{chatReady ? <ModelSwitcher client={client} providers={providers} workspaceId={workspaceId} system={system} disabled={sending} onChanged={onModelChanged} onOpenSettings={onOpenSettings} /> : <span>{workspaceReady ? "新建或选择一个对话，才能发送消息" : "先选择或添加一个项目，才能开始任务"}</span>}<span>Enter 发送 · Shift + Enter 换行</span></footer>
+      <footer className="composer-meta">{chatReady ? <div className="composer-controls"><ModelSwitcher client={client} providers={providers} workspaceId={workspaceId} system={system} disabled={sending} onChanged={onModelChanged} onOpenSettings={onOpenSettings} /><ToolModeToggle value={toolMode} disabled={sending} onChange={onToolMode} /></div> : <span>{workspaceReady ? "新建或选择一个对话，才能发送消息" : "先选择或添加一个项目，才能开始任务"}</span>}<span>Enter 发送 · Shift + Enter 换行</span></footer>
     </section>
     <aside className="chat-context"><div className="context-heading"><Wrench /><span>当前上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside>
+  </div>;
+}
+
+function ToolModeToggle({ value, disabled, onChange }: { value: ToolMode; disabled: boolean; onChange: (value: ToolMode) => void }) {
+  return <div className="tool-mode-toggle" role="group" aria-label="工具模式">
+    <button type="button" aria-pressed={value === "ask"} disabled={disabled} onClick={() => onChange("ask")} title="只向智能体提供读取工具">Ask</button>
+    <button type="button" aria-pressed={value === "bypass"} disabled={disabled} onClick={() => onChange("bypass")} title="提供全部已审查工具；写入和破坏性操作仍需批准">Bypass</button>
   </div>;
 }
 
@@ -746,18 +754,6 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
       await refresh();
     } finally { setBusy(null); }
   };
-  const updateConversationAccess = async (status: ConnectorStatus, conversationAccess: ConnectorConversationAccess) => {
-    if (!workspaceId || conversationAccess === (status.conversation_access ?? "disabled")) return;
-    setBusy(status.connector);
-    try {
-      await client.updateConnectorConversationAccess(status.connector, conversationAccess, workspaceId);
-      await refresh();
-      const label = conversationAccess === "disabled" ? "已禁止在对话中使用" : conversationAccess === "read" ? "已允许对话只读查询" : "已允许对话提议操作；实际写入仍需逐次批准";
-      onOperation(`${status.label} ${label}。`);
-    } catch {
-      onOperation(`${status.label} 对话权限更新失败，原有权限保持不变。`);
-    } finally { setBusy(null); }
-  };
   const sync = async (status: ConnectorStatus) => {
     if (!workspaceId) return;
     setBusy(status.connector);
@@ -779,7 +775,7 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
   };
 
   return <div className="page-view connections-view">
-    <header className="page-header"><span>OAuth</span><h1>连接你的常用服务</h1><p>使用你的账号授权 WeatherFlow 读取信息或准备操作。服务商令牌由连接代理托管；是否自动抓取、是否允许对话使用仍需分别开启。</p></header>
+    <header className="page-header"><span>OAuth</span><h1>连接你的常用服务</h1><p>使用你的账号授权 WeatherFlow 读取信息或准备操作。服务商令牌由连接代理托管；对话中的工具范围统一由输入框下方的 Ask / Bypass 模式决定。</p></header>
     <div className="oauth-catalog-toolbar">
       <label className="oauth-search"><MagnifyingGlass /><input type="search" aria-label="搜索 OAuth 服务" placeholder="搜索服务…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
       <div className="oauth-categories" aria-label="OAuth 服务分类">{oauthCategories.map((item) => <button type="button" className={category === item.id ? "active" : ""} aria-pressed={category === item.id} key={item.id} onClick={() => setCategory(item.id)}>{item.label}</button>)}</div>
@@ -794,7 +790,7 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
       </button>;
     })}</div>
     {visibleStatuses.length === 0 && <div className="oauth-empty"><MagnifyingGlass /><strong>没有匹配的服务</strong><span>试试服务名称或切换分类。</span></div>}
-    {selectedStatus && <ConnectorDetail status={selectedStatus} configured={configured} busy={busy} handoffUrl={handoffs[selectedStatus.connector]} confirmDisconnect={confirmDisconnect === selectedStatus.connector} onConnect={connect} onReopen={(url) => nativeWindows.openConnectorUrl(url)} onConversationAccess={updateConversationAccess} onSettings={updateSettings} onSync={sync} onConfirmDisconnect={() => setConfirmDisconnect(selectedStatus.connector)} onDisconnect={disconnect} />}
+    {selectedStatus && <ConnectorDetail status={selectedStatus} configured={configured} busy={busy} handoffUrl={handoffs[selectedStatus.connector]} confirmDisconnect={confirmDisconnect === selectedStatus.connector} onConnect={connect} onReopen={(url) => nativeWindows.openConnectorUrl(url)} onSettings={updateSettings} onSync={sync} onConfirmDisconnect={() => setConfirmDisconnect(selectedStatus.connector)} onDisconnect={disconnect} />}
     <details className="oauth-broker-settings" open={!configured || undefined}>
       <summary><span><ShieldCheck />OAuth 连接服务</span><small>{configured ? "已安全配置" : "需要配置"}</small></summary>
       {!configured ? <form className="connector-key-form" onSubmit={configure}><div><h2>高级配置 · Composio</h2><p>WeatherFlow 使用 scoped project API key 创建 OAuth Connect Link。密钥只保存在本机钥匙串，不进入对话或日志。</p></div><label>Composio Project API Key<input aria-label="Composio Project API Key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="cmp_…" /></label><button className="primary" disabled={!apiKey.trim() || busy === "configure"}>验证并保存连接密钥</button></form> : <div className="credential-summary"><span><ShieldCheck size={18} />OAuth 连接服务已由 WeatherFlow 安全配置</span><button type="button" onClick={() => void removeCredential()} disabled={Boolean(busy)}>删除底层密钥</button></div>}
@@ -802,7 +798,7 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
   </div>;
 }
 
-function ConnectorDetail({ status, configured, busy, handoffUrl, confirmDisconnect, onConnect, onReopen, onConversationAccess, onSettings, onSync, onConfirmDisconnect, onDisconnect }: { status: ConnectorStatus; configured: boolean; busy: ConnectorKind | "configure" | null; handoffUrl?: string; confirmDisconnect: boolean; onConnect: (connector: ConnectorKind, label: string) => Promise<void>; onReopen: (url: string) => Promise<void>; onConversationAccess: (status: ConnectorStatus, access: ConnectorConversationAccess) => Promise<void>; onSettings: (status: ConnectorStatus, enabled: boolean, interval?: number) => Promise<void>; onSync: (status: ConnectorStatus) => Promise<void>; onConfirmDisconnect: () => void; onDisconnect: (status: ConnectorStatus) => Promise<void> }) {
+function ConnectorDetail({ status, configured, busy, handoffUrl, confirmDisconnect, onConnect, onReopen, onSettings, onSync, onConfirmDisconnect, onDisconnect }: { status: ConnectorStatus; configured: boolean; busy: ConnectorKind | "configure" | null; handoffUrl?: string; confirmDisconnect: boolean; onConnect: (connector: ConnectorKind, label: string) => Promise<void>; onReopen: (url: string) => Promise<void>; onSettings: (status: ConnectorStatus, enabled: boolean, interval?: number) => Promise<void>; onSync: (status: ConnectorStatus) => Promise<void>; onConfirmDisconnect: () => void; onDisconnect: (status: ConnectorStatus) => Promise<void> }) {
   const presentation = connectorPresentation[status.connector];
   const state = oauthState(status);
   const isBusy = busy === status.connector;
@@ -810,19 +806,13 @@ function ConnectorDetail({ status, configured, busy, handoffUrl, confirmDisconne
   const setup = effectiveOAuthSetup(status);
   const autoFetchSupported = supportsAutoFetch(status);
   const conversationToolsSupported = supportsConversationTools(status);
+  const availableToolIds = status.available_tool_ids;
   const canStartOAuth = configured && setup !== "unknown";
   return <section className="oauth-detail" aria-label={`${status.label} 连接详情`}>
     <header><span className="oauth-detail-mark">{presentation.icon}</span><div><small>{state.label}</small><h2>{status.label}</h2><p>{presentation.note}</p></div><span className={`oauth-detail-state ${state.tone}`}>{state.label}</span></header>
     {status.connected ? <div className="oauth-detail-body">
       <div className="oauth-account"><span>当前账号</span><strong>{status.display_name || "授权账号"}</strong></div>
-      {conversationToolsSupported ? <fieldset className="conversation-access" aria-label={`${status.label} 对话使用权限`}>
-        <legend>允许在对话中使用</legend>
-        <div className="conversation-access-options">{([
-          ["disabled", "关闭"], ["read", "只读使用"], ["read_write", "读取并提议操作"],
-        ] as const).map(([value, label]) => <label key={value}><input type="radio" name={`${status.connector}-conversation-access`} value={value} checked={(status.conversation_access ?? "disabled") === value} onChange={() => void onConversationAccess(status, value)} disabled={isBusy} /><span>{label}</span></label>)}</div>
-        <p className="conversation-access-note">读取权限只允许查询；创建或修改操作仍会在执行前逐次向你确认。</p>
-        <details className="connector-tool-disclosure"><summary>{status.allowed_tool_ids.length ? `已允许 ${status.allowed_tool_ids.length} 个固定工具` : "当前未向对话开放工具"}</summary>{status.allowed_tool_ids.length > 0 && <ul>{status.allowed_tool_ids.map((toolId) => <li key={toolId}><code>{toolId}</code></li>)}</ul>}</details>
-      </fieldset> : <div className="oauth-capability-notice"><Wrench /><div><strong>对话工具待审阅</strong><p>连接后暂不能在对话中使用，固定工具仍在审阅中。</p></div></div>}
+      {conversationToolsSupported ? <div className="oauth-capability-notice available"><Wrench /><div><strong>已接入统一工具模式</strong><p>Ask 提供全部读取工具；Bypass 提供全部已审查工具。创建、修改和删除仍会在执行前逐次向你确认。</p><details className="connector-tool-disclosure"><summary>{`已审查 ${availableToolIds.length} 个固定工具`}</summary>{availableToolIds.length > 0 && <ul>{availableToolIds.map((toolId) => <li key={toolId}><code>{toolId}</code></li>)}</ul>}</details></div></div> : <div className="oauth-capability-notice"><Wrench /><div><strong>对话工具待审阅</strong><p>连接后暂不能在对话中使用，固定工具仍在审阅中。</p></div></div>}
       {autoFetchSupported ? <div className="oauth-fetch-settings"><label className="connector-toggle"><input type="checkbox" checked={status.auto_fetch_enabled} onChange={(event) => void onSettings(status, event.target.checked)} disabled={isBusy} /><span>自动抓取</span></label><label className="connector-interval">抓取频率<select aria-label={`${status.label} 抓取频率`} value={status.interval_minutes} onChange={(event) => void onSettings(status, status.auto_fetch_enabled, Number(event.target.value))} disabled={isBusy}><option value={15}>每 15 分钟</option><option value={60}>每小时</option><option value={240}>每 4 小时</option><option value={1440}>每天</option></select></label><small>{status.last_sync_at ? `上次抓取 ${new Date(status.last_sync_at).toLocaleString("zh-CN")}` : "尚未完成首次抓取"}</small></div> : <p className="oauth-unavailable-note">该服务暂不支持后台自动抓取。</p>}
       <div className="connector-actions">{autoFetchSupported && <button onClick={() => void onSync(status)} disabled={isBusy}>立即抓取</button>}{confirmDisconnect ? <button className="danger" onClick={() => void onDisconnect(status)} disabled={isBusy}>确认断开并删除摘要</button> : <button onClick={onConfirmDisconnect}>断开连接</button>}</div>
     </div> : <div className="oauth-connect-panel">

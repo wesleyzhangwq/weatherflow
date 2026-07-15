@@ -197,6 +197,7 @@ class WorkerCoordinator:
             client_request_id=client_request_id,
             user_intent=task.strip(),
             workspace_id=workspace.id,
+            tool_mode=parent.tool_mode,
             budget=workspace.default_budget,
         )
         if self.model_routes is not None:

@@ -15,7 +15,6 @@ from weatherflow.connectors import (
     ConnectorRepository,
     ConnectorService,
     ConnectorSnapshot,
-    ConversationAccess,
     OAuthSetup,
     SourceItem,
 )
@@ -52,6 +51,7 @@ class FakeGateway:
         self.phase = ConnectionPhase.WAITING_USER
         self.oauth_failure: ConnectorKind | None = None
         self.oauth_calls: list[ConnectorKind] = []
+        self.allowlist_calls: list[tuple[ConnectorKind, str, str]] = []
 
     async def validate_api_key(self, api_key: str) -> None:
         self.validated.append(api_key)
@@ -81,6 +81,15 @@ class FakeGateway:
 
     async def revoke(self, account_id: str) -> None:
         self.revoked.append(account_id)
+
+    async def ensure_action_allowlist(
+        self,
+        connector: ConnectorKind,
+        *,
+        connected_account_id: str,
+        user_id: str,
+    ) -> None:
+        self.allowlist_calls.append((connector, connected_account_id, user_id))
 
 
 class UniqueLinkGateway(FakeGateway):
@@ -153,8 +162,7 @@ async def test_configure_handoff_and_authoritative_activation(tmp_path: Path) ->
     assert binding is not None and binding.granted_scopes == frozenset(
         {"github:read", "github:write"}
     )
-    assert binding.conversation_access is ConversationAccess.DISABLED
-    assert binding.conversation_tool_ids == frozenset()
+    assert gateway.allowlist_calls == [(ConnectorKind.GITHUB, "ca_github", "wf-installation")]
     assert keyring.values == {("ai.weatherflow.composio", "project_api_key"): SECRET}
     events = await service.ledger.list_stream("connector", ConnectorKind.GITHUB.value, limit=20)
     serialized = "".join(event.model_dump_json() for event in events)
@@ -230,29 +238,6 @@ async def test_only_latest_concurrent_connect_attempt_may_activate(tmp_path: Pat
     assert account.external_account_id == "ca_github_2"
 
 
-async def test_conversation_access_is_explicit_and_separate_from_auto_fetch(
-    tmp_path: Path,
-) -> None:
-    _, workspace, repository, _, gateway, service = await setup(tmp_path)
-    handoff = await service.connect(workspace.id, ConnectorKind.GITHUB)
-    gateway.phase = ConnectionPhase.ACTIVE
-    await service.refresh_attempt(handoff.attempt_id)
-
-    read_binding = await service.update_conversation_access(
-        workspace.id, ConnectorKind.GITHUB, ConversationAccess.READ
-    )
-    assert read_binding.conversation_access is ConversationAccess.READ
-    assert read_binding.auto_fetch_enabled is True
-    assert read_binding.conversation_tool_ids
-    assert all("create" not in tool_id for tool_id in read_binding.conversation_tool_ids)
-
-    disabled = await service.update_conversation_access(
-        workspace.id, ConnectorKind.GITHUB, ConversationAccess.DISABLED
-    )
-    assert disabled.conversation_tool_ids == frozenset()
-    assert (await repository.get_binding(workspace.id, ConnectorKind.GITHUB)) == disabled
-
-
 async def test_unavailable_keyring_keeps_background_connectors_disabled(
     tmp_path: Path,
 ) -> None:
@@ -279,14 +264,18 @@ async def test_statuses_expose_oauth_catalog_capabilities_without_virtual_tools(
     assert github.toolkit == "github"
     assert github.auto_fetch_supported is True
     assert github.conversation_tools_supported is True
+    assert len(github.available_tool_ids) == 9
     assert github.oauth_setup is OAuthSetup.MANAGED
     slack = statuses[ConnectorKind.SLACK]
     assert slack.category == "communication"
     assert slack.toolkit == "slack"
     assert slack.auto_fetch_supported is False
     assert slack.conversation_tools_supported is False
+    assert slack.available_tool_ids == ()
     assert slack.oauth_setup is OAuthSetup.MANAGED
     assert statuses[ConnectorKind.GOOGLE_CALENDAR].oauth_setup is OAuthSetup.BRING_YOUR_OWN
+    assert len(statuses[ConnectorKind.GMAIL].available_tool_ids) == 3
+    assert len(statuses[ConnectorKind.GOOGLE_CALENDAR].available_tool_ids) == 5
     assert statuses[ConnectorKind.TRELLO].oauth_setup is OAuthSetup.UNKNOWN
 
 
@@ -321,7 +310,7 @@ async def test_successful_broker_configuration_invalidates_oauth_setup_cache(
     assert len(gateway.oauth_calls) == call_count * 2
 
 
-async def test_unsupported_connector_cannot_enable_fetch_or_conversation_tools(
+async def test_unsupported_connector_cannot_enable_fetch(
     tmp_path: Path,
 ) -> None:
     _, workspace, repository, _, _, service = await setup(tmp_path)
@@ -346,12 +335,6 @@ async def test_unsupported_connector_cannot_enable_fetch_or_conversation_tools(
             ConnectorKind.SLACK,
             auto_fetch_enabled=True,
             interval_minutes=60,
-        )
-    with pytest.raises(PermissionError):
-        await service.update_conversation_access(
-            workspace.id,
-            ConnectorKind.SLACK,
-            ConversationAccess.READ,
         )
 
 

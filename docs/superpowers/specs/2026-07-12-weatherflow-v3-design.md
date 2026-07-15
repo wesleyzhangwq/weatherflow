@@ -940,13 +940,19 @@ sensitive
 
 At Run creation/planning time:
 
-1. Match explicit mentions and relevant Capability Packs/Skills.
-2. Select the smallest plausible tool surface.
-3. Apply the Agent Definition's tool and skill filters.
-4. Apply Workspace scopes and policy visibility.
-5. Freeze a versioned `RunCapabilitySnapshot`.
+1. Read the explicit Run tool mode. Missing input defaults to `ask`.
+2. Build one candidate surface from installed Capability Packs, enabled MCP
+   presets, and every active connector identity in the selected Workspace.
+3. In `ask`, retain only `observe` and `network_read` ToolSpecs. In `bypass`,
+   retain the complete reviewed candidate surface.
+4. Apply the Agent Definition's tool and skill filters.
+5. Apply Workspace scopes and policy visibility.
+6. Freeze a versioned `RunCapabilitySnapshot` together with the Run's mode.
 
-Runs do not hot-switch tool schemas. Registry updates affect new Runs only.
+Runs do not hot-switch tool schemas or modes. Registry updates and a later
+composer toggle affect new Runs only. `bypass` means bypassing the read-only
+visibility filter, not bypassing Workspace boundaries, Trust, sandboxing,
+Action persistence, or Approval.
 
 ### 9.4 Workspace contract
 
@@ -961,17 +967,22 @@ A Workspace owns:
 - installed Skill snapshots and enabled MCP preset references;
 - persisted Automations that target the Workspace;
 - default budgets;
-- active session grants.
+- durable conversation sessions, which are presentation groupings and do not
+  own capability grants.
 
 The first production connector slice is intentionally fixed to GitHub, Gmail,
 and Google Calendar; later curated OAuth catalog entries follow the same
 identity and credential-isolation contract without inheriting capability.
 Connection requires explicit user action. Read-only automatic fetch may run
 silently only for an entry whose backend definition explicitly supports it, at
-a bounded interval chosen by the user. Conversation access is a separate
-explicit grant (`disabled`, `read`, or `read_write`) and is unavailable until
-the toolkit has fixed reviewed WeatherFlow ToolSpecs. Neither connection nor
-automatic fetch can authorize external writes or widen an already-frozen Run.
+a bounded interval chosen by the user. A connector binding owns only the active
+account identity, reviewed OAuth scopes, and background-fetch settings. It does
+not own a per-conversation tool grant. New Runs derive connector tools from the
+Run's `ask` or `bypass` mode, and only toolkits with fixed reviewed WeatherFlow
+ToolSpecs can contribute. Neither connection nor automatic fetch can authorize
+external writes or widen an already-frozen Run. The former
+`disabled`/`read`/`read_write` connector fields and mutation endpoint are absent
+from the v3 contract; migration removes their persisted JSON remnants.
 
 A Workspace is an authority boundary, not merely a working directory.
 
@@ -1163,26 +1174,43 @@ data deletion.
   with a typed result. This setup does not add a model-visible capability.
 - Only a curated, version-pinned read surface is eligible for automatic fetch.
   A generic Composio execute tool is never exposed to the model.
+- Broker execution binds both the opaque connected-account ID and WeatherFlow's
+  stable installation user ID. Action versions are pinned per reviewed action,
+  not through one cross-toolkit version constant, because GitHub, Gmail, and
+  Google Calendar publish independent toolkit versions. The reviewed
+  conversation surface covers common GitHub identity/repository/commit/issue/
+  pull-request operations, Gmail search/draft/send, and Calendar list/free-time/
+  create/update/delete operations; expanding it still requires a fixed action
+  slug, strict input/output schemas, scopes, Trust classification, and tests.
+  WeatherFlow may expand only a Composio-managed Auth Config to the connector's
+  complete reviewed action allowlist after verifying the connected account's
+  installation user ID, toolkit, and active state. User-provided Auth Configs
+  are never rewritten; insufficient ones fail closed and require
+  reauthorization. The complete allowlist makes both modes selectable without
+  granting execution authority.
 - Every reviewed Composio action also owns an explicit output projection. Only
   named useful fields cross into the normalized Observation; unknown nested
   fields are dropped, credential-shaped values in approved text fields are
   redacted, and HTTP(S) URLs lose user info, query parameters, and fragments.
   Output filtering never relies on a blacklist of provider field names.
-- Conversation tools use canonical WeatherFlow ToolSpec IDs. A new Run freezes
-  both those specs and an opaque connector route containing the account identity
-  and conversation-grant revision. Execution rechecks the current binding,
-  account state, exact frozen identity, grant revision, scope, ToolSpec version,
-  and Trust decision. Reconnection or revocation makes the old Run fail closed.
+- Connector tools use canonical WeatherFlow ToolSpec IDs. A new Run freezes the
+  mode-selected specs and an opaque connector route containing the account
+  identity. Execution rechecks the current binding, active account state, exact
+  frozen identity, scope, ToolSpec version, and Trust decision. Reconnection or
+  revocation makes the old Run fail closed. Mutable UI mode cannot affect an
+  already-frozen Run, and no connector conversation-grant fields exist.
 - A leaf Worker may inherit a Composio route only for reviewed read-only tools
   actually present in its frozen child capability snapshot. The child route is
   copied from the parent Run after rechecking Workspace ownership, account
-  identity, grant revision, binding tool allowlist, and scopes. No matching child
-  tool means no route; connector writes remain excluded from Worker snapshots.
+  identity and scopes. No matching child tool means no route; connector writes
+  remain excluded from Worker snapshots.
 - Conversation reads execute as `network_read`. Drafting/sending, issue/task
   mutation, calendar writes, and destructive actions persist a normal Action and
   enter Approval before the broker receives any execution request.
 - Connected identity, OAuth scope, Workspace scope, Tool visibility, execution
-  authority, and Approval remain separate checks.
+  authority, and Approval remain separate checks. Connector activation is the
+  only time WeatherFlow may validate or expand a managed provider allowlist;
+  this provider setup is not a per-conversation grant.
 - The v3 directory contains GitHub, Gmail, Google Calendar, Slack, Notion,
   Google Drive, Google Sheets, Outlook, OneDrive, Microsoft Teams, Linear,
   Jira, Confluence, Dropbox, GitLab, Discord, Trello, Asana, Airtable, and

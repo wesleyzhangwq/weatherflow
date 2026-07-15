@@ -29,11 +29,11 @@ class RunRepository:
             await connection.execute(
                 """
                 INSERT INTO runs(
-                    id, client_request_id, user_intent, workspace_id, session_id, status,
+                    id, client_request_id, user_intent, workspace_id, session_id, tool_mode, status,
                     version, created_at, updated_at, rhythm_snapshot_id,
                     capability_snapshot_id, policy_profile, budget,
                     checkpoint_ref, result_summary, error_class, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._values(run),
             )
@@ -190,6 +190,7 @@ class RunRepository:
             run.user_intent,
             run.workspace_id,
             run.session_id,
+            run.tool_mode.value,
             run.status.value,
             run.version,
             run.created_at.isoformat(),
@@ -213,6 +214,7 @@ class RunRepository:
                 "user_intent": row["user_intent"],
                 "workspace_id": row["workspace_id"],
                 "session_id": row["session_id"],
+                "tool_mode": row["tool_mode"],
                 "status": row["status"],
                 "version": row["version"],
                 "created_at": row["created_at"],

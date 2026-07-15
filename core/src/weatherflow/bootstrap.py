@@ -17,6 +17,7 @@ from weatherflow.capabilities import (
     CapabilityResolver,
     CapabilitySnapshotCoordinator,
     CapabilitySnapshotRepository,
+    ToolEffect,
 )
 from weatherflow.capabilities.builtin import (
     BUILTIN_PACK_TOOL_IDS,
@@ -40,6 +41,7 @@ from weatherflow.capabilities.builtin import (
 from weatherflow.config import Settings
 from weatherflow.connectors import (
     COMPOSIO_CREDENTIAL,
+    COMPOSIO_TOOL_DEFINITIONS,
     ComposioGateway,
     ComposioToolExecutor,
     ConnectionPhase,
@@ -90,7 +92,7 @@ from weatherflow.operations import (
     PrivacyService,
 )
 from weatherflow.rhythm import RhythmEstimator, RhythmService, RhythmSnapshotRepository
-from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
+from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus, ToolMode
 from weatherflow.runtime import (
     ActionExecutionCoordinator,
     AgentDefinition,
@@ -306,6 +308,7 @@ class RuntimeContainer:
         )
         onboarding = OnboardingService(database=database, ledger=ledger)
         connector_repository = ConnectorRepository(database)
+        installation_id = await connector_repository.installation_user_id()
         resolved_connector_gateway = connector_gateway or ComposioGateway(
             broker=CredentialBroker(resolved_credential_store),
             credential_ref=COMPOSIO_CREDENTIAL,
@@ -316,12 +319,13 @@ class RuntimeContainer:
             ledger=ledger,
             credential_store=resolved_credential_store,
             gateway=resolved_connector_gateway,
-            installation_id=await connector_repository.installation_user_id(),
+            installation_id=installation_id,
         )
         connector_sync = ConnectorSyncService(
             repository=connector_repository,
             ledger=ledger,
             gateway=resolved_connector_gateway,
+            user_id=installation_id,
         )
         skill_catalog = SkillCatalogService(
             catalog=WesleySkillCatalog(settings.skill_catalog_root),
@@ -366,6 +370,7 @@ class RuntimeContainer:
             composio_executor = ComposioToolExecutor(
                 repository=connector_repository,
                 gateway=resolved_connector_gateway,
+                user_id=installation_id,
             )
             for tool in composio_tool_specs():
                 executors.register(tool.tool_id, composio_executor)
@@ -941,6 +946,7 @@ class RuntimeContainer:
         workspace_id: str | None = None,
         session_id: str | None = None,
         context_run_id: str | None = None,
+        tool_mode: ToolMode = ToolMode.ASK,
         execute: bool = True,
     ) -> tuple[Run, LoopOutcome | None]:
         workspace = (
@@ -955,15 +961,18 @@ class RuntimeContainer:
             context_run = await self.runs.get(context_run_id)
             if context_run is None or context_run.workspace_id != workspace.id:
                 raise ContextRunNotFoundError(context_run_id)
-        connector_bindings = await self._active_conversation_bindings(workspace.id)
+        connector_bindings = await self._active_connector_bindings(workspace.id)
         requested_tool_ids = await self._requested_tool_ids(
-            workspace, connector_bindings=connector_bindings
+            workspace,
+            tool_mode=tool_mode,
+            connector_bindings=connector_bindings,
         )
         run = await self.run_coordinator.create_run(
             client_request_id=client_request_id or str(uuid4()),
             user_intent=user_intent,
             workspace_id=workspace.id,
             session_id=session_id,
+            tool_mode=tool_mode,
             budget=workspace.default_budget,
         )
         if self.use_configured_model_routing:
@@ -1011,7 +1020,7 @@ class RuntimeContainer:
             run = await self._bind_rhythm_context(run, workspace, context_run=context_run)
         if await self.snapshots.get_by_run_id(run.id) is None:
             effective_workspace = await self._workspace_with_capability_grants(
-                workspace, connector_bindings
+                workspace, connector_bindings, tool_mode=run.tool_mode
             )
             frozen = await self.capability_coordinator.freeze_for_run(
                 run_id=run.id,
@@ -1041,9 +1050,9 @@ class RuntimeContainer:
         workspace = await self.workspaces.get(run.workspace_id)
         if workspace is None:
             raise LookupError(run.workspace_id)
-        connector_bindings = await self._active_conversation_bindings(workspace.id)
+        connector_bindings = await self._active_connector_bindings(workspace.id)
         effective_workspace = await self._workspace_with_capability_grants(
-            workspace, connector_bindings
+            workspace, connector_bindings, tool_mode=run.tool_mode
         )
         try:
             checkpoint = await self.checkpoints.get(run.id)
@@ -1325,43 +1334,55 @@ class RuntimeContainer:
         self,
         workspace: Workspace,
         *,
+        tool_mode: ToolMode,
         connector_bindings: tuple[ConnectorBinding, ...] | None = None,
     ) -> frozenset[str]:
         if not self.use_builtin_pack_resolution:
-            return frozenset(tool.tool_id for tool in self.catalog.all())
-        installed = set(workspace.installed_packs)
-        builtin = installed.intersection(BUILTIN_PACK_TOOL_IDS)
-        selected = set(tool_ids_for_installed_packs(builtin))
-        unresolved = installed - builtin
-        store = PackageStore(workspace.internal_root)
-        for reference in workspace.extension_refs:
-            if not reference.startswith("capability_pack:"):
-                continue
-            manifest = await store.load_manifest(reference)
-            if isinstance(manifest, CapabilityPackManifest) and manifest.name in installed:
-                selected.update(manifest.tool_ids)
-                unresolved.discard(manifest.name)
-        if unresolved:
-            from weatherflow.capabilities.builtin import UnknownCapabilityPackError
+            selected = {tool.tool_id for tool in self.catalog.all()}
+        else:
+            installed = set(workspace.installed_packs)
+            builtin = installed.intersection(BUILTIN_PACK_TOOL_IDS)
+            selected = set(tool_ids_for_installed_packs(builtin))
+            unresolved = installed - builtin
+            store = PackageStore(workspace.internal_root)
+            for reference in workspace.extension_refs:
+                if not reference.startswith("capability_pack:"):
+                    continue
+                manifest = await store.load_manifest(reference)
+                if isinstance(manifest, CapabilityPackManifest) and manifest.name in installed:
+                    selected.update(manifest.tool_ids)
+                    unresolved.discard(manifest.name)
+            if unresolved:
+                from weatherflow.capabilities.builtin import UnknownCapabilityPackError
 
-            raise UnknownCapabilityPackError(sorted(unresolved)[0])
-        selected.add("extensions.install")
-        selected.update(tool.tool_id for tool in self.mcp_management.active_tools(workspace.id))
-        bindings = (
-            connector_bindings
-            if connector_bindings is not None
-            else await self._active_conversation_bindings(workspace.id)
-        )
-        for binding in bindings:
-            selected.update(binding.conversation_tool_ids)
+                raise UnknownCapabilityPackError(sorted(unresolved)[0])
+            selected.add("extensions.install")
+            selected.update(tool.tool_id for tool in self.mcp_management.active_tools(workspace.id))
+            bindings = (
+                connector_bindings
+                if connector_bindings is not None
+                else await self._active_connector_bindings(workspace.id)
+            )
+            for binding in bindings:
+                selected.update(
+                    definition.tool_id
+                    for definition in COMPOSIO_TOOL_DEFINITIONS
+                    if definition.connector is binding.connector
+                )
+        if tool_mode is ToolMode.ASK:
+            read_effects = {ToolEffect.OBSERVE, ToolEffect.NETWORK_READ}
+            selected = {
+                tool_id
+                for tool_id in selected
+                if (tool := self.catalog.get(tool_id)) is None or tool.effect in read_effects
+            }
         return frozenset(selected)
 
-    async def _active_conversation_bindings(
-        self, workspace_id: str
-    ) -> tuple[ConnectorBinding, ...]:
+    async def _active_connector_bindings(self, workspace_id: str) -> tuple[ConnectorBinding, ...]:
         active: list[ConnectorBinding] = []
+        tool_connectors = {definition.connector for definition in COMPOSIO_TOOL_DEFINITIONS}
         for binding in await self.connector_repository.list_bindings(workspace_id):
-            if not binding.enabled or not binding.conversation_tool_ids:
+            if not binding.enabled or binding.connector not in tool_connectors:
                 continue
             account = await self.connector_repository.get_account_by_id(
                 workspace_id, binding.account_id
@@ -1379,19 +1400,18 @@ class RuntimeContainer:
         self,
         workspace: Workspace,
         bindings: tuple[ConnectorBinding, ...],
+        *,
+        tool_mode: ToolMode,
     ) -> Workspace:
-        from weatherflow.connectors.tools import COMPOSIO_TOOLS_BY_ID
-
         scopes = set(workspace.granted_scopes)
         scopes.update(await self.mcp_management.effective_scopes(workspace.id))
         for binding in bindings:
-            for tool_id in binding.conversation_tool_ids:
-                definition = COMPOSIO_TOOLS_BY_ID.get(tool_id)
-                if (
-                    definition is not None
-                    and definition.connector is binding.connector
-                    and definition.required_scope in binding.granted_scopes
-                ):
+            for definition in COMPOSIO_TOOL_DEFINITIONS:
+                if definition.connector is not binding.connector:
+                    continue
+                if tool_mode is ToolMode.ASK and definition.effect is not ToolEffect.NETWORK_READ:
+                    continue
+                if definition.required_scope in binding.granted_scopes:
                     scopes.add(definition.required_scope)
         return workspace.model_copy(update={"granted_scopes": frozenset(scopes)})
 

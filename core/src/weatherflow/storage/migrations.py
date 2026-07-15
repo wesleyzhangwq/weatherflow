@@ -674,4 +674,97 @@ MIGRATIONS = (
             ON run_controls(run_id, status, created_at, id);
         """,
     ),
+    Migration(
+        version=22,
+        sql="""
+        ALTER TABLE runs
+            ADD COLUMN tool_mode TEXT NOT NULL DEFAULT 'ask'
+            CHECK(tool_mode IN ('ask', 'bypass'));
+
+        UPDATE runs
+        SET tool_mode = 'bypass'
+        WHERE EXISTS (
+            SELECT 1
+            FROM capability_snapshots AS snapshot,
+                 json_each(snapshot.tools) AS tool
+            WHERE snapshot.run_id = runs.id
+              AND json_extract(tool.value, '$.effect')
+                  NOT IN ('observe', 'network_read')
+        );
+
+        CREATE TABLE run_connector_routes_v22 (
+            run_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            external_account_id TEXT NOT NULL,
+            bound_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, connector),
+            FOREIGN KEY(run_id, workspace_id)
+                REFERENCES runs(id, workspace_id) ON DELETE CASCADE
+        );
+
+        INSERT INTO run_connector_routes_v22(
+            run_id, workspace_id, connector, account_id,
+            external_account_id, bound_at
+        )
+        SELECT
+            run_id, workspace_id, connector, account_id,
+            external_account_id, bound_at
+        FROM run_connector_routes;
+
+        DROP TABLE run_connector_routes;
+        ALTER TABLE run_connector_routes_v22 RENAME TO run_connector_routes;
+        CREATE INDEX idx_run_connector_routes_workspace
+            ON run_connector_routes(workspace_id, bound_at, run_id);
+        """,
+    ),
+    Migration(
+        version=23,
+        sql="""
+        CREATE TABLE connector_bindings_v23 (
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            connector TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            auto_fetch_enabled INTEGER NOT NULL,
+            next_sync_at TEXT NOT NULL,
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(workspace_id, connector),
+            FOREIGN KEY(workspace_id, connector, account_id)
+                REFERENCES connector_accounts(workspace_id, connector, id)
+                ON DELETE CASCADE
+        );
+
+        INSERT INTO connector_bindings_v23(
+            workspace_id, connector, account_id, enabled, auto_fetch_enabled,
+            next_sync_at, config, version, created_at, updated_at
+        )
+        SELECT
+            workspace_id,
+            connector,
+            account_id,
+            enabled,
+            auto_fetch_enabled,
+            next_sync_at,
+            json_remove(
+                config,
+                '$.conversation_access',
+                '$.conversation_tool_ids',
+                '$.conversation_grant_revision'
+            ),
+            version,
+            created_at,
+            updated_at
+        FROM connector_bindings;
+
+        DROP TABLE connector_bindings;
+        ALTER TABLE connector_bindings_v23 RENAME TO connector_bindings;
+        CREATE INDEX idx_connector_bindings_due
+            ON connector_bindings(enabled, auto_fetch_enabled, next_sync_at);
+        """,
+    ),
 )

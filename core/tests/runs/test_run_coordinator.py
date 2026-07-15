@@ -10,6 +10,7 @@ from weatherflow.runs import (
     RunIdempotencyConflict,
     RunRepository,
     RunStatus,
+    ToolMode,
 )
 from weatherflow.storage import Database
 
@@ -45,6 +46,7 @@ async def test_create_run_is_idempotent_and_audited(tmp_path: Path) -> None:
     assert events[0].payload == {
         "client_request_id": "request-1",
         "workspace_id": "workspace-1",
+        "tool_mode": "ask",
         "status": "queued",
     }
 
@@ -84,6 +86,26 @@ async def test_idempotency_key_cannot_cross_session_boundary(tmp_path: Path) -> 
         )
 
     assert first.session_id is None
+
+
+async def test_idempotency_key_cannot_change_frozen_tool_mode(tmp_path: Path) -> None:
+    _, _, _ledger, coordinator = await make_coordinator(tmp_path)
+    first = await coordinator.create_run(
+        client_request_id="mode-bound-request",
+        user_intent="Read safely",
+        workspace_id="workspace-1",
+        tool_mode=ToolMode.ASK,
+    )
+
+    with pytest.raises(RunIdempotencyConflict):
+        await coordinator.create_run(
+            client_request_id="mode-bound-request",
+            user_intent="Try wider tools",
+            workspace_id="workspace-1",
+            tool_mode=ToolMode.BYPASS,
+        )
+
+    assert first.tool_mode is ToolMode.ASK
 
 
 async def test_transition_is_versioned_and_audited(tmp_path: Path) -> None:

@@ -38,12 +38,6 @@ class ConnectionPhase(StrEnum):
     REVOKED = "revoked"
 
 
-class ConversationAccess(StrEnum):
-    DISABLED = "disabled"
-    READ = "read"
-    READ_WRITE = "read_write"
-
-
 class OAuthSetup(StrEnum):
     MANAGED = "managed"
     BRING_YOUR_OWN = "bring_your_own"
@@ -76,6 +70,9 @@ CONNECTOR_DEFINITIONS: dict[ConnectorKind, ConnectorDefinition] = {
         ),
         reviewed_auth_actions=(
             "GITHUB_GET_THE_AUTHENTICATED_USER",
+            "GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER",
+            "GITHUB_SEARCH_COMMITS",
+            "GITHUB_LIST_COMMITS",
             "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS",
             "GITHUB_GET_A_PULL_REQUEST",
             "GITHUB_LIST_BRANCHES",
@@ -418,9 +415,6 @@ class ConnectorBinding(BaseModel):
     auto_fetch_enabled: bool = True
     interval_minutes: int = Field(default=60, ge=15, le=1440)
     granted_scopes: frozenset[str]
-    conversation_access: ConversationAccess = ConversationAccess.DISABLED
-    conversation_tool_ids: frozenset[str] = frozenset()
-    conversation_grant_revision: int = Field(default=0, ge=0)
     last_sync_at: datetime | None = None
     next_sync_at: datetime
     last_error_code: str | None = Field(default=None, max_length=100)
@@ -465,24 +459,6 @@ class ConnectorBinding(BaseModel):
             }
         )
 
-    def with_conversation_access(
-        self,
-        access: ConversationAccess,
-        *,
-        tool_ids: frozenset[str],
-        now: datetime | None = None,
-    ) -> "ConnectorBinding":
-        observed = now or datetime.now(UTC)
-        return self.model_copy(
-            update={
-                "conversation_access": access,
-                "conversation_tool_ids": tool_ids,
-                "conversation_grant_revision": self.conversation_grant_revision + 1,
-                "version": self.version + 1,
-                "updated_at": observed,
-            }
-        )
-
 
 class SourceItem(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -523,8 +499,7 @@ class ConnectorStatus(BaseModel):
     last_sync_at: datetime | None = None
     next_sync_at: datetime | None = None
     last_error_code: str | None = None
-    conversation_access: ConversationAccess = ConversationAccess.DISABLED
-    allowed_tool_ids: tuple[str, ...] = ()
+    available_tool_ids: tuple[str, ...] = ()
     attempt_id: str | None = None
     attempt_expires_at: datetime | None = None
 
@@ -547,5 +522,4 @@ class RunConnectorRoute(BaseModel):
     connector: ConnectorKind
     account_id: str
     external_account_id: str = Field(min_length=1, max_length=256)
-    conversation_grant_revision: int = Field(ge=1)
     bound_at: datetime

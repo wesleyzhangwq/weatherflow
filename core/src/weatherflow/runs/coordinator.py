@@ -1,7 +1,7 @@
 import aiosqlite
 
 from weatherflow.events import Actor, Event, EventLedger
-from weatherflow.runs.models import Run, RunBudget, RunStatus
+from weatherflow.runs.models import Run, RunBudget, RunStatus, ToolMode
 from weatherflow.runs.repository import RunNotFoundError, RunRepository
 from weatherflow.sessions import ConversationSessionRepository
 from weatherflow.storage import Database
@@ -31,6 +31,7 @@ class RunCoordinator:
         user_intent: str,
         workspace_id: str,
         session_id: str | None = None,
+        tool_mode: ToolMode = ToolMode.ASK,
         budget: RunBudget | None = None,
     ) -> Run:
         existing = await self.repository.get_by_client_request_id(client_request_id)
@@ -39,6 +40,7 @@ class RunCoordinator:
                 existing,
                 workspace_id=workspace_id,
                 session_id=session_id,
+                tool_mode=tool_mode,
             )
             return existing
         run = Run.new(
@@ -46,6 +48,7 @@ class RunCoordinator:
             user_intent=user_intent,
             workspace_id=workspace_id,
             session_id=session_id,
+            tool_mode=tool_mode,
             budget=budget,
         )
         async with self.database.transaction() as connection:
@@ -57,6 +60,7 @@ class RunCoordinator:
                     existing,
                     workspace_id=workspace_id,
                     session_id=session_id,
+                    tool_mode=tool_mode,
                 )
                 return existing
             if session_id is not None:
@@ -79,6 +83,7 @@ class RunCoordinator:
             payload = {
                 "client_request_id": client_request_id,
                 "workspace_id": workspace_id,
+                "tool_mode": tool_mode.value,
                 "status": run.status.value,
             }
             if session_id is not None:
@@ -102,8 +107,13 @@ class RunCoordinator:
         *,
         workspace_id: str,
         session_id: str | None,
+        tool_mode: ToolMode,
     ) -> None:
-        if existing.workspace_id != workspace_id or existing.session_id != session_id:
+        if (
+            existing.workspace_id != workspace_id
+            or existing.session_id != session_id
+            or existing.tool_mode is not tool_mode
+        ):
             raise RunIdempotencyConflict(existing.client_request_id)
 
     async def transition(

@@ -25,6 +25,7 @@ class ReadGateway(Protocol):
         *,
         action: str,
         connected_account_id: str,
+        user_id: str,
         arguments: dict[str, Any],
     ) -> Any: ...
 
@@ -36,12 +37,14 @@ class ConnectorSyncService:
         repository: ConnectorRepository,
         ledger: EventLedger,
         gateway: ReadGateway,
+        user_id: str,
         now: Callable[[], datetime] | None = None,
         timezone: str = "UTC",
     ) -> None:
         self.repository = repository
         self.ledger = ledger
         self.gateway = gateway
+        self.user_id = user_id
         self.now = now or (lambda: datetime.now(UTC))
         self.timezone = timezone
 
@@ -126,6 +129,7 @@ class ConnectorSyncService:
             profile = await self.gateway.execute_read_action(
                 action=definition.read_actions[0],
                 connected_account_id=connected_account_id,
+                user_id=self.user_id,
                 arguments={},
             )
             login = _find_string(profile, ("login", "username"))
@@ -134,6 +138,7 @@ class ConnectorSyncService:
             data = await self.gateway.execute_read_action(
                 action=definition.read_actions[1],
                 connected_account_id=connected_account_id,
+                user_id=self.user_id,
                 arguments={
                     "q": f"involves:{login} updated:>{(observed - timedelta(days=7)).date()}",
                     "sort": "updated",
@@ -146,6 +151,7 @@ class ConnectorSyncService:
             data = await self.gateway.execute_read_action(
                 action=definition.read_actions[0],
                 connected_account_id=connected_account_id,
+                user_id=self.user_id,
                 arguments={
                     "query": "is:unread -in:spam -in:trash",
                     "max_results": 50,
@@ -156,6 +162,7 @@ class ConnectorSyncService:
             data = await self.gateway.execute_read_action(
                 action=definition.read_actions[0],
                 connected_account_id=connected_account_id,
+                user_id=self.user_id,
                 arguments={
                     "calendarId": "primary",
                     "timeMin": observed.isoformat(),

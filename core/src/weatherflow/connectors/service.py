@@ -17,10 +17,10 @@ from weatherflow.connectors.models import (
     ConnectorBinding,
     ConnectorKind,
     ConnectorStatus,
-    ConversationAccess,
     OAuthSetup,
 )
 from weatherflow.connectors.repository import ConnectorRepository
+from weatherflow.connectors.tools import COMPOSIO_TOOL_DEFINITIONS
 from weatherflow.events import Actor, Event, EventLedger, Sensitivity
 from weatherflow.extensions import (
     CredentialRef,
@@ -42,6 +42,14 @@ class ConnectorGateway(Protocol):
 
     async def get_account(self, account_id: str) -> ComposioRemoteAccount: ...
 
+    async def ensure_action_allowlist(
+        self,
+        connector: ConnectorKind,
+        *,
+        connected_account_id: str,
+        user_id: str,
+    ) -> None: ...
+
     async def revoke(self, account_id: str) -> None: ...
 
     async def execute_read_action(
@@ -49,6 +57,7 @@ class ConnectorGateway(Protocol):
         *,
         action: str,
         connected_account_id: str,
+        user_id: str,
         arguments: dict[str, Any],
     ) -> Any: ...
 
@@ -58,6 +67,7 @@ class ConnectorGateway(Protocol):
         action: str,
         version: str,
         connected_account_id: str,
+        user_id: str,
         arguments: dict[str, Any],
     ) -> Any: ...
 
@@ -156,6 +166,12 @@ class ConnectorService:
             remote = remote.model_copy(update={"phase": ConnectionPhase.ERROR})
         if remote.phase is ConnectionPhase.WAITING_USER:
             return attempt
+        if remote.phase is ConnectionPhase.ACTIVE:
+            await self.gateway.ensure_action_allowlist(
+                attempt.connector,
+                connected_account_id=attempt.external_account_id,
+                user_id=self.installation_id,
+            )
         updated_attempt, binding, changed = await self.repository.finalize_attempt(
             attempt.id,
             phase=remote.phase,
@@ -242,11 +258,12 @@ class ConnectorService:
                     last_sync_at=binding.last_sync_at if binding else None,
                     next_sync_at=binding.next_sync_at if binding else None,
                     last_error_code=binding.last_error_code if binding else None,
-                    conversation_access=(
-                        binding.conversation_access if binding else ConversationAccess.DISABLED
-                    ),
-                    allowed_tool_ids=(
-                        tuple(sorted(binding.conversation_tool_ids)) if binding else ()
+                    available_tool_ids=tuple(
+                        sorted(
+                            tool.tool_id
+                            for tool in COMPOSIO_TOOL_DEFINITIONS
+                            if tool.connector is connector
+                        )
                     ),
                     attempt_id=resumable_attempt.id if resumable_attempt else None,
                     attempt_expires_at=(
@@ -287,59 +304,6 @@ class ConnectorService:
                 "workspace_id": workspace_id,
                 "auto_fetch_enabled": auto_fetch_enabled,
                 "interval_minutes": interval_minutes,
-            },
-        )
-        return updated
-
-    async def update_conversation_access(
-        self,
-        workspace_id: str,
-        connector: ConnectorKind,
-        access: ConversationAccess,
-    ) -> ConnectorBinding:
-        from weatherflow.capabilities import ToolEffect
-        from weatherflow.connectors.tools import COMPOSIO_TOOL_DEFINITIONS
-
-        binding = await self.repository.get_binding(workspace_id, connector)
-        if binding is None or not binding.enabled:
-            raise LookupError(f"connector binding unavailable: {connector.value}")
-        definitions = tuple(
-            definition
-            for definition in COMPOSIO_TOOL_DEFINITIONS
-            if definition.connector is connector
-        )
-        if (
-            access is not ConversationAccess.DISABLED
-            and not CONNECTOR_DEFINITIONS[connector].conversation_tools_supported
-        ):
-            raise PermissionError(f"conversation tools unsupported: {connector.value}")
-        if access is ConversationAccess.DISABLED:
-            selected = frozenset()
-        elif access is ConversationAccess.READ:
-            selected = frozenset(
-                definition.tool_id
-                for definition in definitions
-                if definition.effect is ToolEffect.NETWORK_READ
-            )
-        else:
-            selected = frozenset(definition.tool_id for definition in definitions)
-        required_scopes = {
-            definition.required_scope
-            for definition in definitions
-            if definition.tool_id in selected
-        }
-        if not required_scopes.issubset(binding.granted_scopes):
-            raise PermissionError("connector must be reauthorized for requested tools")
-        updated = binding.with_conversation_access(access, tool_ids=selected)
-        await self.repository.save_binding(updated)
-        await self._event(
-            "connector.conversation_access_changed",
-            connector,
-            {
-                "workspace_id": workspace_id,
-                "access": access.value,
-                "tool_ids": sorted(selected),
-                "grant_revision": updated.conversation_grant_revision,
             },
         )
         return updated

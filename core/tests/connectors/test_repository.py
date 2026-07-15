@@ -11,7 +11,6 @@ from weatherflow.connectors import (
     ConnectorKind,
     ConnectorRepository,
     ConnectorSnapshot,
-    ConversationAccess,
     SourceItem,
 )
 from weatherflow.extensions import CredentialRef
@@ -237,10 +236,6 @@ async def test_run_connector_route_rejects_mismatched_run_workspace(tmp_path: Pa
         connector=ConnectorKind.GITHUB,
         account_id=account.id,
         now=now,
-    ).with_conversation_access(
-        ConversationAccess.READ,
-        tool_ids=frozenset({"composio.github.get_authenticated_user"}),
-        now=now,
     )
     await repository.save_account(account)
     await repository.save_binding(binding)
@@ -255,10 +250,10 @@ async def test_run_connector_route_rejects_mismatched_run_workspace(tmp_path: Pa
         async with database.transaction() as connection:
             await connection.execute(
                 """
-                INSERT INTO run_connector_routes(
-                    run_id, workspace_id, connector, account_id,
-                    external_account_id, conversation_grant_revision, bound_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO run_connector_routes(
+                        run_id, workspace_id, connector, account_id,
+                        external_account_id, bound_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.id,
@@ -266,7 +261,6 @@ async def test_run_connector_route_rejects_mismatched_run_workspace(tmp_path: Pa
                     ConnectorKind.GITHUB.value,
                     account.id,
                     account.external_account_id,
-                    binding.conversation_grant_revision,
                     now.isoformat(),
                 ),
             )

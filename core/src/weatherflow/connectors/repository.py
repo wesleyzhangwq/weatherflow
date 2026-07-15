@@ -465,7 +465,7 @@ class ConnectorRepository:
         *,
         run_id: str,
         workspace_id: str,
-        bindings: list[ConnectorBinding],
+        bindings: list[ConnectorBinding] | tuple[ConnectorBinding, ...],
     ) -> tuple[RunConnectorRoute, ...]:
         routes: list[RunConnectorRoute] = []
         async with self.database.transaction() as connection:
@@ -486,11 +486,7 @@ class ConnectorRepository:
             if existing:
                 return tuple(self._route_from_row(row) for row in existing)
             for binding in bindings:
-                if (
-                    binding.workspace_id != workspace_id
-                    or not binding.enabled
-                    or not binding.conversation_tool_ids
-                ):
+                if binding.workspace_id != workspace_id or not binding.enabled:
                     continue
                 account_row = await (
                     await connection.execute(
@@ -512,15 +508,14 @@ class ConnectorRepository:
                     connector=binding.connector,
                     account_id=account.id,
                     external_account_id=account.external_account_id,
-                    conversation_grant_revision=binding.conversation_grant_revision,
                     bound_at=datetime.now().astimezone(),
                 )
                 await connection.execute(
                     """
                     INSERT INTO run_connector_routes(
                         run_id, workspace_id, connector, account_id,
-                        external_account_id, conversation_grant_revision, bound_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        external_account_id, bound_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         route.run_id,
@@ -528,7 +523,6 @@ class ConnectorRepository:
                         route.connector.value,
                         route.account_id,
                         route.external_account_id,
-                        route.conversation_grant_revision,
                         route.bound_at.isoformat(),
                     ),
                 )
@@ -634,19 +628,15 @@ class ConnectorRepository:
                     raise PermissionError("connector identity is no longer active")
                 binding = ConnectorBinding.model_validate_json(binding_row["config"])
                 account = ConnectorAccount.model_validate_json(account_row["config"])
-                tool_ids = {definition.tool_id for definition in definitions}
                 required_scopes = {definition.required_scope for definition in definitions}
                 if (
                     not binding.enabled
                     or account.phase is not ConnectionPhase.ACTIVE
                     or binding.account_id != parent_route.account_id
                     or account.external_account_id != parent_route.external_account_id
-                    or binding.conversation_grant_revision
-                    != parent_route.conversation_grant_revision
-                    or not tool_ids.issubset(binding.conversation_tool_ids)
                     or not required_scopes.issubset(binding.granted_scopes)
                 ):
-                    raise PermissionError("connector identity or conversation grant changed")
+                    raise PermissionError("connector identity or scope changed")
                 route = parent_route.model_copy(
                     update={
                         "run_id": child_run_id,
@@ -657,8 +647,8 @@ class ConnectorRepository:
                     """
                     INSERT INTO run_connector_routes(
                         run_id, workspace_id, connector, account_id,
-                        external_account_id, conversation_grant_revision, bound_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        external_account_id, bound_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(run_id, connector) DO NOTHING
                     """,
                     (
@@ -667,7 +657,6 @@ class ConnectorRepository:
                         route.connector.value,
                         route.account_id,
                         route.external_account_id,
-                        route.conversation_grant_revision,
                         route.bound_at.isoformat(),
                     ),
                 )
@@ -687,7 +676,6 @@ class ConnectorRepository:
                     stored.workspace_id != route.workspace_id
                     or stored.account_id != route.account_id
                     or stored.external_account_id != route.external_account_id
-                    or stored.conversation_grant_revision != route.conversation_grant_revision
                 ):
                     raise PermissionError("child connector route conflicts with parent identity")
                 cloned.append(stored)
@@ -705,7 +693,6 @@ class ConnectorRepository:
             connector=ConnectorKind(str(row["connector"])),
             account_id=str(row["account_id"]),
             external_account_id=str(row["external_account_id"]),
-            conversation_grant_revision=int(row["conversation_grant_revision"]),
             bound_at=datetime.fromisoformat(str(row["bound_at"])),
         )
 

@@ -14,6 +14,7 @@ from weatherflow.extensions import (
     PackageStore,
     package_install_tool_spec,
 )
+from weatherflow.runs import ToolMode
 from weatherflow.runtime import DelegationTurn, FinalTurn, ToolCallTurn
 from weatherflow.storage import Database
 from weatherflow.workspaces import Workspace, WorkspaceRepository
@@ -296,6 +297,7 @@ async def test_model_driven_install_parks_then_updates_workspace_once(
     run, waiting = await container.submit_run(
         user_intent="Install the selected release guidance",
         workspace_id=workspace.id,
+        tool_mode=ToolMode.BYPASS,
     )
     before = await container.workspaces.get(workspace.id)
     assert waiting is not None and waiting.approval_id is not None

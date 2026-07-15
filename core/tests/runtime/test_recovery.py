@@ -121,7 +121,6 @@ async def test_missing_provider_is_recorded_for_new_run(tmp_path: Path) -> None:
     degraded = [event for event in events if event.type == "provider.degraded"]
     assert len(degraded) == 1
     assert degraded[0].payload["tool_ids"] == [
-        "calendar.create_event",
         "calendar.list_events",
         "personal.prepare_meeting",
         "personal.propose_schedule",

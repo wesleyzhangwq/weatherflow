@@ -2,6 +2,7 @@ export type WeatherScene = "clear" | "fair" | "fog" | "storm" | "still" | "night
 export type RunStatus =
   | "queued" | "planning" | "running" | "waiting_approval" | "waiting_user"
   | "paused" | "needs_review" | "succeeded" | "failed" | "cancelled";
+export type ToolMode = "ask" | "bypass";
 
 export interface WeatherPresentation {
   scene: WeatherScene;
@@ -62,6 +63,7 @@ export interface Run {
   id: string;
   workspace_id: string;
   session_id?: string | null;
+  tool_mode?: ToolMode;
   user_intent: string;
   status: RunStatus;
   result_summary: string | null;
@@ -151,7 +153,6 @@ export type ConnectorKind =
   | "microsoft_teams" | "linear" | "jira" | "confluence" | "dropbox"
   | "gitlab" | "discord" | "trello" | "asana" | "airtable" | "clickup";
 export type ConnectionPhase = "waiting_user" | "active" | "expired" | "error" | "revoked";
-export type ConnectorConversationAccess = "disabled" | "read" | "read_write";
 export type OAuthSetup = "managed" | "bring_your_own" | "unknown";
 export interface ConnectorStatus {
   connector: ConnectorKind;
@@ -172,8 +173,7 @@ export interface ConnectorStatus {
   last_error_code: string | null;
   attempt_id: string | null;
   attempt_expires_at: string | null;
-  conversation_access: ConnectorConversationAccess;
-  allowed_tool_ids: string[];
+  available_tool_ids: string[];
 }
 export interface ConnectHandoff { attempt_id: string; connect_url: string; expires_at: string }
 export interface ConnectionAttempt {

@@ -6,6 +6,7 @@ from weatherflow.api.app import create_app
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.capabilities import CapabilityCatalog, ToolEffect, ToolSpec
 from weatherflow.config import Settings
+from weatherflow.runs import ToolMode
 from weatherflow.runtime import FinalTurn, ToolCallTurn, ToolExecutionResult
 from weatherflow.workspaces import Workspace
 
@@ -66,6 +67,7 @@ async def test_approval_decision_resumes_run_and_artifact_is_readable(
         user_intent="Ship v3",
         client_request_id="request-1",
         workspace_id=workspace.id,
+        tool_mode=ToolMode.BYPASS,
     )
     assert waiting is not None and waiting.approval_id is not None
     transport = ASGITransport(app=create_app(container=container))

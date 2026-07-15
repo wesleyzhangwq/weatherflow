@@ -106,7 +106,8 @@ def test_binding_interval_and_snapshot_size_are_bounded() -> None:
     )
     assert binding.interval_minutes == 60
     assert binding.granted_scopes == frozenset({"gmail:read", "gmail:write"})
-    assert binding.conversation_tool_ids == frozenset()
+    assert "conversation_access" not in ConnectorBinding.model_fields
+    assert "conversation_tool_ids" not in ConnectorBinding.model_fields
 
     with pytest.raises(ValidationError):
         binding.model_copy(update={"interval_minutes": 1}, deep=True).__class__.model_validate(

@@ -11,6 +11,7 @@ from weatherflow.config import Settings
 from weatherflow.eval.models import TrajectoryReport
 from weatherflow.eval.trajectory import FlagshipTrajectoryEvaluator
 from weatherflow.rhythm import CheckInSignal
+from weatherflow.runs import ToolMode
 from weatherflow.runtime import DelegationTurn, FinalTurn, ToolCallTurn
 from weatherflow.workspaces import Workspace
 
@@ -214,6 +215,7 @@ async def run_flagship_fixture(data_dir: Path) -> FlagshipFixtureResult:
         ),
         client_request_id="flagship-release-v3",
         workspace_id=workspace.id,
+        tool_mode=ToolMode.BYPASS,
     )
     if waiting is None or waiting.approval_id is None:
         raise RuntimeError("flagship trajectory did not park for approval")
@@ -237,6 +239,7 @@ async def run_flagship_fixture(data_dir: Path) -> FlagshipFixtureResult:
         user_intent="retry must reuse the durable Run",
         client_request_id="flagship-release-v3",
         workspace_id=workspace.id,
+        tool_mode=ToolMode.BYPASS,
     )
     after_replay = len(github.release_calls)
     report = await FlagshipTrajectoryEvaluator().evaluate(

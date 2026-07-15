@@ -47,13 +47,7 @@ async def test_relevant_memory_is_context_only_and_cannot_widen_authority(
     assert episode.summary in prompt
     snapshot = await container.snapshots.get_by_run_id(run.id)
     assert snapshot is not None
-    assert {tool.tool_id for tool in snapshot.tools} == {
-        "developer.git_status",
-        "developer.read_file",
-        "developer.run_command",
-        "developer.write_artifact",
-        "developer.write_file",
-    }
+    assert {tool.tool_id for tool in snapshot.tools} == {"developer.read_file"}
     checkpoint = await container.checkpoints.get(run.id)
     assert checkpoint is not None
     assert checkpoint.state["memory_context"][0]["source_event_ids"] == [source.id]

@@ -29,6 +29,13 @@ class RunStatus(StrEnum):
             raise InvalidTransitionError(f"{self.value} -> {target.value}")
 
 
+class ToolMode(StrEnum):
+    """Run-scoped visibility filter for the reviewed tool catalog."""
+
+    ASK = "ask"
+    BYPASS = "bypass"
+
+
 TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.QUEUED: frozenset({RunStatus.PLANNING, RunStatus.NEEDS_REVIEW, RunStatus.CANCELLED}),
     RunStatus.PLANNING: frozenset(
@@ -82,6 +89,7 @@ class Run(BaseModel):
     user_intent: str
     workspace_id: str
     session_id: str | None = None
+    tool_mode: ToolMode = ToolMode.ASK
     status: RunStatus
     version: int
     created_at: datetime
@@ -103,6 +111,7 @@ class Run(BaseModel):
         user_intent: str,
         workspace_id: str,
         session_id: str | None = None,
+        tool_mode: ToolMode = ToolMode.ASK,
         budget: RunBudget | None = None,
     ) -> "Run":
         now = datetime.now(UTC)
@@ -112,6 +121,7 @@ class Run(BaseModel):
             user_intent=user_intent,
             workspace_id=workspace_id,
             session_id=session_id,
+            tool_mode=tool_mode,
             status=RunStatus.QUEUED,
             version=0,
             created_at=now,

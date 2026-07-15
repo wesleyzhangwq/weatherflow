@@ -11,35 +11,38 @@ from pydantic import BaseModel, ConfigDict, Field
 from weatherflow.connectors.models import ConnectionPhase, ConnectorKind, OAuthSetup
 from weatherflow.extensions import CredentialBroker, CredentialRef
 
-# Reviewed against Composio's public toolkit catalog on 2026-07-14. Every
+# Reviewed against Composio's project toolkit catalog on 2026-07-15. Every
 # provider action must name its frozen schema version explicitly. Upgrades are
 # deliberate so an upstream schema change cannot silently alter an existing
 # execution contract.
 COMPOSIO_ACTION_VERSIONS = MappingProxyType(
     {
-        "GITHUB_GET_THE_AUTHENTICATED_USER": "20260703_00",
-        "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260703_00",
-        "GITHUB_GET_A_PULL_REQUEST": "20260703_00",
-        "GITHUB_LIST_BRANCHES": "20260703_00",
-        "GITHUB_CREATE_AN_ISSUE": "20260703_00",
-        "GITHUB_CREATE_A_PULL_REQUEST": "20260703_00",
-        "GMAIL_FETCH_EMAILS": "20260703_00",
-        "GMAIL_CREATE_EMAIL_DRAFT": "20260703_00",
-        "GMAIL_SEND_EMAIL": "20260703_00",
-        "GOOGLECALENDAR_EVENTS_LIST": "20260703_00",
-        "GOOGLECALENDAR_FIND_FREE_SLOTS": "20260703_00",
-        "GOOGLECALENDAR_CREATE_EVENT": "20260703_00",
-        "GOOGLECALENDAR_PATCH_EVENT": "20260703_00",
-        "GOOGLECALENDAR_DELETE_EVENT": "20260703_00",
+        "GITHUB_GET_THE_AUTHENTICATED_USER": "20260713_00",
+        "GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER": "20260713_00",
+        "GITHUB_SEARCH_COMMITS": "20260713_00",
+        "GITHUB_LIST_COMMITS": "20260713_00",
+        "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260713_00",
+        "GITHUB_GET_A_PULL_REQUEST": "20260713_00",
+        "GITHUB_LIST_BRANCHES": "20260713_00",
+        "GITHUB_CREATE_AN_ISSUE": "20260713_00",
+        "GITHUB_CREATE_A_PULL_REQUEST": "20260713_00",
+        "GMAIL_FETCH_EMAILS": "20260702_01",
+        "GMAIL_CREATE_EMAIL_DRAFT": "20260702_01",
+        "GMAIL_SEND_EMAIL": "20260702_01",
+        "GOOGLECALENDAR_EVENTS_LIST": "20260623_00",
+        "GOOGLECALENDAR_FIND_FREE_SLOTS": "20260623_00",
+        "GOOGLECALENDAR_CREATE_EVENT": "20260623_00",
+        "GOOGLECALENDAR_PATCH_EVENT": "20260623_00",
+        "GOOGLECALENDAR_DELETE_EVENT": "20260623_00",
     }
 )
 
 _PINNED_READ_ACTION_VERSIONS = MappingProxyType(
     {
-        "GITHUB_GET_THE_AUTHENTICATED_USER": "20260703_00",
-        "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260703_00",
-        "GMAIL_FETCH_EMAILS": "20260703_00",
-        "GOOGLECALENDAR_EVENTS_LIST": "20260703_00",
+        "GITHUB_GET_THE_AUTHENTICATED_USER": "20260713_00",
+        "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260713_00",
+        "GMAIL_FETCH_EMAILS": "20260702_01",
+        "GOOGLECALENDAR_EVENTS_LIST": "20260623_00",
     }
 )
 
@@ -216,11 +219,84 @@ class ComposioGateway:
             display_name=display_name,
         )
 
+    async def ensure_action_allowlist(
+        self,
+        connector: ConnectorKind,
+        *,
+        connected_account_id: str,
+        user_id: str,
+    ) -> None:
+        safe_account_id = _safe_identifier(connected_account_id)
+        safe_user_id = _safe_identifier(user_id)
+        expected_toolkit = _definition(connector)
+        approved_actions = _approved_actions(connector)
+        if not approved_actions:
+            raise ComposioGatewayError(ComposioErrorCode.AUTH_CONFIG_REQUIRED)
+
+        async def operation(key: str) -> None:
+            account = await self._request(
+                key,
+                "GET",
+                f"/api/v3/connected_accounts/{safe_account_id}",
+            )
+            toolkit_value = account.get("toolkit")
+            toolkit = (
+                toolkit_value.get("slug") if isinstance(toolkit_value, dict) else toolkit_value
+            )
+            if (
+                account.get("id") != safe_account_id
+                or account.get("user_id") != safe_user_id
+                or toolkit != expected_toolkit
+                or _normalize_phase(str(account.get("status", ""))) is not ConnectionPhase.ACTIVE
+            ):
+                raise ComposioGatewayError(ComposioErrorCode.AUTH)
+            account_auth_config = account.get("auth_config")
+            if not isinstance(account_auth_config, dict):
+                raise ComposioGatewayError(ComposioErrorCode.UPSTREAM)
+            auth_config_id = _identifier(account_auth_config)
+            if auth_config_id is None:
+                raise ComposioGatewayError(ComposioErrorCode.UPSTREAM)
+            safe_auth_config_id = _safe_identifier(auth_config_id)
+            auth_config = await self._request(
+                key,
+                "GET",
+                f"/api/v3/auth_configs/{safe_auth_config_id}",
+            )
+            current_actions = _string_set(auth_config.get("restrict_to_following_tools"))
+            required_actions = frozenset(approved_actions)
+            if required_actions.issubset(current_actions):
+                return
+            if (
+                auth_config.get("is_composio_managed") is not True
+                or auth_config.get("type") != "default"
+            ):
+                raise ComposioGatewayError(ComposioErrorCode.AUTH_CONFIG_REQUIRED)
+            await self._request(
+                key,
+                "PATCH",
+                f"/api/v3/auth_configs/{safe_auth_config_id}",
+                json={
+                    "type": "default",
+                    "restrict_to_following_tools": list(approved_actions),
+                },
+            )
+            verified = await self._request(
+                key,
+                "GET",
+                f"/api/v3/auth_configs/{safe_auth_config_id}",
+            )
+            verified_actions = _string_set(verified.get("restrict_to_following_tools"))
+            if not required_actions.issubset(verified_actions):
+                raise ComposioGatewayError(ComposioErrorCode.UPSTREAM)
+
+        await self._with_key(operation)
+
     async def execute_read_action(
         self,
         *,
         action: str,
         connected_account_id: str,
+        user_id: str,
         arguments: dict[str, Any],
     ) -> Any:
         _safe_action(action)
@@ -231,6 +307,7 @@ class ComposioGateway:
             action=action,
             version=version,
             connected_account_id=connected_account_id,
+            user_id=user_id,
             arguments=arguments,
         )
 
@@ -240,6 +317,7 @@ class ComposioGateway:
         action: str,
         version: str,
         connected_account_id: str,
+        user_id: str,
         arguments: dict[str, Any],
     ) -> Any:
         _safe_action(action)
@@ -247,6 +325,7 @@ class ComposioGateway:
         if expected_version is None or version != expected_version:
             raise ComposioGatewayError(ComposioErrorCode.INPUT)
         safe_account_id = _safe_identifier(connected_account_id)
+        safe_user_id = _safe_identifier(user_id)
         payload = await self._with_key(
             lambda key: self._request(
                 key,
@@ -254,6 +333,7 @@ class ComposioGateway:
                 f"/api/v3.1/tools/execute/{action}",
                 json={
                     "connected_account_id": safe_account_id,
+                    "user_id": safe_user_id,
                     "version": version,
                     "arguments": arguments,
                 },
@@ -320,6 +400,12 @@ def _approved_actions(connector: ConnectorKind) -> tuple[str, ...]:
 def _identifier(payload: dict[str, Any]) -> str | None:
     value = payload.get("id") or payload.get("nanoid")
     return value if isinstance(value, str) and value else None
+
+
+def _string_set(value: Any) -> frozenset[str]:
+    if not isinstance(value, list):
+        return frozenset()
+    return frozenset(item for item in value if isinstance(item, str) and item)
 
 
 def _first_identifier(payload: dict[str, Any]) -> str | None:

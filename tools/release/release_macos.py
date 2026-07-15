@@ -198,6 +198,13 @@ def main() -> int:
             "desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin",
         ]
     )
+    run(
+        [
+            "python3",
+            "tools/release/test_desktop_sidecar.py",
+            "desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin",
+        ]
+    )
     toolchain = Path(
         subprocess.run(
             ["rustup", "which", "cargo"], text=True, capture_output=True, check=True

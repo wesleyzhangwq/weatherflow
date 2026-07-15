@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WeatherFlowClient } from "../bridge";
 import { nativeCredentials } from "../native";
@@ -388,8 +388,7 @@ it("resumes authoritative polling for a pending connector after the view reopens
   vi.useRealTimers();
 });
 
-it("lets the user explicitly grant connector tools to conversations", async () => {
-  const updateConnectorConversationAccess = vi.fn().mockResolvedValue({});
+it("shows connector tools from the unified Ask and Bypass modes", async () => {
   const client = {
     approvals: vi.fn().mockResolvedValue([]),
     runs: vi.fn().mockResolvedValue([]),
@@ -405,34 +404,31 @@ it("lets the user explicitly grant connector tools to conversations", async () =
         connector: "github", label: "GitHub", phase: "active", configured: true, connected: true,
         display_name: "wesz", auto_fetch_enabled: true, interval_minutes: 60, last_sync_at: null,
         next_sync_at: null, last_error_code: null, attempt_id: null, attempt_expires_at: null,
-        conversation_access: "read", allowed_tool_ids: ["composio.github.search_issues"],
+        available_tool_ids: Array.from({ length: 9 }, (_, index) => `composio.github.tool_${index}`),
       },
       {
         connector: "gmail", label: "Gmail", phase: null, configured: true, connected: false,
         display_name: null, auto_fetch_enabled: false, interval_minutes: 60, last_sync_at: null,
         next_sync_at: null, last_error_code: null, attempt_id: null, attempt_expires_at: null,
-        conversation_access: "disabled", allowed_tool_ids: [],
+        available_tool_ids: [],
       },
       {
         connector: "google_calendar", label: "Google Calendar", phase: null, configured: true, connected: false,
         display_name: null, auto_fetch_enabled: false, interval_minutes: 60, last_sync_at: null,
         next_sync_at: null, last_error_code: null, attempt_id: null, attempt_expires_at: null,
-        conversation_access: "disabled", allowed_tool_ids: [],
+        available_tool_ids: [],
       },
     ]),
-    updateConnectorConversationAccess,
   } as unknown as WeatherFlowClient;
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
   fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
   fireEvent.click(await screen.findByRole("button", { name: "查看 GitHub" }));
 
-  expect(await screen.findByRole("group", { name: "GitHub 对话使用权限" })).toBeInTheDocument();
-  expect(screen.getByText("执行前逐次向你确认。", { exact: false })).toBeInTheDocument();
-  expect(screen.getByText("已允许 1 个固定工具")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("radio", { name: "读取并提议操作" }));
-
-  await waitFor(() => expect(updateConnectorConversationAccess).toHaveBeenCalledWith("github", "read_write", "w1"));
+  expect(await screen.findByText("已接入统一工具模式")).toBeInTheDocument();
+  expect(screen.getByText("Ask 提供全部读取工具", { exact: false })).toBeInTheDocument();
+  expect(screen.getByText("已审查 9 个固定工具")).toBeInTheDocument();
+  expect(screen.queryByRole("radio")).not.toBeInTheDocument();
 });
 
 it("keeps human weather separate from the current agent task in the conversation header", async () => {
@@ -549,9 +545,12 @@ it("creates, renames, pins, and sends from a durable session", async () => {
   fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
   await waitFor(() => expect(updateSession).toHaveBeenCalledWith("session-new", "w1", { pinned: true }));
 
+  const mode = screen.getByRole("group", { name: "工具模式" });
+  expect(within(mode).getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(within(mode).getByRole("button", { name: "Bypass" }));
   fireEvent.change(screen.getByLabelText("对话输入"), { target: { value: "复盘这周项目" } });
   fireEvent.click(screen.getByRole("button", { name: "发送" }));
-  await waitFor(() => expect(createRun).toHaveBeenCalledWith("复盘这周项目", expect.any(String), "w1", null, "session-new"));
+  await waitFor(() => expect(createRun).toHaveBeenCalledWith("复盘这周项目", expect.any(String), "w1", null, "session-new", "bypass"));
 });
 
 it("requires a second explicit action before permanently deleting a conversation", async () => {

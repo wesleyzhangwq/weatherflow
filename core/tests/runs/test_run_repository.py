@@ -8,6 +8,7 @@ from weatherflow.runs import (
     RunRepository,
     RunStatus,
     RunVersionConflict,
+    ToolMode,
 )
 from weatherflow.storage import Database
 
@@ -24,6 +25,7 @@ async def test_create_round_trips_every_run_field(tmp_path: Path) -> None:
         client_request_id="request-1",
         user_intent="ship release",
         workspace_id="workspace-1",
+        tool_mode=ToolMode.BYPASS,
     )
 
     async with database.transaction() as connection:
@@ -31,6 +33,7 @@ async def test_create_round_trips_every_run_field(tmp_path: Path) -> None:
 
     assert await repository.get(run.id) == run
     assert await repository.get_by_client_request_id("request-1") == run
+    assert run.tool_mode is ToolMode.BYPASS
 
 
 async def test_duplicate_client_request_id_is_rejected(tmp_path: Path) -> None:

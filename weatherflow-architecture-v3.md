@@ -136,6 +136,15 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     and URL query or fragment data fail closed instead of relying on a secret-key
     blacklist.
 32. Trust Policy, not a tool name, decides the durable side-effect boundary.
+33. Model-visible tools are selected through exactly two Run-scoped modes.
+    `ask` exposes only reviewed `observe` and `network_read` ToolSpecs from the
+    current Workspace's installed capabilities and active connector identities;
+    `bypass` exposes the complete reviewed surface. The selected mode is stored
+    on the Run and frozen into its capability snapshot. It never bypasses
+    Workspace isolation, connector identity checks, OS sandboxing, Trust Policy,
+    Action persistence, or Approval. Connector bindings no longer carry a
+    separate conversation tool grant; they own connection identity and optional
+    background-fetch settings only.
     Every call classified as `SANDBOX` or `APPROVE` must own an Action before
     execution. A timeout or cancellation after execution starts moves both the
     Action and Run to `NEEDS_REVIEW`; cancelling an async wrapper does not prove
@@ -327,13 +336,37 @@ compatibility.
   region. Hover feedback changes only surface, border, and elevation and never
   shifts the tile's position. Run and sensor state remain small secondary dots.
 - 2026-07-14: Promoted brokered OAuth connections from background context only
-  into the frozen Capability Plane. Connection, automatic fetch, and
-  conversation access are three separate grants. Only curated canonical
-  WeatherFlow ToolSpecs map to reviewed Composio action slugs and toolkit
-  versions; no generic execute/meta tool is exposed. A Run freezes its opaque
-  connected-account identity and conversation-grant revision, then rechecks
-  both at execution. Reads may execute directly; writes and destructive actions
-  always persist Action/Approval first. Account changes fail closed for old Runs.
+  into the frozen Capability Plane. Connection identity and automatic fetch are
+  separate settings. Only curated canonical WeatherFlow ToolSpecs map to
+  reviewed Composio action slugs and toolkit versions; no generic execute/meta
+  tool is exposed. A Run freezes its opaque connected-account identity and
+  selected ToolSpecs, then rechecks account identity and scope at execution.
+  Reads may execute directly; writes and destructive actions always persist
+  Action/Approval first. Account changes fail closed for old Runs.
+- 2026-07-15: Corrected the production Composio execution contract. Every broker
+  call now carries the stable WeatherFlow installation user ID together with the
+  opaque connected-account ID, and reviewed actions pin their own current
+  toolkit version instead of sharing one invalid cross-toolkit version. The
+  curated GitHub surface now includes repository and commit discovery alongside
+  identity, issue, pull-request, and branch operations; Gmail and Google Calendar
+  retain their reviewed read/write surfaces. Every external write still
+  persists Action and Approval before broker dispatch. Activating a new connection
+  may upgrade an older Composio-managed Auth Config to the full reviewed action
+  allowlist only after
+  connected-account ownership, toolkit, and active state are revalidated;
+  user-provided Auth Configs are never rewritten.
+- 2026-07-15: Replaced per-connector conversation grants with two explicit
+  Run-scoped tool modes selected from the conversation composer. `ask` is the
+  fail-closed default and freezes only `observe` and `network_read` tools across
+  installed Packs, enabled MCP presets, and every active connector in the
+  selected Workspace. `bypass` freezes the complete reviewed tool surface but
+  does not weaken the Trust Plane: workspace writes and command execution still
+  use the OS sandbox, while external writes, installs, and destructive actions
+  still persist Action/Approval before dispatch. Connector bindings remain
+  Workspace-scoped account identities and background-fetch configuration; the
+  former `disabled`/`read`/`read_write` fields and endpoint are removed from the
+  v3 contract, and migration strips persisted remnants. Each Run stores its mode so
+  retries, resume, Workers, and audit output cannot inherit a later UI toggle.
 - 2026-07-14: Closed inherited-tool routing gaps for MCP and Worker Runs. A
   healthy enabled curated MCP preset contributes its fixed effective use scope
   only while future capability snapshots resolve; server annotations still

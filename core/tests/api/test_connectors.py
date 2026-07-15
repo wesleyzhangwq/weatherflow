@@ -17,7 +17,6 @@ from weatherflow.connectors import (
     ConnectorSnapshot,
     ConnectorStatus,
     ConnectorSyncService,
-    ConversationAccess,
 )
 
 
@@ -89,15 +88,6 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
         )
         return None
 
-    async def update_conversation_access(
-        _service: ConnectorService,
-        requested_workspace_id: str,
-        connector: ConnectorKind,
-        access: ConversationAccess,
-    ):
-        calls.append(("conversation_access", (requested_workspace_id, connector, access)))
-        return None
-
     async def sync(
         _service: ConnectorSyncService,
         requested_workspace_id: str,
@@ -124,7 +114,6 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
     monkeypatch.setattr(ConnectorService, "connect", connect)
     monkeypatch.setattr(ConnectorService, "refresh_attempt", refresh)
     monkeypatch.setattr(ConnectorService, "update_settings", update_settings)
-    monkeypatch.setattr(ConnectorService, "update_conversation_access", update_conversation_access)
     monkeypatch.setattr(ConnectorSyncService, "sync", sync)
     monkeypatch.setattr(ConnectorService, "disconnect", disconnect)
     transport = ASGITransport(app=create_app(container=container))
@@ -142,11 +131,6 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
             params={"workspace_id": workspace_id},
             json={"auto_fetch_enabled": False, "interval_minutes": 120},
         )
-        conversation_access = await client.post(
-            "/v1/connectors/github/conversation-access",
-            params={"workspace_id": workspace_id},
-            json={"conversation_access": "read_write"},
-        )
         synced = await client.post(
             "/v1/connectors/github/sync", params={"workspace_id": workspace_id}
         )
@@ -158,6 +142,7 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
 
     assert configured.status_code == 200
     assert "requestBody" not in openapi.json()["paths"]["/v1/connectors/configure"]["post"]
+    assert "/v1/connectors/{connector}/conversation-access" not in openapi.json()["paths"]
     assert listed.json()[0]["connected"] is True
     catalog_fields = {
         key: listed.json()[0][key]
@@ -179,8 +164,6 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
     assert handoff.json()["connect_url"].startswith("https://connect.composio.dev/")
     assert refreshed.json()["phase"] == "active"
     assert settings.status_code == 204
-    assert conversation_access.status_code == 200
-    assert conversation_access.json()["conversation_access"] == "disabled"
     assert synced.json()["items"] == []
     assert disconnected.status_code == 204
     assert calls[0] == ("configure", None)

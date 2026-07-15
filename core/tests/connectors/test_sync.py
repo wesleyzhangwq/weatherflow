@@ -20,16 +20,17 @@ from weatherflow.workspaces import Workspace, WorkspaceRepository
 
 class FakeReadGateway:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, str, str, dict[str, Any]]] = []
 
     async def execute_read_action(
         self,
         *,
         action: str,
         connected_account_id: str,
+        user_id: str,
         arguments: dict[str, Any],
     ) -> Any:
-        self.calls.append((action, connected_account_id, arguments))
+        self.calls.append((action, connected_account_id, user_id, arguments))
         if action == "GITHUB_GET_THE_AUTHENTICATED_USER":
             return {"login": "wesz"}
         if action == "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS":
@@ -102,6 +103,7 @@ async def setup(tmp_path: Path, connector: ConnectorKind):
         repository=repository,
         ledger=EventLedger(database),
         gateway=gateway,
+        user_id="wf-installation",
         now=lambda: now,
         timezone="Asia/Shanghai",
     )
@@ -144,6 +146,7 @@ async def test_fixed_read_fetchers_create_bounded_source_linked_snapshots(
                 (
                     "GOOGLECALENDAR_EVENTS_LIST",
                     "ca_google_calendar",
+                    "wf-installation",
                     {
                         "calendarId": "primary",
                         "timeMin": now.isoformat(),
@@ -188,9 +191,9 @@ async def test_gmail_snapshot_never_falls_back_to_full_message_body(tmp_path: Pa
     private_body = "full private email body that must not be persisted"
 
     async def body_only_response(
-        *, action: str, connected_account_id: str, arguments: dict[str, Any]
+        *, action: str, connected_account_id: str, user_id: str, arguments: dict[str, Any]
     ) -> Any:
-        del action, connected_account_id
+        del action, connected_account_id, user_id
         assert arguments["include_payload"] is False
         return {
             "messages": [
@@ -217,9 +220,9 @@ async def test_connector_snapshot_redacts_tokens_and_url_credentials(tmp_path: P
     url_secret = "calendar-secret-value"
 
     async def sensitive_response(
-        *, action: str, connected_account_id: str, arguments: dict[str, Any]
+        *, action: str, connected_account_id: str, user_id: str, arguments: dict[str, Any]
     ) -> Any:
-        del action, connected_account_id, arguments
+        del action, connected_account_id, user_id, arguments
         return {
             "messages": [
                 {
@@ -250,9 +253,9 @@ async def test_due_sync_isolates_unexpected_gateway_or_normalization_failure(
     upstream_secret = "upstream response body must not be durable"
 
     async def fail_once(
-        *, action: str, connected_account_id: str, arguments: dict[str, Any]
+        *, action: str, connected_account_id: str, user_id: str, arguments: dict[str, Any]
     ) -> Any:
-        del action, connected_account_id, arguments
+        del action, connected_account_id, user_id, arguments
         raise ValueError(upstream_secret)
 
     gateway.execute_read_action = fail_once  # type: ignore[method-assign]
@@ -288,8 +291,10 @@ async def test_due_sync_never_propagates_one_binding_failure(
 ) -> None:
     _workspace, _repository, gateway, service, _now = await setup(tmp_path, ConnectorKind.GMAIL)
 
-    async def reject(*, action: str, connected_account_id: str, arguments: dict[str, Any]) -> Any:
-        del action, connected_account_id, arguments
+    async def reject(
+        *, action: str, connected_account_id: str, user_id: str, arguments: dict[str, Any]
+    ) -> Any:
+        del action, connected_account_id, user_id, arguments
         raise failure
 
     gateway.execute_read_action = reject  # type: ignore[method-assign]

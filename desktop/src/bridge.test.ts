@@ -20,7 +20,7 @@ describe("WeatherFlowClient", () => {
       }),
     );
     const body = JSON.parse((fetchMock.mock.calls[0][1]?.body as string));
-    expect(body).toEqual({ user_intent: "Ship release", client_request_id: "request-1", workspace_id: "workspace-1" });
+    expect(body).toEqual({ user_intent: "Ship release", client_request_id: "request-1", workspace_id: "workspace-1", tool_mode: "ask" });
   });
 
   it("keeps the browser fallback explicit for non-Tauri development", () => {
@@ -61,28 +61,6 @@ describe("WeatherFlowClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it("updates a connector's explicit conversation access for one workspace", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({
-        connector: "github",
-        conversation_access: "read_write",
-        allowed_tool_ids: ["composio.github.search_issues", "composio.github.create_issue"],
-      }), { status: 200 }),
-    );
-    const client = new WeatherFlowClient({ baseUrl: "http://127.0.0.1:9000", token: "secret" });
-
-    await client.updateConnectorConversationAccess("github", "read_write", "workspace-1");
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:9000/v1/connectors/github/conversation-access?workspace_id=workspace-1",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ Authorization: "Bearer secret" }),
-        body: JSON.stringify({ conversation_access: "read_write" }),
-      }),
-    );
-  });
-
   it("manages durable conversation sessions and binds a new run to one", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
@@ -112,7 +90,7 @@ describe("WeatherFlowClient", () => {
       ["http://127.0.0.1:9000/v1/sessions", "POST", JSON.stringify({ workspace_id: "workspace-1" })],
       ["http://127.0.0.1:9000/v1/sessions/session-1?workspace_id=workspace-1", "PATCH", JSON.stringify({ title: "发布计划", pinned: true })],
       ["http://127.0.0.1:9000/v1/sessions/session-1?workspace_id=workspace-1", "DELETE", undefined],
-      ["http://127.0.0.1:9000/v1/runs", "POST", JSON.stringify({ user_intent: "检查发布计划", client_request_id: "request-1", workspace_id: "workspace-1", context_run_id: null, session_id: "session-1" })],
+      ["http://127.0.0.1:9000/v1/runs", "POST", JSON.stringify({ user_intent: "检查发布计划", client_request_id: "request-1", workspace_id: "workspace-1", context_run_id: null, session_id: "session-1", tool_mode: "ask" })],
     ]);
   });
 

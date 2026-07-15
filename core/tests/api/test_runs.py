@@ -65,6 +65,42 @@ async def test_run_api_is_idempotent_and_exposes_timeline(tmp_path: Path) -> Non
     assert "run.result_committed" in event_types
 
 
+async def test_run_api_freezes_explicit_tool_mode_and_defaults_to_ask(tmp_path: Path) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    transport = ASGITransport(app=create_app(container=container))
+    workspace_id = container.default_workspace.id
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        ask = await client.post(
+            "/v1/runs",
+            json={"user_intent": "Inspect", "workspace_id": workspace_id},
+        )
+        bypass = await client.post(
+            "/v1/runs",
+            json={
+                "user_intent": "Prepare a change",
+                "workspace_id": workspace_id,
+                "tool_mode": "bypass",
+            },
+        )
+        invalid = await client.post(
+            "/v1/runs",
+            json={
+                "user_intent": "Do anything",
+                "workspace_id": workspace_id,
+                "tool_mode": "unrestricted",
+            },
+        )
+        await container.wait_for_background_run(ask.json()["id"], timeout_seconds=1)
+        await container.wait_for_background_run(bypass.json()["id"], timeout_seconds=1)
+
+    assert ask.status_code == 201
+    assert ask.json()["tool_mode"] == "ask"
+    assert bypass.status_code == 201
+    assert bypass.json()["tool_mode"] == "bypass"
+    assert invalid.status_code == 422
+
+
 async def test_run_api_returns_typed_not_found(tmp_path: Path) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
     transport = ASGITransport(app=create_app(container=container))

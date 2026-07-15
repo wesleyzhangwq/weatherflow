@@ -1,4 +1,4 @@
-import type { Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorConversationAccess, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, InstallApprovalRequest, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, Session, SkillCatalogEntry, SystemStatus, Workspace } from "./types";
+import type { Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, InstallApprovalRequest, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, Session, SkillCatalogEntry, SystemStatus, ToolMode, Workspace } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
@@ -73,10 +73,10 @@ export class WeatherFlowClient {
   timeline(runId: string): Promise<LedgerEvent[]> { return this.request(`/v1/runs/${runId}/timeline`); }
   artifacts(runId: string): Promise<Artifact[]> { return this.request(`/v1/runs/${runId}/artifacts`); }
   cancel(runId: string): Promise<Run> { return this.request(`/v1/runs/${runId}/cancel`, { method: "POST" }); }
-  createRun(userIntent: string, clientRequestId: string, workspaceId?: string | null, contextRunId?: string | null, sessionId?: string | null): Promise<Run> {
+  createRun(userIntent: string, clientRequestId: string, workspaceId?: string | null, contextRunId?: string | null, sessionId?: string | null, toolMode: ToolMode = "ask"): Promise<Run> {
     return this.request("/v1/runs", {
       method: "POST",
-      body: JSON.stringify({ user_intent: userIntent, client_request_id: clientRequestId, workspace_id: workspaceId, context_run_id: contextRunId, ...(sessionId !== undefined ? { session_id: sessionId } : {}) }),
+      body: JSON.stringify({ user_intent: userIntent, client_request_id: clientRequestId, workspace_id: workspaceId, context_run_id: contextRunId, ...(sessionId !== undefined ? { session_id: sessionId } : {}), tool_mode: toolMode }),
     });
   }
   decide(approvalId: string, decision: "approve" | "deny", version: number, workspaceId?: string): Promise<unknown> {
@@ -132,12 +132,6 @@ export class WeatherFlowClient {
   connectorAttempt(attemptId: string): Promise<ConnectionAttempt> { return this.request(`/v1/connector-attempts/${attemptId}`); }
   updateConnectorSettings(connector: ConnectorKind, autoFetchEnabled: boolean, intervalMinutes: number, workspaceId?: string | null): Promise<void> {
     return this.request(this.scoped(`/v1/connectors/${connector}/settings`, workspaceId), { method: "POST", body: JSON.stringify({ auto_fetch_enabled: autoFetchEnabled, interval_minutes: intervalMinutes }) });
-  }
-  updateConnectorConversationAccess(connector: ConnectorKind, conversationAccess: ConnectorConversationAccess, workspaceId?: string | null): Promise<ConnectorStatus> {
-    return this.request(this.scoped(`/v1/connectors/${connector}/conversation-access`, workspaceId), {
-      method: "POST",
-      body: JSON.stringify({ conversation_access: conversationAccess }),
-    });
   }
   syncConnector(connector: ConnectorKind, workspaceId?: string | null): Promise<ConnectorSnapshot> {
     return this.request(this.scoped(`/v1/connectors/${connector}/sync`, workspaceId), { method: "POST" });

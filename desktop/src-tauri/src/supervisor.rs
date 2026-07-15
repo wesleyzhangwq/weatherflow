@@ -17,7 +17,9 @@ use tauri_plugin_shell::{process::CommandChild, ShellExt};
 #[cfg(debug_assertions)]
 const DEVELOPMENT_PORT: u16 = 8765;
 #[cfg(any(not(debug_assertions), test))]
-const INITIAL_HEALTH_GRACE: Duration = Duration::from_secs(5);
+const INITIAL_HEALTH_GRACE: Duration = Duration::from_secs(60);
+#[cfg(any(not(debug_assertions), test))]
+const HEALTH_FAILURE_THRESHOLD: u8 = 3;
 
 enum DaemonChild {
     #[cfg(debug_assertions)]
@@ -237,10 +239,16 @@ pub fn restart_delay(failures: u32) -> Duration {
     Duration::from_millis((500_u64.saturating_mul(2_u64.saturating_pow(failures))).min(5_000))
 }
 
+#[cfg(any(not(debug_assertions), test))]
+fn should_restart_after_health_failure(consecutive_failures: u8) -> bool {
+    consecutive_failures >= HEALTH_FAILURE_THRESHOLD
+}
+
 #[cfg(not(debug_assertions))]
 pub fn monitor(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::new();
+        let mut consecutive_failures = 0_u8;
         tokio_sleep(INITIAL_HEALTH_GRACE).await;
         loop {
             tokio_sleep(Duration::from_secs(2)).await;
@@ -257,19 +265,30 @@ pub fn monitor(app: AppHandle) {
                 .await
                 .is_ok_and(|response| response.status().is_success());
             if healthy {
+                consecutive_failures = 0;
                 if let Ok(mut state) = app.state::<Mutex<DaemonSupervisor>>().lock() {
                     state.failures = 0;
                 }
                 continue;
             }
+            consecutive_failures = consecutive_failures.saturating_add(1);
+            if !should_restart_after_health_failure(consecutive_failures) {
+                continue;
+            }
+            consecutive_failures = 0;
             let delay = {
                 let state = app.state::<Mutex<DaemonSupervisor>>();
                 let failures = state.lock().expect("daemon state poisoned").failures;
                 restart_delay(failures)
             };
             tokio_sleep(delay).await;
-            if let Ok(mut state) = app.state::<Mutex<DaemonSupervisor>>().lock() {
-                let _ = state.replace(&app);
+            let replaced = app
+                .state::<Mutex<DaemonSupervisor>>()
+                .lock()
+                .ok()
+                .is_some_and(|mut state| state.replace(&app).is_ok());
+            if replaced {
+                tokio_sleep(INITIAL_HEALTH_GRACE).await;
             }
         }
     });
@@ -301,15 +320,32 @@ pub fn restart_daemon(
 
 #[cfg(test)]
 mod tests {
-    use super::{development_daemon_args, restart_delay, DEVELOPMENT_PORT, INITIAL_HEALTH_GRACE};
+    use super::{
+        development_daemon_args, restart_delay, should_restart_after_health_failure,
+        DEVELOPMENT_PORT, INITIAL_HEALTH_GRACE,
+    };
     use std::time::Duration;
 
     #[test]
     fn restart_backoff_is_bounded() {
-        assert_eq!(INITIAL_HEALTH_GRACE, Duration::from_secs(5));
+        assert_eq!(INITIAL_HEALTH_GRACE, Duration::from_secs(60));
         assert_eq!(restart_delay(0), Duration::from_millis(500));
         assert_eq!(restart_delay(1), Duration::from_millis(1_000));
         assert_eq!(restart_delay(20), Duration::from_millis(5_000));
+    }
+
+    #[test]
+    fn every_bundled_daemon_spawn_gets_the_full_startup_grace() {
+        let source = include_str!("supervisor.rs");
+        let startup_wait = ["tokio_sleep(", "INITIAL_HEALTH_GRACE).await;"].concat();
+        assert_eq!(source.matches(&startup_wait).count(), 2);
+    }
+
+    #[test]
+    fn transient_health_failures_do_not_restart_the_daemon() {
+        assert!(!should_restart_after_health_failure(1));
+        assert!(!should_restart_after_health_failure(2));
+        assert!(should_restart_after_health_failure(3));
     }
 
     #[test]

@@ -10,7 +10,7 @@ from weatherflow.capabilities.builtin import (
 )
 from weatherflow.config import Settings
 from weatherflow.mcp import MCPInstallAuthorization
-from weatherflow.runs import RunStatus
+from weatherflow.runs import RunStatus, ToolMode
 from weatherflow.runtime import (
     FinalTurn,
     LoopStatus,
@@ -44,13 +44,7 @@ async def test_runtime_container_rebuilds_from_same_data_directory(tmp_path: Pat
     assert stored_run is not None and stored_run.status is RunStatus.WAITING_USER
     assert stored_run.error_class == "ModelConfigurationRequired"
     assert snapshot is not None
-    assert {tool.tool_id for tool in snapshot.tools} == {
-        "developer.git_status",
-        "developer.read_file",
-        "developer.run_command",
-        "developer.write_artifact",
-        "developer.write_file",
-    }
+    assert {tool.tool_id for tool in snapshot.tools} == {"developer.read_file"}
     assert checkpoint is not None and checkpoint.state.get("result_committed") is not True
     assert checkpoint.state["rhythm_policy"]["proactivity"] == "silent"
     assert set(rebuilt.workers.definitions) == {
@@ -166,6 +160,7 @@ async def test_restart_preserves_pending_turn_and_resumes_after_approval(
     run, waiting = await first.submit_run(
         user_intent="Ship release",
         workspace_id=workspace.id,
+        tool_mode=ToolMode.BYPASS,
     )
     assert waiting is not None and waiting.approval_id is not None
 

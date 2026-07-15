@@ -226,10 +226,10 @@ async def test_delete_removes_session_runs_and_all_run_owned_durable_data(
         )
         await connection.execute(
             """
-            INSERT INTO run_connector_routes(
-                run_id, workspace_id, connector, account_id, external_account_id,
-                conversation_grant_revision, bound_at
-            ) VALUES (?, ?, 'github', 'account', 'external', 1, ?)
+                INSERT INTO run_connector_routes(
+                    run_id, workspace_id, connector, account_id, external_account_id,
+                    bound_at
+                ) VALUES (?, ?, 'github', 'account', 'external', ?)
             """,
             (deleted_run.id, workspace.id, now),
         )

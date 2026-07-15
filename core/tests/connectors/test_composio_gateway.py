@@ -11,11 +11,12 @@ from weatherflow.connectors.composio import (
     ComposioGateway,
     ComposioGatewayError,
 )
-from weatherflow.connectors.models import OAuthSetup
+from weatherflow.connectors.models import CONNECTOR_DEFINITIONS, OAuthSetup
 from weatherflow.extensions import CredentialBroker, CredentialRef, MappingCredentialStore
 
 SECRET = "composio-project-secret"
 REFERENCE = CredentialRef(provider="composio", name="project_api_key")
+USER_ID = "wf-installation"
 
 
 def gateway_transport(requests: list[httpx.Request]) -> httpx.MockTransport:
@@ -53,13 +54,15 @@ def gateway_transport(requests: list[httpx.Request]) -> httpx.MockTransport:
         if request.url.path == "/api/v3.1/tools/execute/GITHUB_GET_THE_AUTHENTICATED_USER":
             body = request.content.decode()
             assert '"connected_account_id":"ca_github"' in body
-            assert '"version":"20260703_00"' in body
+            assert '"user_id":"wf-installation"' in body
+            assert '"version":"20260713_00"' in body
             assert '"version":"latest"' not in body
             return httpx.Response(200, json={"successful": True, "data": {"login": "wesz"}})
         if request.url.path == "/api/v3.1/tools/execute/GITHUB_CREATE_AN_ISSUE":
             assert request.method == "POST"
             assert request.content == (
-                b'{"connected_account_id":"ca_github","version":"20260703_00",'
+                b'{"connected_account_id":"ca_github","user_id":"wf-installation",'
+                b'"version":"20260713_00",'
                 b'"arguments":{"owner":"tinyhumansai","repo":"openhuman",'
                 b'"title":"Review WeatherFlow"}}'
             )
@@ -84,12 +87,14 @@ async def test_gateway_uses_connect_link_v3_and_versioned_v31_execution() -> Non
     data = await gateway.execute_read_action(
         action="GITHUB_GET_THE_AUTHENTICATED_USER",
         connected_account_id=link.connected_account_id,
+        user_id=USER_ID,
         arguments={},
     )
     created = await gateway.execute_tool(
         action="GITHUB_CREATE_AN_ISSUE",
         version=COMPOSIO_ACTION_VERSIONS["GITHUB_CREATE_AN_ISSUE"],
         connected_account_id=link.connected_account_id,
+        user_id=USER_ID,
         arguments={
             "owner": "tinyhumansai",
             "repo": "openhuman",
@@ -106,6 +111,102 @@ async def test_gateway_uses_connect_link_v3_and_versioned_v31_execution() -> Non
     assert created == {"number": 42}
     paths = [request.url.path for request in requests]
     assert all("initiate" not in path and "/v2" not in path for path in paths)
+
+
+def test_reviewed_actions_pin_the_live_toolkit_version_per_connector() -> None:
+    assert COMPOSIO_ACTION_VERSIONS["GITHUB_GET_THE_AUTHENTICATED_USER"] == "20260713_00"
+    assert COMPOSIO_ACTION_VERSIONS["GITHUB_SEARCH_COMMITS"] == "20260713_00"
+    assert COMPOSIO_ACTION_VERSIONS["GMAIL_FETCH_EMAILS"] == "20260702_01"
+    assert COMPOSIO_ACTION_VERSIONS["GMAIL_SEND_EMAIL"] == "20260702_01"
+    assert COMPOSIO_ACTION_VERSIONS["GOOGLECALENDAR_EVENTS_LIST"] == "20260623_00"
+    assert COMPOSIO_ACTION_VERSIONS["GOOGLECALENDAR_CREATE_EVENT"] == "20260623_00"
+
+
+async def test_gateway_upgrades_existing_managed_auth_config_to_reviewed_actions() -> None:
+    patched = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal patched
+        if request.url.path == "/api/v3/connected_accounts/ca_github":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "ca_github",
+                    "status": "ACTIVE",
+                    "toolkit": {"slug": "github"},
+                    "user_id": USER_ID,
+                    "auth_config": {"id": "ac_github", "is_composio_managed": True},
+                },
+            )
+        if request.url.path == "/api/v3/auth_configs/ac_github" and request.method == "GET":
+            actions = (
+                list(CONNECTOR_DEFINITIONS[ConnectorKind.GITHUB].reviewed_auth_actions)
+                if patched
+                else ["GITHUB_GET_THE_AUTHENTICATED_USER"]
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "id": "ac_github",
+                    "type": "default",
+                    "is_composio_managed": True,
+                    "restrict_to_following_tools": actions,
+                },
+            )
+        if request.url.path == "/api/v3/auth_configs/ac_github" and request.method == "PATCH":
+            assert json.loads(request.content) == {
+                "type": "default",
+                "restrict_to_following_tools": list(
+                    CONNECTOR_DEFINITIONS[ConnectorKind.GITHUB].reviewed_auth_actions
+                ),
+            }
+            patched = True
+            return httpx.Response(200, json={})
+        raise AssertionError(request.url)
+
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    await gateway.ensure_action_allowlist(
+        ConnectorKind.GITHUB,
+        connected_account_id="ca_github",
+        user_id=USER_ID,
+    )
+
+    assert patched is True
+
+
+async def test_gateway_never_upgrades_an_account_owned_by_another_installation() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v3/connected_accounts/ca_github"
+        return httpx.Response(
+            200,
+            json={
+                "id": "ca_github",
+                "status": "ACTIVE",
+                "toolkit": {"slug": "github"},
+                "user_id": "wf-another-installation",
+                "auth_config": {"id": "ac_github", "is_composio_managed": True},
+            },
+        )
+
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ComposioGatewayError) as raised:
+        await gateway.ensure_action_allowlist(
+            ConnectorKind.GITHUB,
+            connected_account_id="ca_github",
+            user_id=USER_ID,
+        )
+
+    assert raised.value.code is ComposioErrorCode.AUTH
 
 
 async def test_gateway_closes_only_the_http_client_it_owns() -> None:
@@ -394,6 +495,7 @@ async def test_execute_tool_rejects_unknown_action_or_version_before_network(
             action=action,
             version=version,
             connected_account_id="ca_github",
+            user_id=USER_ID,
             arguments={},
         )
 
@@ -424,6 +526,7 @@ async def test_execute_tool_redacts_provider_failure_payload() -> None:
             action="GMAIL_SEND_EMAIL",
             version=COMPOSIO_ACTION_VERSIONS["GMAIL_SEND_EMAIL"],
             connected_account_id="ca_gmail",
+            user_id=USER_ID,
             arguments={"recipient_email": "user@example.com", "subject": "Hi", "body": "Hi"},
         )
 

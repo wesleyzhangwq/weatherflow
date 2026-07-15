@@ -56,8 +56,7 @@ function connectorStatus(connector: ConnectorKind): ConnectorStatus {
     last_error_code: null,
     attempt_id: null,
     attempt_expires_at: null,
-    conversation_access: connector === "github" ? "read" : "disabled",
-    allowed_tool_ids: connector === "github" ? ["composio.github.search_issues"] : [],
+    available_tool_ids: supported ? [`composio.${connector}.reviewed_tool`] : [],
   };
 }
 
@@ -78,7 +77,6 @@ function clientWithConnectors(): WeatherFlowClient {
       model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
     }),
     connectors: vi.fn().mockResolvedValue(connectorKinds.map(connectorStatus)),
-    updateConnectorConversationAccess: vi.fn().mockResolvedValue({}),
   } as unknown as WeatherFlowClient;
 }
 
@@ -104,18 +102,20 @@ it("shows a searchable twenty-service OAuth catalog with backend-derived states"
   expect(screen.queryByRole("button", { name: "查看 Gmail" })).not.toBeInTheDocument();
 });
 
-it("keeps mature connector controls in details and does not advertise unsupported conversation tools", async () => {
+it("shows unified mode coverage for mature connectors and no tools for unsupported ones", async () => {
   const client = clientWithConnectors();
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
   fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
 
   fireEvent.click(await screen.findByRole("button", { name: "查看 GitHub" }));
-  expect(screen.getByRole("group", { name: "GitHub 对话使用权限" })).toBeInTheDocument();
+  expect(screen.getByText("已接入统一工具模式")).toBeInTheDocument();
+  expect(screen.getByText("已审查 1 个固定工具")).toBeInTheDocument();
+  expect(screen.queryByRole("radio")).not.toBeInTheDocument();
   expect(screen.getByLabelText("GitHub 抓取频率")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "查看 Slack" }));
   expect(screen.getByText("连接后暂不能在对话中使用，固定工具仍在审阅中。")).toBeInTheDocument();
-  expect(screen.queryByRole("group", { name: "Slack 对话使用权限" })).not.toBeInTheDocument();
+  expect(screen.queryByText("已接入统一工具模式")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Slack 抓取频率")).not.toBeInTheDocument();
 
   await waitFor(() => expect(client.connectors).toHaveBeenCalledWith("w1"));

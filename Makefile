@@ -34,6 +34,7 @@ check: lint format-check test eval security-check desktop-check rust-check
 
 sidecar-check:
 	python3 tools/release/test_sidecar.py desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin
+	python3 tools/release/test_desktop_sidecar.py desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin
 
 release-check: check sidecar-check
 	cd release/macos && shasum -a 256 -c CHECKSUMS.sha256

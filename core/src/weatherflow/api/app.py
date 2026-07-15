@@ -24,7 +24,6 @@ from weatherflow.api.schemas import (
     AutomationCreateRequest,
     AutomationUpdateRequest,
     ConnectorConfigureResponse,
-    ConnectorConversationAccessRequest,
     ConnectorDisconnectRequest,
     ConnectorSettingsRequest,
     DesktopSnapshot,
@@ -266,6 +265,7 @@ def create_app(
                 workspace_id=request.workspace_id,
                 session_id=request.session_id,
                 context_run_id=request.context_run_id,
+                tool_mode=request.tool_mode,
                 execute=False,
             )
         except SessionNotFoundError as error:
@@ -1109,38 +1109,6 @@ def create_app(
                 detail={"code": "connector_auto_fetch_unsupported"},
             ) from error
         return Response(status_code=204)
-
-    @app.post(
-        "/v1/connectors/{connector}/conversation-access",
-        response_model=ConnectorStatus,
-    )
-    async def update_connector_conversation_access(
-        connector: ConnectorKind,
-        request: ConnectorConversationAccessRequest,
-        workspace_id: str | None = None,
-    ) -> ConnectorStatus:
-        service = await runtime()
-        workspace = await selected_workspace(service, workspace_id)
-        try:
-            await service.connector_service.update_conversation_access(
-                workspace.id,
-                connector,
-                request.conversation_access,
-            )
-        except LookupError as error:
-            raise HTTPException(
-                status_code=409, detail={"code": "connector_not_connected"}
-            ) from error
-        except PermissionError as error:
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "connector_reauthorization_required"},
-            ) from error
-        return next(
-            status
-            for status in await service.connector_service.statuses(workspace.id)
-            if status.connector is connector
-        )
 
     @app.post("/v1/connectors/{connector}/sync", response_model=ConnectorSnapshot)
     async def sync_connector(
