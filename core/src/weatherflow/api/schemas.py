@@ -15,6 +15,7 @@ from weatherflow.models import (
 )
 from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import Run
+from weatherflow.runtime import RunControlKind
 from weatherflow.trust import Approval
 from weatherflow.workspaces import Workspace
 
@@ -36,6 +37,13 @@ class RunCreateRequest(BaseModel):
     session_id: str | None = Field(default=None, min_length=1, max_length=200)
     context_run_id: str | None = Field(default=None, min_length=1, max_length=200)
     execute: bool = False
+
+
+class RunControlCreateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    kind: RunControlKind
+    content: str = Field(min_length=1, max_length=20_000)
 
 
 class SessionCreateRequest(BaseModel):

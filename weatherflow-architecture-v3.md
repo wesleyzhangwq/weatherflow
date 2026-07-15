@@ -156,6 +156,13 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     and await every daemon-owned Run task, and only then close tool transports.
     A terminally closed RuntimeContainer rejects new Run or connector tasks so no
     task or database worker can outlive its event loop.
+36. `SANDBOX` is an execution boundary, not a Trust label. Project commands,
+    scripts, builds, and tests execute only through the typed Python-owned
+    `SandboxBackend`. The macOS backend applies an OS-enforced default-deny
+    profile, an isolated environment and temporary home, explicit read/write
+    roots, offline networking by default, resource/output limits, and process-
+    group termination. Backend absence or failed confinement fails closed; there
+    is no ordinary-subprocess fallback.
 
 ## 4. v3.0 scope
 
@@ -394,3 +401,45 @@ compatibility.
   credential-text and URL sanitization as reviewed tool output. The local
   security scan now covers Run, Action, Approval, Automation, connector, model,
   and streamed artifact content in addition to events, checkpoints, and memory.
+- 2026-07-15: Made OS confinement a first-class Python runtime boundary and
+  approved `core/src/weatherflow/sandbox/` as a v3 top-level domain. The first
+  macOS backend uses the host Seatbelt facility behind a typed, replaceable
+  `SandboxBackend`; it must probe availability and fail closed because its
+  current `/usr/bin/sandbox-exec` launcher is deprecated. Profiles start from
+  default deny, expose only authorized Workspace roots plus reviewed read-only
+  toolchain roots, use an ephemeral HOME, deny external networking and host
+  process signaling, and enforce wall/CPU/file/fd/output limits. This is the
+  only path that may unlock project scripts, builds, and tests; unsandboxed
+  subprocess execution is not a compatibility fallback. In parallel, Agent Core
+  stays one `SharedTurnLoop` with pi-agent-style typed turns/events and small
+  composable seams; durable Run, Trust, Action, Approval, checkpoint, and frozen
+  route ownership remain WeatherFlow's outer shell rather than being folded into
+  a second workflow engine. The first C1 extraction adds a provider-neutral
+  `AgentCore.next_turn` boundary for bounded model retry/turn validation and a
+  `TurnCommitter` as the checkpoint-before-dispatch/event commit barrier; neither
+  is a second loop or state authority. `ToolDispatcher` now owns the validated
+  Trust/Action/Approval/execution/Observation path, leaving SharedTurnLoop as the
+  small ordering coordinator. Durable `run_controls` add `steer` and `follow_up`
+  inputs without process-local queues: steering is applied before the next model
+  request, while follow-up is applied in the same transaction that would
+  otherwise commit a final result. Applied controls and the checkpoint advance
+  atomically, so restart cannot replay input and final-result races fail closed.
+  Sandbox build caches use a private offline Cargo home with read-only
+  registry/Git cache links only, and local Unix sockets remain scoped to the
+  private temp root or authorized writable roots.
+- 2026-07-15: Closed the remaining managed MCP subprocess bypasses and added
+  durable Agent Core lifecycle projections. Fixed-version npm installation now
+  runs only in an approved HTTPS-only sandbox request, while managed stdio MCP
+  servers are spawned by the same backend with preset-specific read roots,
+  offline networking, and no writable Workspace roots. A missing backend marks
+  the connection unavailable. Playwright remains catalog-visible but unavailable
+  until a redirect-safe public-network broker exists. Sandbox startup performs
+  and caches a real read/write escape-denial probe; profiles deny descendant
+  `setsid`/`setpgid`, and a fixed non-interpolating resource launcher replaces
+  Python `preexec_fn`. AgentCore now projects model start, retry, completion, and
+  terminal provider failure without putting provider-private content in Events.
+  Host acceptance passed 522 Python tests plus every eval, hardening, desktop,
+  production-build, and Rust gate. A second complete `make check` executed
+  through `DeveloperExecutor -> MacOSSeatbeltSandbox` with loopback-only
+  networking and return code 0, proving the repository can build and test itself
+  inside the new OS boundary.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from weatherflow.mcp import (
     NpmMCPPresetPackageInstaller,
     UnknownMCPPresetError,
 )
+from weatherflow.sandbox import SandboxNetworkMode, SandboxResult
 
 
 class FakeTransport:
@@ -60,6 +63,98 @@ class FakePackageInstaller:
         return preset.executable_path(internal_root).is_file()
 
 
+class RecordingInstallSandbox:
+    def __init__(self) -> None:
+        self.requests = []
+
+    @property
+    def backend_id(self) -> str:
+        return "recording-sandbox"
+
+    def is_available(self) -> bool:
+        return True
+
+    async def execute(self, request):
+        self.requests.append(request)
+        executable = Path(request.cwd) / "node_modules" / ".bin" / "mcp-server-filesystem"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("fixture")
+        return SandboxResult(
+            backend_id=self.backend_id,
+            argv=request.argv,
+            returncode=0,
+            stdout="",
+            stderr="",
+            duration_ms=1,
+            network=request.network,
+        )
+
+
+class InteractiveStdioProcess:
+    def __init__(self) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stdin = InteractiveStdin(self.stdout)
+        self.returncode = None
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+        self.returncode = 0
+        self.stdout.feed_eof()
+
+
+class InteractiveStdin:
+    def __init__(self, stdout: asyncio.StreamReader) -> None:
+        self.stdout = stdout
+
+    def write(self, value: bytes) -> None:
+        payload = json.loads(value)
+        if "id" not in payload:
+            return
+        if payload["method"] == "initialize":
+            result = {"serverInfo": {"name": "sandboxed", "version": "1"}}
+        elif payload["method"] == "tools/list":
+            result = {
+                "tools": [
+                    {
+                        "name": "read_file",
+                        "description": "Read one file",
+                        "inputSchema": {"type": "object"},
+                        "annotations": {"readOnlyHint": True},
+                    }
+                ]
+            }
+        else:
+            result = {}
+        response = {"jsonrpc": "2.0", "id": payload["id"], "result": result}
+        self.stdout.feed_data((json.dumps(response) + "\n").encode())
+
+    async def drain(self) -> None:
+        return None
+
+
+class RecordingStdioSandbox:
+    def __init__(self) -> None:
+        self.requests = []
+        self.processes = []
+
+    @property
+    def backend_id(self) -> str:
+        return "recording-stdio-sandbox"
+
+    def is_available(self) -> bool:
+        return True
+
+    async def execute(self, request):
+        raise AssertionError("long-lived MCP must use spawn_stdio")
+
+    async def spawn_stdio(self, request):
+        self.requests.append(request)
+        process = InteractiveStdioProcess()
+        self.processes.append(process)
+        return process
+
+
 def workspace_context(tmp_path: Path) -> MCPWorkspaceContext:
     project = tmp_path / "project"
     project.mkdir()
@@ -80,6 +175,7 @@ def test_catalog_is_fixed_version_pinned_and_renderer_safe() -> None:
     }
     assert catalog.require("filesystem").package_version == "2026.7.10"
     assert catalog.require("playwright").package_version == "0.0.78"
+    assert catalog.require("playwright").available is False
     assert catalog.require("fetch").available is False
     assert "private" in (catalog.require("fetch").unavailable_reason or "").lower()
 
@@ -187,27 +283,64 @@ async def test_enable_uses_fixed_filesystem_argv_and_disable_closes_transport(
     assert service.active_tools(workspace.workspace_id) == ()
 
 
-async def test_playwright_safe_arguments_are_fixed_by_catalog(tmp_path: Path) -> None:
-    seen_argv: list[tuple[str, ...]] = []
-
-    def transport_factory(argv):
-        seen_argv.append(tuple(argv))
-        return FakeTransport()
-
+async def test_default_stdio_server_is_offline_and_read_only_inside_sandbox(
+    tmp_path: Path,
+) -> None:
+    sandbox = RecordingStdioSandbox()
+    repository = InMemoryMCPConnectionRepository()
     service = MCPManagementService(
-        repository=InMemoryMCPConnectionRepository(),
+        repository=repository,
         package_installer=FakePackageInstaller(),
-        transport_factory=transport_factory,
+        sandbox=sandbox,
     )
     workspace = workspace_context(tmp_path)
     await service.install(
-        "playwright",
+        "filesystem",
         workspace=workspace,
         authorization=MCPInstallAuthorization(approved_action_id="action-1"),
     )
-    await service.enable("playwright", workspace=workspace)
 
-    assert seen_argv[0][1:] == (
+    enabled = await service.enable("filesystem", workspace=workspace)
+    await service.disable("filesystem", workspace_id=workspace.workspace_id)
+
+    assert enabled.health is MCPManagedHealth.HEALTHY
+    assert len(sandbox.requests) == 1
+    request = sandbox.requests[0]
+    preset = CuratedMCPCatalog.default().require("filesystem")
+    assert request.cwd == str(preset.installation_root(workspace.internal_root))
+    assert request.readable_roots == (
+        str(preset.installation_root(workspace.internal_root)),
+        *(str(path) for path in workspace.action_roots),
+    )
+    assert request.writable_roots == ()
+    assert request.network is SandboxNetworkMode.OFFLINE
+    assert sandbox.processes[0].closed is True
+
+
+async def test_missing_stdio_sandbox_marks_managed_server_unavailable(
+    tmp_path: Path,
+) -> None:
+    service = MCPManagementService(
+        repository=InMemoryMCPConnectionRepository(),
+        package_installer=FakePackageInstaller(),
+    )
+    workspace = workspace_context(tmp_path)
+    await service.install(
+        "filesystem",
+        workspace=workspace,
+        authorization=MCPInstallAuthorization(approved_action_id="action-1"),
+    )
+
+    enabled = await service.enable("filesystem", workspace=workspace)
+
+    assert enabled.health is MCPManagedHealth.UNAVAILABLE
+    assert enabled.tool_ids == ()
+
+
+def test_playwright_safe_arguments_are_fixed_by_catalog() -> None:
+    preset = CuratedMCPCatalog.default().require("playwright")
+
+    assert preset.fixed_arguments == (
         "--headless",
         "--isolated",
         "--sandbox",
@@ -216,6 +349,7 @@ async def test_playwright_safe_arguments_are_fixed_by_catalog(tmp_path: Path) ->
         "--output-mode=stdout",
         "--browser=chrome",
     )
+    assert "redirect-safe" in (preset.unavailable_reason or "")
 
 
 async def test_enabled_connections_restore_without_reinstall_or_new_approval(
@@ -271,3 +405,27 @@ async def test_npm_installer_rejects_internal_symlink_escape(tmp_path: Path) -> 
             internal_root=internal,
             approved_action_id="action-1",
         )
+
+
+async def test_npm_installer_executes_only_through_dedicated_sandbox(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = RecordingInstallSandbox()
+    monkeypatch.setattr("weatherflow.mcp.management.shutil.which", lambda name: "/usr/bin/npm")
+    internal = tmp_path / "internal"
+
+    installed = await NpmMCPPresetPackageInstaller(sandbox=sandbox).install(
+        CuratedMCPCatalog.default().require("filesystem"),
+        internal_root=internal,
+        approved_action_id="action-1",
+    )
+
+    assert installed.is_relative_to(internal.resolve())
+    assert len(sandbox.requests) == 1
+    request = sandbox.requests[0]
+    assert request.argv[0] == "/usr/bin/npm"
+    assert request.argv[1] == "install"
+    assert request.network is SandboxNetworkMode.HTTPS_EGRESS
+    assert request.writable_roots == (request.cwd,)
+    assert request.readable_roots == (str(internal.resolve()),)

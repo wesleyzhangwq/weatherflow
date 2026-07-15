@@ -651,4 +651,27 @@ MIGRATIONS = (
         DROP TABLE connector_account_migration_map;
         """,
     ),
+    Migration(
+        version=21,
+        sql="""
+        CREATE TABLE run_controls (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK(kind IN ('steer', 'follow_up')),
+            content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 20000),
+            status TEXT NOT NULL CHECK(status IN ('pending', 'applied')),
+            created_at TEXT NOT NULL,
+            applied_at TEXT,
+            applied_step_index INTEGER,
+            CHECK(
+                (status = 'pending' AND applied_at IS NULL AND applied_step_index IS NULL)
+                OR
+                (status = 'applied' AND applied_at IS NOT NULL AND applied_step_index IS NOT NULL)
+            )
+        );
+
+        CREATE INDEX idx_run_controls_pending
+            ON run_controls(run_id, status, created_at, id);
+        """,
+    ),
 )

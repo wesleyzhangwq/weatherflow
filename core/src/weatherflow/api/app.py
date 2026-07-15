@@ -37,6 +37,7 @@ from weatherflow.api.schemas import (
     ModelProviderList,
     OnboardingCompleteRequest,
     ResetConfirmRequest,
+    RunControlCreateRequest,
     RunCreateRequest,
     SessionCreateRequest,
     SessionUpdateRequest,
@@ -101,6 +102,11 @@ from weatherflow.operations import (
 )
 from weatherflow.rhythm import CurrentRhythm, RhythmInsights, RhythmInsightsService, RhythmSignal
 from weatherflow.runs import InvalidTransitionError, Run, RunIdempotencyConflict, RunStatus
+from weatherflow.runtime import (
+    RunControl,
+    RunControlNotFoundError,
+    RunControlRejectedError,
+)
 from weatherflow.sessions import (
     ConversationSession,
     SessionNotFoundError,
@@ -744,6 +750,37 @@ def create_app(
             raise HTTPException(
                 status_code=409,
                 detail={"code": "invalid_run_transition", "status": run.status.value},
+            ) from error
+
+    @app.post(
+        "/v1/runs/{run_id}/controls",
+        response_model=RunControl,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def enqueue_run_control(
+        run_id: str,
+        request: RunControlCreateRequest,
+    ) -> RunControl:
+        service = await runtime()
+        try:
+            return await service.enqueue_run_control(
+                run_id=run_id,
+                kind=request.kind,
+                content=request.content,
+            )
+        except RunControlNotFoundError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "run_not_found", "run_id": run_id},
+            ) from error
+        except RunControlRejectedError as error:
+            run = await service.runs.get(run_id)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "run_control_rejected",
+                    "status": run.status.value if run is not None else "unknown",
+                },
             ) from error
 
     @app.get("/v1/runs/{run_id}/timeline", response_model=list[Event])

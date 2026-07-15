@@ -144,6 +144,11 @@ class CuratedMCPCatalog:
                         "--output-mode=stdout",
                         "--browser=chrome",
                     ),
+                    available=False,
+                    unavailable_reason=(
+                        "WeatherFlow has no redirect-safe public-network broker for a "
+                        "sandboxed browser server yet"
+                    ),
                 ),
                 MCPPreset(
                     preset_id="fetch",

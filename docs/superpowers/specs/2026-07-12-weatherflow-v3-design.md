@@ -503,6 +503,98 @@ never reconstructs or retries the provider turn without it.
   enters `NEEDS_REVIEW`, and is never re-executed.
 - Approval timeout suspends the Run; it does not fail or execute the action.
 
+### 6.5.1 Durable Run controls
+
+Live steering and follow-up are persisted as typed `run_controls`; they are not
+process-local messages and they never interrupt a persisted tool or Action.
+`steer` is consumed only when the checkpoint has no pending model turn, before
+constructing the next `ModelRequest`. `follow_up` waits for a persisted
+`FinalTurn`. At that boundary, SharedTurnLoop checks and applies every pending
+control inside the same immediate database transaction that would otherwise
+commit the Run result. A concurrent late control therefore either becomes part
+of the next request or observes the already-terminal Run and is rejected.
+
+Applying a control appends an ordinary User `AgentMessage`, clears the pending
+final turn when necessary, advances the checkpoint version, marks the control
+applied, and emits a value-free audit event in one transaction. Control content
+does not enter Event payloads. Applied rows are never replayed after restart.
+Runs in terminal or `NEEDS_REVIEW` state reject new controls; approval and
+provider-continuation ownership remain unchanged.
+
+### 6.6 OS sandbox execution boundary
+
+`SANDBOX` decisions execute through a typed `SandboxBackend` owned by the Python
+Harness. Trust decides whether an Action belongs on this path; the backend is
+responsible for actually confining the process. Capability executors may prepare
+an argv request but cannot launch an ordinary subprocess as a fallback.
+
+The macOS v3 backend uses the host Seatbelt facility behind a replaceable
+protocol. Its current launcher is `/usr/bin/sandbox-exec`, which is deprecated;
+therefore runtime availability and a real escape-denial probe are release gates,
+not optional diagnostics. If the facility disappears or the profile cannot be
+compiled, command tools become unavailable and fail closed. A later native
+launcher may replace it without changing Run, Action, ToolSpec, or checkpoint
+contracts.
+
+Every request freezes and validates:
+
+```text
+argv and working directory
+readable roots and writable roots
+reviewed read-only toolchain roots
+offline or explicitly declared network mode
+wall, CPU, file-size, file-descriptor, and output limits
+the bounded non-secret environment
+```
+
+The profile begins with default deny. It exposes authorized Workspace roots,
+an ephemeral per-execution HOME/temp root, required macOS runtime paths, and
+reviewed toolchain roots only. Workspace writes never imply access to the
+WeatherFlow internal root, Artifact Store, Keychain, provider sockets, or any
+other user directory. External networking and signals to host processes are
+denied by default. Explicit loopback mode admits loopback IP only; Unix sockets
+are limited to the private HOME and authorized writable roots. A process may
+signal its own children for normal build/test lifecycle management but cannot
+signal the Harness or other host processes. Timeout and cancellation terminate
+the process group and retain the existing durable `NEEDS_REVIEW` barrier for a
+started side effect.
+
+Build caches do not weaken credential isolation. The macOS backend constructs a
+private offline `CARGO_HOME` and may link reviewed read-only registry and Git
+caches into it, but it never exposes Cargo credentials or user config. Desktop
+credential broker sockets use the process-private temporary root rather than a
+hard-coded global `/tmp` path, so the Rust test/build lifecycle remains inside
+the same sandbox boundary.
+
+Daemon composition runs one cached escape-denial health probe before exposing
+the backend. The probe executes a real sandboxed child and verifies that a file
+outside its read and write roots remains inaccessible; missing launch files,
+profile compilation failure, or an unexpected escape marks the backend
+unhealthy. A daemon already running inside a WeatherFlow sandbox never attempts
+to nest a weaker profile.
+
+All descendants remain in the Harness-owned process group. The Seatbelt profile
+denies `setsid` and `setpgid`, timeout/cancellation terminates the group, and a
+fixed system resource launcher sets CPU, file-size, and descriptor limits
+without Python `preexec_fn` or interpolation of project arguments. The current
+Seatbelt entrypoint remains `/usr/bin/sandbox-exec`; replacing that deprecated
+public launcher is a release gate, not a reason to fall back to an ordinary
+subprocess.
+
+Managed MCP processes use separate profiles from Developer commands. Approved,
+version-pinned npm installation receives only the internal temporary install
+root plus outbound HTTPS and ignores package scripts. The installed filesystem
+stdio server is offline and read-only over its fixed installation and Workspace
+roots. Backend absence marks it unavailable. Browser MCP remains unavailable
+until WeatherFlow owns a redirect-safe public-network broker; an unrestricted
+network profile is not an acceptable compatibility path.
+
+The Developer Pack may admit direct Workspace executables and reviewed build/
+test frontends only after this backend is available. Shell command strings,
+package installation commands, Git remote mutations, and paths outside the
+frozen Workspace remain denied or approval-gated. Build files may spawn child
+processes, but every descendant inherits the same OS profile and limits.
+
 ## 7. Rhythm Intelligence
 
 ### 7.1 Pipeline
@@ -1181,6 +1273,8 @@ and structured events.
 - Run resume across daemon restart;
 - approval park/decide/resume;
 - sandbox and command classification;
+- macOS sandbox escape denial for filesystem, network, Keychain, host signals,
+  environment inheritance, timeout, and descendant cleanup;
 - MCP discovery, disconnect, and schema drift;
 - artifact atomic commit and partial failure;
 - behavior metadata ingestion and retention expiration;
@@ -1273,6 +1367,8 @@ must judge policy, state transition, provenance, and recovery contracts.
 
 - Developer, Research, and Calendar capabilities required by the flagship
   release story;
+- typed macOS OS sandbox capable of running project scripts, builds, and tests
+  with no unsandboxed fallback;
 - bounded Worker delegation;
 - structured approvals and artifact validation;
 - trajectory eval and macOS E2E for the complete story.

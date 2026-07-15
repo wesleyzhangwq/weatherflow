@@ -111,7 +111,7 @@ def test_automation_skill_and_mcp_surfaces_use_one_workspace_boundary(tmp_path: 
             assert mcp.status_code == 200
             by_id = {item["preset_id"]: item for item in mcp.json()}
             assert by_id["filesystem"]["installed"] is False
-            assert by_id["playwright"]["available"] is True
+            assert by_id["playwright"]["available"] is False
             assert by_id["fetch"]["available"] is False
             assert "package_name" not in by_id["filesystem"]
 

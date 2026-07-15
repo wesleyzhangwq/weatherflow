@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -103,11 +104,16 @@ from weatherflow.runtime import (
     ModelRequest,
     RunCheckpoint,
     RunCheckpointRepository,
+    RunControl,
+    RunControlCoordinator,
+    RunControlKind,
+    RunControlRepository,
     SharedTurnLoop,
     ToolExecutorRegistry,
     WorkerCoordinator,
     builtin_worker_definitions,
 )
+from weatherflow.sandbox import MacOSSeatbeltSandbox
 from weatherflow.sessions import ConversationSessionDeletion, ConversationSessionRepository
 from weatherflow.storage import Database
 from weatherflow.trust import (
@@ -141,6 +147,7 @@ class RuntimeContainer:
     database: Database
     workspaces: WorkspaceRepository
     default_workspace: Workspace
+    sandbox_healthy: bool | None
     ledger: EventLedger
     runs: RunRepository
     sessions: ConversationSessionRepository
@@ -152,6 +159,8 @@ class RuntimeContainer:
     snapshots: CapabilitySnapshotRepository
     capability_coordinator: CapabilitySnapshotCoordinator
     checkpoints: RunCheckpointRepository
+    controls: RunControlRepository
+    control_coordinator: RunControlCoordinator
     provider_continuations: ProviderContinuationRepository
     artifacts: ArtifactRepository
     artifact_store: ArtifactStore
@@ -251,6 +260,14 @@ class RuntimeContainer:
             resolver=CapabilityResolver(policy),
         )
         checkpoints = RunCheckpointRepository(database)
+        controls = RunControlRepository(database)
+        control_coordinator = RunControlCoordinator(
+            database=database,
+            runs=runs,
+            controls=controls,
+            checkpoints=checkpoints,
+            ledger=ledger,
+        )
         resolved_credential_store = credential_store or KeyringCredentialStore()
         resolved_continuation_key = (
             provider_continuation_key
@@ -312,8 +329,13 @@ class RuntimeContainer:
             workspaces=workspaces,
             ledger=ledger,
         )
+        sandbox = MacOSSeatbeltSandbox()
+        sandbox_healthy = (
+            None if os.environ.get("WF_SANDBOX_ACTIVE") else await sandbox.health_probe()
+        )
         mcp_management = MCPManagementService(
             repository=SQLiteMCPConnectionRepository(database),
+            sandbox=sandbox,
         )
         model_configuration_repository = ModelConfigurationRepository(database)
         model_routes = RunModelRouteRepository(database)
@@ -353,7 +375,11 @@ class RuntimeContainer:
                 ledger=ledger,
             )
             executors.register("extensions.install", install_executor)
-            developer_executor = DeveloperExecutor(workspaces, artifacts=artifact_store)
+            developer_executor = DeveloperExecutor(
+                workspaces,
+                artifacts=artifact_store,
+                sandbox=sandbox,
+            )
             for tool in developer_tool_specs():
                 executors.register(tool.tool_id, developer_executor)
             personal_executor = PersonalOperationsExecutor(
@@ -435,6 +461,7 @@ class RuntimeContainer:
             approval_coordinator=approval_coordinator,
             action_execution=action_execution,
             worker_coordinator=workers,
+            control_coordinator=control_coordinator,
         )
         workers.bind_loop(loop)
         automation_repository = AutomationRepository(database)
@@ -467,6 +494,7 @@ class RuntimeContainer:
             database=database,
             workspaces=workspaces,
             default_workspace=default_workspace,
+            sandbox_healthy=sandbox_healthy,
             ledger=ledger,
             runs=runs,
             sessions=sessions,
@@ -478,6 +506,8 @@ class RuntimeContainer:
             snapshots=snapshots,
             capability_coordinator=capability_coordinator,
             checkpoints=checkpoints,
+            controls=controls,
+            control_coordinator=control_coordinator,
             provider_continuations=provider_continuations,
             artifacts=artifacts,
             artifact_store=artifact_store,
@@ -755,6 +785,27 @@ class RuntimeContainer:
             )
             await self.provider_continuations.delete_run_in(connection, run.id)
         return cancelled
+
+    async def enqueue_run_control(
+        self,
+        *,
+        run_id: str,
+        kind: RunControlKind | str,
+        content: str,
+    ) -> RunControl:
+        control = await self.control_coordinator.enqueue(
+            run_id=run_id,
+            kind=kind,
+            content=content,
+        )
+        run = await self.runs.get(run_id)
+        if run is not None and run.status in {
+            RunStatus.QUEUED,
+            RunStatus.PLANNING,
+            RunStatus.PAUSED,
+        }:
+            self.schedule_run(run_id)
+        return control
 
     async def delete_session(
         self,

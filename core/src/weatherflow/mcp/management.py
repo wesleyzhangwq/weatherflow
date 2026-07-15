@@ -21,6 +21,14 @@ from weatherflow.mcp.catalog import (
 from weatherflow.mcp.client import ConnectedMCP, MCPRegistry, MCPTransport, MCPUnavailableError
 from weatherflow.mcp.transport import StdioMCPTransport
 from weatherflow.runtime import ToolExecutionContext, ToolExecutionResult
+from weatherflow.sandbox import (
+    SandboxBackend,
+    SandboxLimits,
+    SandboxNetworkMode,
+    SandboxRequest,
+    SandboxStdioBackend,
+    SandboxUnavailableError,
+)
 
 
 class MCPManagedHealth(StrEnum):
@@ -121,6 +129,9 @@ class MCPPresetPackageInstaller(Protocol):
 class NpmMCPPresetPackageInstaller:
     """Install only catalog-owned npm packages into a private versioned directory."""
 
+    def __init__(self, *, sandbox: SandboxBackend | None = None) -> None:
+        self.sandbox = sandbox
+
     async def install(
         self,
         preset: MCPPreset,
@@ -134,31 +145,56 @@ class NpmMCPPresetPackageInstaller:
             raise MCPPresetUnavailableError(preset.unavailable_reason or preset.preset_id)
         if preset.package_manager != "npm":
             raise MCPInstallationError(f"unsupported installer for preset {preset.preset_id}")
-        prepared = await asyncio.to_thread(self._prepare_install, preset, internal_root)
+        resolved_internal_root = await asyncio.to_thread(
+            lambda: internal_root.expanduser().resolve()
+        )
+        prepared = await asyncio.to_thread(
+            self._prepare_install,
+            preset,
+            resolved_internal_root,
+        )
         if prepared.temporary is None:
             return prepared.target
         package_spec = f"{preset.package_name}@{preset.package_version}"
         try:
-            process = await asyncio.create_subprocess_exec(
-                prepared.npm,
-                "install",
-                "--prefix",
-                str(prepared.temporary),
-                "--ignore-scripts",
-                "--no-package-lock",
-                "--no-audit",
-                "--no-fund",
-                "--omit=dev",
-                "--save=false",
-                package_spec,
-                cwd=prepared.temporary,
-                env=prepared.environment,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            if self.sandbox is None:
+                raise MCPInstallationError("MCP package sandbox is unavailable")
+            result = await self.sandbox.execute(
+                SandboxRequest(
+                    argv=(
+                        prepared.npm,
+                        "install",
+                        "--prefix",
+                        str(prepared.temporary),
+                        "--ignore-scripts",
+                        "--no-package-lock",
+                        "--no-audit",
+                        "--no-fund",
+                        "--omit=dev",
+                        "--save=false",
+                        package_spec,
+                    ),
+                    cwd=str(prepared.temporary),
+                    readable_roots=(str(resolved_internal_root),),
+                    writable_roots=(str(prepared.temporary),),
+                    environment={
+                        key: value
+                        for key, value in prepared.environment.items()
+                        if key in {"PATH", "LANG", "LC_ALL"}
+                    },
+                    network=SandboxNetworkMode.HTTPS_EGRESS,
+                    limits=SandboxLimits(
+                        wall_time_seconds=300,
+                        cpu_time_seconds=300,
+                        max_output_bytes=64 * 1024,
+                    ),
+                )
             )
-            if await process.wait() != 0:
+            if result.returncode != 0:
                 raise MCPInstallationError(f"npm install failed for preset {preset.preset_id}")
             await asyncio.to_thread(self._finalize_install, preset, prepared)
+        except SandboxUnavailableError as error:
+            raise MCPInstallationError("MCP package sandbox is unavailable") from error
         finally:
             await asyncio.to_thread(self._cleanup_temporary, prepared.temporary)
         return prepared.target
@@ -284,12 +320,14 @@ class MCPManagementService:
         catalog: CuratedMCPCatalog | None = None,
         registry: MCPRegistry | None = None,
         transport_factory: TransportFactory | None = None,
+        sandbox: SandboxStdioBackend | None = None,
     ) -> None:
         self.catalog = catalog or CuratedMCPCatalog.default()
         self.repository = repository
-        self.package_installer = package_installer or NpmMCPPresetPackageInstaller()
+        self.package_installer = package_installer or NpmMCPPresetPackageInstaller(sandbox=sandbox)
         self.registry = registry or MCPRegistry()
-        self.transport_factory = transport_factory or (lambda argv: StdioMCPTransport(argv))
+        self.transport_factory = transport_factory
+        self.sandbox = sandbox
         self._connections: dict[tuple[str, str], ConnectedMCP] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
@@ -351,16 +389,17 @@ class MCPManagementService:
             ):
                 raise MCPNotInstalledError(preset_id)
             await self._close_connection(workspace.workspace_id, preset_id)
-            transport = self.transport_factory(
-                preset.launch_argv(
-                    workspace.internal_root,
-                    action_roots=workspace.action_roots,
-                )
+            argv = preset.launch_argv(
+                workspace.internal_root,
+                action_roots=workspace.action_roots,
             )
+            transport: MCPTransport | None = None
             try:
+                transport = self._transport_for(preset, workspace, argv)
                 connected = await self.registry.connect(preset_id, transport)
             except (MCPUnavailableError, ConnectionError, OSError, ValueError):
-                await transport.close()
+                if transport is not None:
+                    await transport.close()
                 state = replace(
                     current,
                     enabled=True,
@@ -386,6 +425,45 @@ class MCPManagementService:
             )
             await self.repository.save(state)
             return state
+
+    def _transport_for(
+        self,
+        preset: MCPPreset,
+        workspace: MCPWorkspaceContext,
+        argv: tuple[str, ...],
+    ) -> MCPTransport:
+        if self.transport_factory is not None:
+            return self.transport_factory(argv)
+        if self.sandbox is None:
+            raise MCPUnavailableError("MCP stdio sandbox is unavailable")
+        installation_root = preset.installation_root(workspace.internal_root)
+        readable_roots = (
+            str(installation_root),
+            *(str(path) for path in workspace.action_roots),
+        )
+        environment = {
+            key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL"}
+        }
+        sandbox_request = SandboxRequest(
+            argv=argv,
+            cwd=str(installation_root),
+            readable_roots=readable_roots,
+            writable_roots=(),
+            environment=environment,
+            network=SandboxNetworkMode.OFFLINE,
+            limits=SandboxLimits(
+                wall_time_seconds=3_600,
+                cpu_time_seconds=3_600,
+                max_file_size_bytes=64 * 1024**2,
+                max_open_files=512,
+                max_output_bytes=1024**2,
+            ),
+        )
+        return StdioMCPTransport(
+            argv,
+            sandbox=self.sandbox,
+            sandbox_request=sandbox_request,
+        )
 
     async def disable(self, preset_id: str, *, workspace_id: str) -> MCPConnectionState:
         self.catalog.require(preset_id)

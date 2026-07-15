@@ -1,5 +1,3 @@
-import asyncio
-import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -15,9 +13,10 @@ from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import Run, RunCoordinator, RunRepository, RunStatus
 from weatherflow.runtime.action_execution import (
     ActionExecutionCoordinator,
-    ActionExecutionStatus,
 )
+from weatherflow.runtime.agent_core import AgentCore, AgentCoreEvent, AgentCoreEventKind
 from weatherflow.runtime.checkpoints import RunCheckpoint
+from weatherflow.runtime.controls import RunControlCoordinator, RunControlRepository
 from weatherflow.runtime.models import (
     AgentDefinition,
     AgentMessage,
@@ -30,25 +29,25 @@ from weatherflow.runtime.models import (
     ModelTurn,
     ToolCallBatchTurn,
     ToolCallTurn,
-    ToolExecutionContext,
 )
-from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopStatus
+from weatherflow.runtime.outcomes import LoopOutcome, LoopStatus
 from weatherflow.runtime.protocols import (
     ModelAdapter,
     ModelConfigurationRequiredError,
     ModelResolver,
     ModelRouteUnavailableError,
-    PublicToolError,
 )
 from weatherflow.runtime.repository import RunCheckpointRepository
-from weatherflow.runtime.tools import ToolExecutorNotFound, ToolExecutorRegistry
-from weatherflow.runtime.validation import validate_tool_arguments, validate_tool_output
+from weatherflow.runtime.tool_dispatcher import (
+    ToolDispatcher,
+    ToolDispatchRequest,
+)
+from weatherflow.runtime.tools import ToolExecutorRegistry
+from weatherflow.runtime.turn_committer import TurnCommitter
 from weatherflow.runtime.workers import WorkerCoordinator, WorkerDefinitionError
 from weatherflow.storage import Database
 from weatherflow.trust import (
-    ActionStatus,
     ApprovalCoordinator,
-    DecisionKind,
     SupervisedPolicy,
 )
 from weatherflow.workspaces import Workspace
@@ -72,6 +71,10 @@ class SharedTurnLoop:
         approval_coordinator: ApprovalCoordinator | None = None,
         action_execution: ActionExecutionCoordinator | None = None,
         worker_coordinator: WorkerCoordinator | None = None,
+        agent_core: AgentCore | None = None,
+        turn_committer: TurnCommitter | None = None,
+        tool_dispatcher: ToolDispatcher | None = None,
+        control_coordinator: RunControlCoordinator | None = None,
     ) -> None:
         self.database = database
         self.runs = runs
@@ -87,6 +90,31 @@ class SharedTurnLoop:
         self.approval_coordinator = approval_coordinator
         self.action_execution = action_execution
         self.worker_coordinator = worker_coordinator
+        self.control_coordinator = control_coordinator or RunControlCoordinator(
+            database=database,
+            runs=runs,
+            controls=RunControlRepository(database),
+            checkpoints=checkpoints,
+            ledger=ledger,
+        )
+        self.agent_core = agent_core or AgentCore()
+        self.turn_committer = turn_committer or TurnCommitter(
+            database=database,
+            checkpoints=checkpoints,
+            ledger=ledger,
+            continuations=continuations,
+        )
+        self.tool_dispatcher = tool_dispatcher or ToolDispatcher(
+            database=database,
+            runs=runs,
+            checkpoints=checkpoints,
+            ledger=ledger,
+            executors=executors,
+            policy=policy,
+            committer=self.turn_committer,
+            approval_coordinator=approval_coordinator,
+            action_execution=action_execution,
+        )
 
     async def run(
         self,
@@ -125,6 +153,7 @@ class SharedTurnLoop:
                 return await self._fail(run, checkpoint, budget_error)
             pending = checkpoint.state.get("pending_turn")
             if pending is None:
+                checkpoint = await self.control_coordinator.apply_before_model(checkpoint)
                 if checkpoint.step_index >= step_limit:
                     return await self._fail(run, checkpoint, "step budget exhausted")
                 try:
@@ -139,8 +168,12 @@ class SharedTurnLoop:
                         tools=tools,
                         provider_continuations=provider_continuations,
                     )
-                    completion = await self._complete_with_retry(request, active_model)
-                    turn = agent.validate_turn(completion.turn)
+                    completion = await self.agent_core.next_turn(
+                        request,
+                        active_model,
+                        emit=self._record_agent_core_event,
+                    )
+                    turn = completion.turn
                 except (TimeoutError, ConnectionError):
                     return await self._pause_for_model(run, checkpoint)
                 except ProviderContinuationUnavailableError as error:
@@ -166,7 +199,11 @@ class SharedTurnLoop:
                 turn = TypeAdapter(ModelTurn).validate_python(pending)
 
             if isinstance(turn, FinalTurn):
-                return await self._commit_final(run, checkpoint, turn.content)
+                committed = await self._commit_final(run, checkpoint, turn.content)
+                if isinstance(committed, RunCheckpoint):
+                    checkpoint = committed
+                    continue
+                return committed
             if isinstance(turn, ToolCallTurn | ToolCallBatchTurn):
                 calls = turn.calls if isinstance(turn, ToolCallBatchTurn) else (turn,)
                 start_index = (
@@ -258,85 +295,11 @@ class SharedTurnLoop:
         completion: ModelCompletion,
         active_model: ModelAdapter,
     ) -> RunCheckpoint:
-        turn = completion.turn
-        message = self._turn_message(turn)
-        state = dict(checkpoint.state)
-        state["pending_turn"] = turn.model_dump(mode="json")
-        prior_usage = state.get("runtime_usage", {})
-        input_tokens = int(prior_usage.get("input_tokens", 0)) + turn.usage.input_tokens
-        output_tokens = int(prior_usage.get("output_tokens", 0)) + turn.usage.output_tokens
-        prior_cost = prior_usage.get("cost_usd")
-        prior_cost_status = prior_usage.get("cost_status")
-        turn_cost_status = "known" if turn.usage.cost_usd is not None else "unknown"
-        cost_status = "unknown" if "unknown" in {prior_cost_status, turn_cost_status} else "known"
-        cost = (
-            (float(prior_cost) if prior_cost is not None else 0.0) + turn.usage.cost_usd
-            if turn.usage.cost_usd is not None
-            else prior_cost
+        return await self.turn_committer.record_turn(
+            checkpoint,
+            completion,
+            active_model,
         )
-        if input_tokens or output_tokens or cost is not None:
-            state["runtime_usage"] = {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_usd": cost,
-                "cost_status": cost_status,
-            }
-            pricing_version = getattr(active_model, "pricing_catalog_version", None)
-            if pricing_version is not None and cost_status == "known":
-                state["runtime_usage"]["pricing_catalog_version"] = pricing_version
-        desired = checkpoint.model_copy(
-            update={
-                "step_index": checkpoint.step_index + 1,
-                "transcript": (*checkpoint.transcript, message),
-                "state": state,
-            }
-        )
-        async with self.database.transaction() as connection:
-            if completion.continuation is not None:
-                if self.continuations is None:
-                    raise ProviderContinuationUnavailableError(
-                        "provider continuation store is unavailable"
-                    )
-                if isinstance(turn, FinalTurn):
-                    raise ProviderContinuationUnavailableError(
-                        "terminal model turn cannot carry a provider continuation"
-                    )
-                expected_provider = getattr(active_model, "continuation_provider", None)
-                expected_model = getattr(active_model, "continuation_model", None)
-                if (
-                    completion.continuation.provider != expected_provider
-                    or completion.continuation.model != expected_model
-                ):
-                    raise ProviderContinuationUnavailableError(
-                        "provider continuation does not match the active model"
-                    )
-                await self.continuations.save_in(
-                    connection,
-                    run_id=checkpoint.run_id,
-                    step_index=checkpoint.step_index + 1,
-                    provider=completion.continuation.provider,
-                    model=completion.continuation.model,
-                    payload=completion.continuation.payload,
-                )
-            saved = await self.checkpoints.save_in(
-                connection, desired, expected_version=checkpoint.version
-            )
-            await self.ledger.append_in(
-                connection,
-                Event.new(
-                    type="runtime.turn_recorded",
-                    actor=Actor.AGENT,
-                    stream_kind="run",
-                    stream_id=checkpoint.run_id,
-                    correlation_id=checkpoint.run_id,
-                    payload={
-                        "kind": turn.kind,
-                        "step_index": saved.step_index,
-                        "usage": turn.usage.model_dump(mode="json"),
-                    },
-                ),
-            )
-        return saved
 
     @staticmethod
     def _budget_error(run: Run, checkpoint: RunCheckpoint) -> str | None:
@@ -364,401 +327,22 @@ class SharedTurnLoop:
         clear_pending: bool,
         batch_next_index: int,
     ) -> LoopOutcome | RunCheckpoint:
-        tool = tool_map.get(turn.tool_id)
-        if tool is None:
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                {"error": f"{turn.tool_id} is not in frozen capability snapshot"},
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        validation = validate_tool_arguments(tool.input_schema, turn.arguments)
-        if not validation.valid:
-            missing_arguments = sorted(
-                set(tool.input_schema.get("required", ())) - set(turn.arguments)
-            )
-            if missing_arguments:
-                message = (
-                    "Retry the tool call with all required JSON fields. "
-                    f"Missing: {', '.join(missing_arguments)}"
-                )
-            elif validation.schema_valid:
-                message = "Retry the tool call with arguments matching the JSON schema."
-            else:
-                message = "The frozen tool schema is invalid; do not retry this tool."
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                {
-                    "error": (
-                        "invalid_tool_arguments"
-                        if validation.schema_valid
-                        else "invalid_tool_schema"
-                    ),
-                    "message": message,
-                    "details": list(validation.errors),
-                    "required": tool.input_schema.get("required", []),
-                    "schema": tool.input_schema,
-                },
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        decision = self.policy.evaluate(tool, workspace)
-        if decision.kind in {DecisionKind.DENY, DecisionKind.HIDE}:
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                {"error": decision.reason, "decision": decision.kind.value},
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        if decision.kind is DecisionKind.APPROVE:
-            return await self._dispatch_approval(
-                run,
-                checkpoint,
-                turn,
-                tool,
-                workspace,
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        if decision.kind is DecisionKind.SANDBOX:
-            return await self._dispatch_sandboxed_action(
-                run,
-                checkpoint,
-                turn,
-                tool,
-                workspace,
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        return await self._execute_safe_tool(
-            run,
-            checkpoint,
-            turn,
-            tool,
-            clear_pending=clear_pending,
-            batch_next_index=batch_next_index,
-        )
-
-    async def _dispatch_sandboxed_action(
-        self,
-        run: Run,
-        checkpoint: RunCheckpoint,
-        turn: ToolCallTurn,
-        tool: ToolSpec,
-        workspace: Workspace,
-        *,
-        clear_pending: bool,
-        batch_next_index: int,
-    ) -> LoopOutcome | RunCheckpoint:
-        if self.approval_coordinator is None or self.action_execution is None:
-            raise RuntimeError("durable action execution is not configured")
-        try:
-            executor = self.executors.require(tool.tool_id)
-        except ToolExecutorNotFound:
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                {"error": f"no executor registered for {tool.tool_id}"},
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        action = await self.approval_coordinator.authorize_sandboxed(
-            run_id=run.id,
-            tool=tool,
-            workspace=workspace,
-            arguments=turn.arguments,
-            idempotency_key=self._action_idempotency_key(
+        result = await self.tool_dispatcher.dispatch(
+            ToolDispatchRequest(
                 run=run,
                 checkpoint=checkpoint,
                 turn=turn,
+                workspace=workspace,
+                clear_pending=clear_pending,
                 batch_next_index=batch_next_index,
             ),
-            preview={"tool_id": tool.tool_id, "arguments": turn.arguments},
+            tool_map,
         )
-        if action.status is ActionStatus.SUCCEEDED:
-            recovered = await self.action_execution.recover_succeeded(
-                action_id=action.id,
-                tool=tool,
-                workspace=workspace,
-            )
-            if recovered.status is ActionExecutionStatus.NEEDS_REVIEW:
-                return LoopOutcome(
-                    run_id=run.id,
-                    status=LoopStatus.NEEDS_REVIEW,
-                    action_id=recovered.action.id,
-                    error=recovered.error,
-                )
-            if recovered.result is None:
-                raise RuntimeError("validated succeeded action has no result")
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                recovered.result.output,
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        if action.status is ActionStatus.NEEDS_REVIEW:
-            return LoopOutcome(
-                run_id=run.id,
-                status=LoopStatus.NEEDS_REVIEW,
-                action_id=action.id,
-                error=action.error_message or "sandboxed side effect needs review",
-            )
-        if action.status in {
-            ActionStatus.DENIED,
-            ActionStatus.CANCELLED,
-            ActionStatus.FAILED,
-        }:
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                {"error": action.error_message or f"action {action.status.value}"},
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        if action.status not in {ActionStatus.APPROVED, ActionStatus.EXECUTING}:
-            raise RuntimeError(f"sandboxed action is {action.status.value}")
-        executed = await self.action_execution.execute(
-            action_id=action.id,
-            tool=tool,
-            workspace=workspace,
-            executor=executor,
-        )
-        if executed.status is ActionExecutionStatus.NEEDS_REVIEW:
-            return LoopOutcome(
-                run_id=run.id,
-                status=LoopStatus.NEEDS_REVIEW,
-                action_id=executed.action.id,
-                error=executed.error,
-            )
-        output = (
-            executed.result.output
-            if executed.result is not None
-            else {"error": executed.error or "action failed"}
-        )
-        return await self._record_observation(
-            checkpoint,
-            turn,
-            output,
-            clear_pending=clear_pending,
-            batch_next_index=batch_next_index,
-        )
-
-    async def _execute_safe_tool(
-        self,
-        run: Run,
-        checkpoint: RunCheckpoint,
-        turn: ToolCallTurn,
-        tool: ToolSpec,
-        *,
-        clear_pending: bool = True,
-        batch_next_index: int = 1,
-    ) -> RunCheckpoint:
-        try:
-            executor = self.executors.require(tool.tool_id)
-            result = await asyncio.wait_for(
-                executor.execute(
-                    tool,
-                    turn.arguments,
-                    ToolExecutionContext(run_id=run.id, workspace_id=run.workspace_id),
-                ),
-                timeout=tool.timeout_seconds,
-            )
-            output_validation = validate_tool_output(tool.output_schema, result.output)
-            if output_validation.valid:
-                output = result.output
-            else:
-                output = {
-                    "error": (
-                        "invalid_tool_output"
-                        if output_validation.schema_valid
-                        else "invalid_tool_output_schema"
-                    ),
-                    "message": (
-                        "Tool output did not match the frozen output schema."
-                        if output_validation.schema_valid
-                        else "The frozen tool output schema is invalid."
-                    ),
-                    "details": list(output_validation.errors),
-                }
-        except ToolExecutorNotFound:
-            output = {"error": f"no executor registered for {tool.tool_id}"}
-        except TimeoutError:
-            output = {
-                "error": "tool_timeout",
-                "message": f"{tool.tool_id} timed out after {tool.timeout_seconds}s",
-            }
-        except PublicToolError as error:
-            output = {"error": error.code, "message": str(error)}
-        except Exception:
-            output = {
-                "error": "tool_execution_failed",
-                "message": "tool execution failed",
-            }
-        return await self._record_observation(
-            checkpoint,
-            turn,
-            output,
-            clear_pending=clear_pending,
-            batch_next_index=batch_next_index,
-        )
-
-    async def _dispatch_approval(
-        self,
-        run: Run,
-        checkpoint: RunCheckpoint,
-        turn: ToolCallTurn,
-        tool: ToolSpec,
-        workspace: Workspace,
-        *,
-        clear_pending: bool = True,
-        batch_next_index: int = 1,
-    ) -> LoopOutcome | RunCheckpoint:
-        if self.approval_coordinator is None:
-            raise RuntimeError("approval coordinator is not configured")
-        current_run = await self.runs.get(run.id)
-        if current_run is None:
-            raise LookupError(run.id)
-        idempotency_key = self._action_idempotency_key(
-            run=run,
-            checkpoint=checkpoint,
-            turn=turn,
-            batch_next_index=batch_next_index,
-        )
-        bundle = await self.approval_coordinator.propose(
-            run_id=run.id,
-            expected_run_version=current_run.version,
-            tool=tool,
-            workspace=workspace,
-            arguments=turn.arguments,
-            idempotency_key=idempotency_key,
-            preview={"tool_id": tool.tool_id, "arguments": turn.arguments},
-        )
-        if bundle.action.status is ActionStatus.SUCCEEDED:
-            if self.action_execution is None:
-                raise RuntimeError("action execution coordinator is not configured")
-            recovered = await self.action_execution.recover_succeeded(
-                action_id=bundle.action.id,
-                tool=tool,
-                workspace=workspace,
-            )
-            if recovered.status is ActionExecutionStatus.NEEDS_REVIEW:
-                return LoopOutcome(
-                    run_id=run.id,
-                    status=LoopStatus.NEEDS_REVIEW,
-                    action_id=recovered.action.id,
-                    error=recovered.error,
-                )
-            if recovered.result is None:
-                raise RuntimeError("validated succeeded action has no result")
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                recovered.result.output,
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        if bundle.action.status in {ActionStatus.APPROVED, ActionStatus.EXECUTING}:
-            if self.action_execution is None:
-                raise RuntimeError("action execution coordinator is not configured")
-            try:
-                executor = self.executors.require(tool.tool_id)
-            except ToolExecutorNotFound:
-                return await self._record_observation(
-                    checkpoint,
-                    turn,
-                    {"error": f"no executor registered for {tool.tool_id}"},
-                    clear_pending=clear_pending,
-                    batch_next_index=batch_next_index,
-                )
-            executed = await self.action_execution.execute(
-                action_id=bundle.action.id,
-                tool=tool,
-                workspace=workspace,
-                executor=executor,
-            )
-            if executed.status is ActionExecutionStatus.NEEDS_REVIEW:
-                return LoopOutcome(
-                    run_id=run.id,
-                    status=LoopStatus.NEEDS_REVIEW,
-                    action_id=executed.action.id,
-                    error=executed.error,
-                )
-            output = (
-                executed.result.output
-                if executed.result is not None
-                else {"error": executed.error or "action failed"}
-            )
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                output,
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        if bundle.action.status in {
-            ActionStatus.DENIED,
-            ActionStatus.CANCELLED,
-            ActionStatus.FAILED,
-        }:
-            return await self._record_observation(
-                checkpoint,
-                turn,
-                {"error": f"action {bundle.action.status.value}"},
-                clear_pending=clear_pending,
-                batch_next_index=batch_next_index,
-            )
-        parked_state = dict(checkpoint.state)
-        parked_state["batch_next_index"] = batch_next_index - 1
-        desired = checkpoint.model_copy(
-            update={"pending_action_id": bundle.action.id, "state": parked_state}
-        )
-        async with self.database.transaction() as connection:
-            await self.checkpoints.save_in(connection, desired, expected_version=checkpoint.version)
-            await self.ledger.append_in(
-                connection,
-                Event.new(
-                    type="runtime.approval_parked",
-                    actor=Actor.SYSTEM,
-                    stream_kind="run",
-                    stream_id=run.id,
-                    correlation_id=run.id,
-                    payload={
-                        "action_id": bundle.action.id,
-                        "approval_id": bundle.approval.id,
-                    },
-                ),
-            )
-        return LoopOutcome(
-            run_id=run.id,
-            status=LoopStatus.WAITING_APPROVAL,
-            action_id=bundle.action.id,
-            approval_id=bundle.approval.id,
-        )
-
-    @staticmethod
-    def _action_idempotency_key(
-        *,
-        run: Run,
-        checkpoint: RunCheckpoint,
-        turn: ToolCallTurn,
-        batch_next_index: int,
-    ) -> str:
-        identity = json.dumps(
-            {
-                "call_id": turn.call_id,
-                "tool_id": turn.tool_id,
-                "arguments": turn.arguments,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-        digest = hashlib.sha256(identity).hexdigest()[:24]
-        return f"runtime:{run.id}:step:{checkpoint.step_index}:slot:{batch_next_index - 1}:{digest}"
+        if result.outcome is not None:
+            return result.outcome
+        if result.checkpoint is None:
+            raise RuntimeError("tool dispatch returned no durable next state")
+        return result.checkpoint
 
     async def _waiting_outcome(self, run: Run, checkpoint: RunCheckpoint) -> LoopOutcome:
         if self.approval_coordinator is None or checkpoint.pending_action_id is None:
@@ -785,65 +369,34 @@ class SharedTurnLoop:
         clear_pending: bool = True,
         batch_next_index: int = 1,
     ) -> RunCheckpoint:
-        observation = BoundedObservation.from_output(output)
-        state = dict(checkpoint.state)
-        if clear_pending:
-            state.pop("pending_turn", None)
-            state.pop("batch_next_index", None)
-        else:
-            state["batch_next_index"] = batch_next_index
-        desired = checkpoint.model_copy(
-            update={
-                "transcript": (
-                    *checkpoint.transcript,
-                    AgentMessage(
-                        role=MessageRole.TOOL,
-                        name=turn.tool_id if isinstance(turn, ToolCallTurn) else turn.agent_id,
-                        tool_call_id=turn.call_id if isinstance(turn, ToolCallTurn) else None,
-                        content=json.dumps(
-                            observation.output,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                    ),
-                ),
-                "state": state,
-                "pending_action_id": None,
-            }
+        return await self.turn_committer.record_observation(
+            checkpoint,
+            turn,
+            output,
+            clear_pending=clear_pending,
+            batch_next_index=batch_next_index,
         )
-        async with self.database.transaction() as connection:
-            saved = await self.checkpoints.save_in(
-                connection, desired, expected_version=checkpoint.version
-            )
-            event_type = (
-                "tool.executed" if isinstance(turn, ToolCallTurn) else "worker.result_observed"
-            )
-            await self.ledger.append_in(
-                connection,
-                Event.new(
-                    type=event_type,
-                    actor=Actor.SYSTEM,
-                    stream_kind="run",
-                    stream_id=checkpoint.run_id,
-                    correlation_id=checkpoint.run_id,
-                    payload={
-                        "target": turn.tool_id if isinstance(turn, ToolCallTurn) else turn.agent_id,
-                        "truncated": observation.truncated,
-                    },
-                ),
-            )
-        return saved
 
-    async def _commit_final(self, run: Run, checkpoint: RunCheckpoint, content: str) -> LoopOutcome:
+    async def _commit_final(
+        self,
+        run: Run,
+        checkpoint: RunCheckpoint,
+        content: str,
+    ) -> LoopOutcome | RunCheckpoint:
         state = dict(checkpoint.state)
         state.pop("pending_turn", None)
         state["result_committed"] = True
         desired = checkpoint.model_copy(update={"state": state})
-        current_run = await self.runs.get(run.id)
-        if current_run is None:
-            raise LookupError(run.id)
         async with self.database.transaction() as connection:
+            controlled = await self.control_coordinator.apply_at_final_boundary_in(
+                connection,
+                checkpoint,
+            )
+            if controlled is not None:
+                return controlled
+            current_run = await self.runs.get_in(connection, run.id)
+            if current_run is None:
+                raise LookupError(run.id)
             await self.checkpoints.save_in(connection, desired, expected_version=checkpoint.version)
             await self.ledger.append_in(
                 connection,
@@ -893,32 +446,27 @@ class SharedTurnLoop:
                 await self.continuations.delete_run_in(connection, run.id)
         return LoopOutcome(run_id=run.id, status=LoopStatus.FAILED, error=error)
 
-    async def _complete_with_retry(
-        self,
-        request: ModelRequest,
-        active_model: ModelAdapter,
-    ) -> ModelCompletion:
-        for attempt in range(1, 4):
-            try:
-                result = await active_model.complete(request)
-                return (
-                    result if isinstance(result, ModelCompletion) else ModelCompletion(turn=result)
-                )
-            except (TimeoutError, ConnectionError):
-                if attempt == 3:
-                    raise
-                await self.ledger.append(
-                    Event.new(
-                        type="runtime.model_retry",
-                        actor=Actor.SYSTEM,
-                        stream_kind="run",
-                        stream_id=request.run_id,
-                        correlation_id=request.run_id,
-                        payload={"attempt": attempt, "max_attempts": 3},
-                    )
-                )
-                await asyncio.sleep(0.05 * (2 ** (attempt - 1)))
-        raise RuntimeError("unreachable")
+    async def _record_agent_core_event(self, event: AgentCoreEvent) -> None:
+        event_types = {
+            AgentCoreEventKind.MODEL_START: "runtime.model_started",
+            AgentCoreEventKind.MODEL_RETRY: "runtime.model_retry",
+            AgentCoreEventKind.MODEL_END: "runtime.model_completed",
+            AgentCoreEventKind.MODEL_ERROR: "runtime.model_failed",
+        }
+        await self.ledger.append(
+            Event.new(
+                type=event_types[event.kind],
+                actor=Actor.SYSTEM,
+                stream_kind="run",
+                stream_id=event.run_id,
+                correlation_id=event.run_id,
+                payload={
+                    "attempt": event.attempt,
+                    "max_attempts": event.max_attempts,
+                    "turn_kind": event.turn_kind,
+                },
+            )
+        )
 
     async def _continuations_for(
         self,
@@ -1114,16 +662,3 @@ class SharedTurnLoop:
             status=LoopStatus.PAUSED,
             error="model provider unavailable after bounded retry",
         )
-
-    @staticmethod
-    def _turn_message(turn: ModelTurn) -> AgentMessage:
-        if isinstance(turn, FinalTurn):
-            content = turn.content
-        else:
-            content = json.dumps(
-                turn.model_dump(mode="json"),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        return AgentMessage(role=MessageRole.ASSISTANT, content=content)

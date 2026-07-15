@@ -6,7 +6,17 @@ from weatherflow.runtime.action_execution import (
     ActionExecutionStatus,
     DefinitiveToolError,
 )
+from weatherflow.runtime.agent_core import AgentCore, AgentCoreEvent, AgentCoreEventKind
 from weatherflow.runtime.checkpoints import RunCheckpoint
+from weatherflow.runtime.controls import (
+    RunControl,
+    RunControlCoordinator,
+    RunControlKind,
+    RunControlNotFoundError,
+    RunControlRejectedError,
+    RunControlRepository,
+    RunControlStatus,
+)
 from weatherflow.runtime.loop import SharedTurnLoop
 from weatherflow.runtime.models import (
     AgentDefinition,
@@ -42,6 +52,11 @@ from weatherflow.runtime.repository import (
     DuplicateCheckpointError,
     RunCheckpointRepository,
 )
+from weatherflow.runtime.tool_dispatcher import (
+    ToolDispatcher,
+    ToolDispatchRequest,
+    ToolDispatchResult,
+)
 from weatherflow.runtime.tools import (
     DuplicateToolExecutor,
     ToolExecutorNotFound,
@@ -55,6 +70,9 @@ from weatherflow.runtime.workers import (
 )
 
 __all__ = [
+    "AgentCore",
+    "AgentCoreEvent",
+    "AgentCoreEventKind",
     "AgentDefinition",
     "AgentMessage",
     "ActionExecutionCoordinator",
@@ -86,9 +104,19 @@ __all__ = [
     "ModelUsage",
     "RunCheckpoint",
     "RunCheckpointRepository",
+    "RunControl",
+    "RunControlCoordinator",
+    "RunControlKind",
+    "RunControlNotFoundError",
+    "RunControlRejectedError",
+    "RunControlRepository",
+    "RunControlStatus",
     "SharedTurnLoop",
     "ToolCallTurn",
     "ToolCallBatchTurn",
+    "ToolDispatcher",
+    "ToolDispatchRequest",
+    "ToolDispatchResult",
     "ToolExecutionContext",
     "ToolExecutionResult",
     "ToolExecutor",

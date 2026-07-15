@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 const MAX_SECRET_BYTES: usize = 10_000;
 const MAX_REQUEST_BYTES: u64 = 12_000;
+const BROKER_SOCKET_PREFIX: &str = "wf-cred-";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -327,15 +328,20 @@ fn constant_time_equal(left: &str, right: &str) -> bool {
 }
 
 fn broker_socket_path() -> PathBuf {
-    Path::new("/tmp").join(format!(
-        "weatherflow-credential-{}-{}.sock",
+    let nonce = Uuid::new_v4().simple().to_string();
+    broker_socket_directory().join(format!(
+        "{BROKER_SOCKET_PREFIX}{:x}-{}.sock",
         std::process::id(),
-        Uuid::new_v4().simple()
+        &nonce[..8]
     ))
 }
 
+fn broker_socket_directory() -> PathBuf {
+    std::env::temp_dir()
+}
+
 fn cleanup_stale_broker_sockets() {
-    let Ok(entries) = fs::read_dir("/tmp") else {
+    let Ok(entries) = fs::read_dir(broker_socket_directory()) else {
         return;
     };
     for entry in entries.flatten() {
@@ -343,13 +349,13 @@ fn cleanup_stale_broker_sockets() {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if !name.starts_with("weatherflow-credential-") || !name.ends_with(".sock") {
+        if !name.starts_with(BROKER_SOCKET_PREFIX) || !name.ends_with(".sock") {
             continue;
         }
         let owner_pid = name
-            .strip_prefix("weatherflow-credential-")
+            .strip_prefix(BROKER_SOCKET_PREFIX)
             .and_then(|value| value.split_once('-'))
-            .and_then(|(value, _)| value.parse::<u32>().ok());
+            .and_then(|(value, _)| u32::from_str_radix(value, 16).ok());
         if owner_pid == Some(std::process::id()) {
             continue;
         }
@@ -394,6 +400,7 @@ fn ensure_internal_continuation_key(backend: &dyn CredentialBackend) -> Result<(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -550,9 +557,10 @@ mod tests {
 
     #[test]
     fn next_launch_removes_only_unreachable_weatherflow_socket_files() {
-        let stale = Path::new("/tmp").join(format!(
-            "weatherflow-credential-99999999-{}.sock",
-            Uuid::new_v4().simple()
+        let stale = broker_socket_directory().join(format!(
+            "{BROKER_SOCKET_PREFIX}{:x}-{}.sock",
+            std::process::id().wrapping_add(1),
+            &Uuid::new_v4().simple().to_string()[..8]
         ));
         let listener = UnixListener::bind(&stale).unwrap();
         drop(listener);

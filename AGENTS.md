@@ -54,6 +54,7 @@ core/
     runs/            Run model, optimistic repository, sole state coordinator
     rhythm/          signal facts, six-dimensional state, policy, weather
     runtime/         provider-neutral turns and serializable Run checkpoints
+    sandbox/         typed OS execution boundary and macOS Seatbelt backend
     storage/         SQLite connection and numbered migrations
     trust/           policy plus separate durable Action/Approval state
     workspaces/      action roots, scopes, budgets, and policy boundary

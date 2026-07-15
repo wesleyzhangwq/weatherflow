@@ -1,5 +1,6 @@
 import json
 import socket
+import tempfile
 import threading
 from pathlib import Path
 from uuid import uuid4
@@ -14,6 +15,10 @@ from weatherflow.extensions import (
     MappingCredentialStore,
     NativeCredentialResolver,
 )
+
+
+def short_socket_path() -> Path:
+    return Path(tempfile.gettempdir()) / f"wf-{uuid4().hex[:8]}.sock"
 
 
 async def test_credential_value_exists_only_inside_transport_callback() -> None:
@@ -86,7 +91,7 @@ def test_keyring_access_failure_is_exposed_as_credential_unavailable() -> None:
 
 
 def test_native_resolver_uses_provider_only_over_private_socket(tmp_path) -> None:
-    socket_path = Path("/tmp") / f"wf-credential-{uuid4().hex[:12]}.sock"
+    socket_path = short_socket_path()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(socket_path))
     listener.listen(1)
@@ -130,8 +135,11 @@ def test_native_resolver_rejects_arbitrary_provider_and_key_name(tmp_path) -> No
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
-def test_native_resolver_accepts_fixed_foreign_model_providers(provider: str) -> None:
-    socket_path = Path("/tmp") / f"wf-credential-{uuid4().hex[:12]}.sock"
+def test_native_resolver_accepts_fixed_foreign_model_providers(
+    provider: str,
+    tmp_path: Path,
+) -> None:
+    socket_path = short_socket_path()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(socket_path))
     listener.listen(1)
@@ -156,7 +164,7 @@ def test_native_resolver_accepts_fixed_foreign_model_providers(provider: str) ->
 
 
 def test_native_resolver_allows_only_the_fixed_internal_continuation_key(tmp_path) -> None:
-    socket_path = Path("/tmp") / f"wf-credential-{uuid4().hex[:12]}.sock"
+    socket_path = short_socket_path()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(socket_path))
     listener.listen(1)
@@ -190,7 +198,7 @@ def test_native_resolver_allows_only_the_fixed_internal_continuation_key(tmp_pat
 
 
 def test_native_resolver_fails_closed_without_leaking_broker_response(tmp_path) -> None:
-    socket_path = Path("/tmp") / f"wf-credential-{uuid4().hex[:12]}.sock"
+    socket_path = short_socket_path()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(socket_path))
     listener.listen(1)

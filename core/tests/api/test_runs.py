@@ -22,6 +22,21 @@ class GatedModel:
         return FinalTurn(content="Background result")
 
 
+class GatedFollowUpModel:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.requests = []
+
+    async def complete(self, request):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            self.started.set()
+            await self.release.wait()
+            return FinalTurn(content="First result")
+        return FinalTurn(content="Revised result")
+
+
 async def test_run_api_is_idempotent_and_exposes_timeline(tmp_path: Path) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path), model=EchoModelAdapter())
     app = create_app(container=container)
@@ -222,6 +237,49 @@ async def test_cancel_stops_daemon_owned_background_run(tmp_path: Path) -> None:
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
     assert container.background_tasks == {}
+
+
+async def test_run_control_api_durably_follows_up_at_final_boundary(tmp_path: Path) -> None:
+    model = GatedFollowUpModel()
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path), model=model)
+    transport = ASGITransport(app=create_app(container=container))
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        accepted = await client.post(
+            "/v1/runs",
+            json={
+                "client_request_id": "live-follow-up",
+                "user_intent": "Draft the result",
+                "workspace_id": container.default_workspace.id,
+            },
+        )
+        run_id = accepted.json()["id"]
+        await asyncio.wait_for(model.started.wait(), timeout=1)
+        queued = await client.post(
+            f"/v1/runs/{run_id}/controls",
+            json={"kind": "follow_up", "content": "Make it concise."},
+        )
+        model.release.set()
+        completed = await container.wait_for_background_run(run_id, timeout_seconds=1)
+        rejected = await client.post(
+            f"/v1/runs/{run_id}/controls",
+            json={"kind": "steer", "content": "Too late"},
+        )
+
+    assert queued.status_code == 202
+    assert queued.json()["kind"] == "follow_up"
+    assert queued.json()["status"] == "pending"
+    assert completed.result_summary == "Revised result"
+    assert len(model.requests) == 2
+    assert [message.content for message in model.requests[1].messages[-2:]] == [
+        "First result",
+        "Make it concise.",
+    ]
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == {
+        "code": "run_control_rejected",
+        "status": "succeeded",
+    }
 
 
 async def test_conversation_sessions_can_be_created_renamed_pinned_and_listed(

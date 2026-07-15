@@ -59,13 +59,13 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
                 "'connector_bindings', 'connector_snapshots', "
                 "'provider_continuations', 'run_model_routes', "
                 "'automations', 'automation_run_links', 'mcp_connections', "
-                "'run_connector_routes', 'conversation_sessions') "
+                "'run_connector_routes', 'conversation_sessions', 'run_controls') "
                 "ORDER BY name"
             )
         ).fetchall()
 
     assert journal_mode == ("wal",)
-    assert migration == (20,)
+    assert migration == (21,)
     assert tables == [
         ("actions",),
         ("approvals",),
@@ -91,6 +91,7 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
         ("provider_continuations",),
         ("rhythm_snapshots",),
         ("run_connector_routes",),
+        ("run_controls",),
         ("run_model_routes",),
         ("workspaces",),
     ]
@@ -117,7 +118,7 @@ async def test_initialize_is_idempotent(tmp_path: Path) -> None:
             await connection.execute("SELECT COUNT(*) FROM schema_migrations")
         ).fetchone()
 
-    assert tuple(count) == (20,)
+    assert tuple(count) == (21,)
 
 
 async def test_migration_20_scopes_legacy_connector_accounts_and_routes_by_workspace(

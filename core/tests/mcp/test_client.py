@@ -194,7 +194,8 @@ async def test_stdio_transport_reaches_weatherflow_server(tmp_path: Path) -> Non
             "--data-dir",
             str(tmp_path),
             "mcp-server",
-        ]
+        ],
+        allow_unsandboxed=True,
     )
     try:
         initialized = await transport.request("initialize", {})
@@ -204,3 +205,8 @@ async def test_stdio_transport_reaches_weatherflow_server(tmp_path: Path) -> Non
 
     assert initialized["serverInfo"]["name"] == "weatherflow"
     assert any(tool["name"] == "weatherflow.submit_run" for tool in listed["tools"])
+
+
+def test_stdio_transport_requires_an_explicit_sandbox_or_test_override() -> None:
+    with pytest.raises(ValueError, match="sandbox"):
+        StdioMCPTransport([sys.executable, "-V"])

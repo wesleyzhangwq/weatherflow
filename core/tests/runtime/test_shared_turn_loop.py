@@ -215,6 +215,54 @@ async def test_final_answer_completes_run_and_checkpoint(tmp_path: Path) -> None
     assert checkpoint.state == {"result_committed": True}
 
 
+async def test_steering_is_visible_to_the_next_model_request(tmp_path: Path) -> None:
+    model = ScriptedModel([FinalTurn(content="Adjusted answer")])
+    loop, _, _, _, workspace, agent, run = await setup_loop(tmp_path, model)
+    await loop.control_coordinator.enqueue(
+        run_id=run.id,
+        kind="steer",
+        content="Prioritize the sandbox boundary.",
+    )
+
+    outcome = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert outcome.status is LoopStatus.SUCCEEDED
+    assert [message.content for message in model.requests[0].messages[-2:]] == [
+        "Read README and answer",
+        "Prioritize the sandbox boundary.",
+    ]
+
+
+async def test_follow_up_queued_during_run_continues_after_the_first_final_turn(
+    tmp_path: Path,
+) -> None:
+    model = ScriptedModel(
+        [
+            FinalTurn(content="First answer"),
+            FinalTurn(content="Revised answer"),
+        ]
+    )
+    loop, _, _, checkpoints, workspace, agent, run = await setup_loop(tmp_path, model)
+    await loop.control_coordinator.enqueue(
+        run_id=run.id,
+        kind="follow_up",
+        content="Make it more concise.",
+    )
+
+    outcome = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert outcome.status is LoopStatus.SUCCEEDED
+    assert outcome.result_summary == "Revised answer"
+    assert len(model.requests) == 2
+    assert [message.content for message in model.requests[1].messages[-2:]] == [
+        "First answer",
+        "Make it more concise.",
+    ]
+    checkpoint = await checkpoints.get(run.id)
+    assert checkpoint is not None
+    assert checkpoint.state == {"result_committed": True}
+
+
 async def test_safe_tool_result_is_observed_before_final_turn(tmp_path: Path) -> None:
     model = ScriptedModel(
         [
