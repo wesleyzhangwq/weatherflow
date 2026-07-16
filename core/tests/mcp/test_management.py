@@ -8,6 +8,7 @@ import pytest
 
 from weatherflow.mcp import (
     CuratedMCPCatalog,
+    CuratedMCPPresetPackageInstaller,
     InMemoryMCPConnectionRepository,
     MCPInstallationError,
     MCPInstallAuthorization,
@@ -177,12 +178,9 @@ def test_catalog_is_fixed_version_pinned_and_renderer_safe() -> None:
     catalog = CuratedMCPCatalog.default()
 
     assert {item.preset_id for item in catalog.summaries()} == {
-        "context7",
-        "fetch",
         "filesystem",
         "git-readonly",
         "memory",
-        "playwright",
         "time",
     }
     assert catalog.require("filesystem").package_version == "2026.7.10"
@@ -190,11 +188,12 @@ def test_catalog_is_fixed_version_pinned_and_renderer_safe() -> None:
     assert catalog.require("memory").available is True
     assert catalog.require("memory").state_filename == "memory.jsonl"
     assert "read_graph" in catalog.require("memory").allowed_tool_names
+    assert "read_file" in catalog.require("filesystem").allowed_tool_names
     assert catalog.require("playwright").package_version == "0.0.78"
     assert catalog.require("playwright").available is False
     assert catalog.require("fetch").available is False
-    assert catalog.require("time").available is False
-    assert catalog.require("git-readonly").available is False
+    assert catalog.require("time").available is True
+    assert catalog.require("git-readonly").available is True
     assert catalog.require("context7").available is False
     assert "private" in (catalog.require("fetch").unavailable_reason or "").lower()
 
@@ -304,7 +303,15 @@ async def test_enable_uses_fixed_filesystem_argv_and_disable_closes_transport(
 
 async def test_default_stdio_server_is_offline_and_read_only_inside_sandbox(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    runtime = tmp_path / "node-runtime"
+    (runtime / "bin").mkdir(parents=True)
+    monkeypatch.setattr(
+        NpmMCPPresetPackageInstaller,
+        "_resolve_node_runtime",
+        staticmethod(lambda: (str(runtime / "bin" / "npm"), runtime)),
+    )
     sandbox = RecordingStdioSandbox()
     repository = InMemoryMCPConnectionRepository()
     service = MCPManagementService(
@@ -330,15 +337,25 @@ async def test_default_stdio_server_is_offline_and_read_only_inside_sandbox(
     assert request.readable_roots == (
         str(preset.installation_root(workspace.internal_root)),
         *(str(path) for path in workspace.action_roots),
+        str(runtime),
     )
     assert request.writable_roots == ()
+    assert request.environment["PATH"].split(":", 1)[0] == str(runtime / "bin")
     assert request.network is SandboxNetworkMode.OFFLINE
     assert sandbox.processes[0].closed is True
 
 
 async def test_memory_stdio_server_gets_only_private_state_write_access(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    runtime = tmp_path / "node-runtime"
+    (runtime / "bin").mkdir(parents=True)
+    monkeypatch.setattr(
+        NpmMCPPresetPackageInstaller,
+        "_resolve_node_runtime",
+        staticmethod(lambda: (str(runtime / "bin" / "npm"), runtime)),
+    )
     sandbox = RecordingStdioSandbox(tool_name="read_graph")
     service = MCPManagementService(
         repository=InMemoryMCPConnectionRepository(),
@@ -362,11 +379,29 @@ async def test_memory_stdio_server_gets_only_private_state_write_access(
     assert request.readable_roots == (
         str(preset.installation_root(workspace.internal_root)),
         str(state_root),
+        str(runtime),
     )
     assert request.writable_roots == (str(state_root),)
     assert request.environment["MEMORY_FILE_PATH"] == str(state_root / "memory.jsonl")
     assert str(workspace.action_roots[0]) not in request.readable_roots
     assert request.network is SandboxNetworkMode.OFFLINE
+
+
+async def test_builtin_presets_install_without_a_host_package_manager(
+    tmp_path: Path,
+) -> None:
+    installer = CuratedMCPPresetPackageInstaller()
+    preset = CuratedMCPCatalog.default().require("time")
+
+    installed = await installer.install(
+        preset,
+        internal_root=tmp_path / "internal",
+        approved_action_id="action-1",
+    )
+
+    assert installed == preset.installation_root(tmp_path / "internal")
+    assert installer.is_installed(preset, internal_root=tmp_path / "internal")
+    assert preset.executable_path(tmp_path / "internal").read_text() == "weatherflow-builtin-mcp\n"
 
 
 async def test_preset_tool_allowlist_fails_closed_on_unexpected_discovery(

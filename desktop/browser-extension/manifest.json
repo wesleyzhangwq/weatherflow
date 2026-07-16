@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "WeatherFlow Activity",
+  "version": "3.0.0",
+  "description": "Opt-in focused-tab activity for the local WeatherFlow Raw Activity Vault.",
+  "permissions": ["alarms", "idle", "storage", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "service-worker.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "WeatherFlow Activity",
+    "default_popup": "popup.html"
+  }
+}

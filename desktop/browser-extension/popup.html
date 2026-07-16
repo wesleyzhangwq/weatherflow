@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WeatherFlow Activity</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><small>WEATHERFLOW</small><h1>浏览器活动</h1></div>
+        <span id="status-dot" aria-hidden="true"></span>
+      </header>
+      <p id="status" role="status">正在读取连接状态…</p>
+      <label class="toggle"><span><strong>记录当前标签页</strong><small>保存完整 URL、标题和焦点变化</small></span><input id="enabled" type="checkbox" /></label>
+      <label class="toggle"><span><strong>允许无痕窗口</strong><small>还需在浏览器和 WeatherFlow 中分别授权</small></span><input id="incognito" type="checkbox" /></label>
+      <label><span>本机地址</span><input id="base-url" type="url" value="http://127.0.0.1:8765" /></label>
+      <label><span>桥接令牌</span><input id="bridge-token" type="password" autocomplete="off" placeholder="仅保存在扩展本机存储" /></label>
+      <div class="actions"><button id="save">保存并连接</button><button id="sample" class="secondary">立即检测</button></div>
+      <p class="privacy">不采集网页正文、表单内容、Cookie、键盘、剪贴板、截图或音频。</p>
+    </main>
+    <script type="module" src="popup.mjs"></script>
+  </body>
+</html>

@@ -420,3 +420,28 @@ async def test_status_stays_available_when_keychain_access_is_denied(tmp_path: P
 
     assert status.configured is True
     assert status.credential_available is False
+
+
+async def test_status_uses_non_secret_presence_check_when_supported(tmp_path: Path) -> None:
+    backend = FakeKeyring()
+    _, workspace, _, store, service = await setup(tmp_path, backend)
+    store.set(CredentialRef(provider="minimax", name="api_key"), SECRET)
+    await service.configure_minimax(
+        workspace_id=workspace.id,
+        model="MiniMax-M3",
+        base_url="https://api.minimax.test/v1",
+    )
+
+    class PresenceOnlyStore:
+        def available(self, reference: CredentialRef) -> bool:
+            assert reference == CredentialRef(provider="minimax", name="api_key")
+            return True
+
+        def resolve(self, reference: CredentialRef) -> str | None:
+            raise AssertionError(f"status must not read {reference.key}")
+
+    service.credential_store = PresenceOnlyStore()
+
+    status = await service.status(workspace.id)
+
+    assert status.credential_available is True

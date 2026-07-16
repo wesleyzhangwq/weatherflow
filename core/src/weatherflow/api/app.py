@@ -2,6 +2,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import (
@@ -18,7 +19,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from weatherflow import __version__
+from weatherflow.activity import (
+    ActivityCollectionDisabledError,
+    ActivityHeartbeat,
+    ActivityHeartbeatOutOfOrderError,
+    ActivityInferenceJob,
+    ActivityInterval,
+    ActivityPreferences,
+    ActivityPreferencesVersionConflict,
+    ActivitySource,
+    ActivitySummary,
+)
 from weatherflow.api.schemas import (
+    ActivityDeleteRequest,
+    ActivityDeleteResult,
+    ActivityExportResponse,
+    ActivityPreferencesUpdateRequest,
     ApprovalDecisionRequest,
     ApprovalView,
     AutomationCreateRequest,
@@ -235,6 +251,7 @@ def create_app(
         await service.start_background(
             include_connector_sync=app.state.lifespan_active,
             include_automation_scheduler=app.state.lifespan_active,
+            include_activity_inference_scheduler=app.state.lifespan_active,
         )
         return service
 
@@ -254,6 +271,142 @@ def create_app(
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(version=__version__)
+
+    @app.get("/v1/activity/preferences", response_model=ActivityPreferences)
+    async def activity_preferences() -> ActivityPreferences:
+        service = await runtime()
+        return await service.activity.preferences()
+
+    @app.put("/v1/activity/preferences", response_model=ActivityPreferences)
+    @app.patch("/v1/activity/preferences", response_model=ActivityPreferences)
+    async def update_activity_preferences(
+        request: ActivityPreferencesUpdateRequest,
+    ) -> ActivityPreferences:
+        service = await runtime()
+        preferences = ActivityPreferences(
+            **request.model_dump(exclude={"expected_version"}),
+            version=request.expected_version,
+        )
+        try:
+            return await service.activity.update_preferences(
+                preferences,
+                expected_version=request.expected_version,
+            )
+        except ActivityPreferencesVersionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "activity_preferences_version_conflict"},
+            ) from error
+
+    @app.post(
+        "/v1/activity/heartbeats",
+        response_model=ActivityInterval,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def record_activity_heartbeat(
+        heartbeat: ActivityHeartbeat,
+    ) -> ActivityInterval:
+        service = await runtime()
+        try:
+            return await service.activity.ingest(heartbeat)
+        except ActivityCollectionDisabledError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "activity_collection_disabled"},
+            ) from error
+        except ActivityHeartbeatOutOfOrderError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "activity_heartbeat_out_of_order"},
+            ) from error
+
+    @app.get("/v1/activity/events", response_model=list[ActivityInterval])
+    async def activity_events(
+        start: datetime,
+        end: datetime,
+        source: ActivitySource | None = None,
+        app_name: str | None = None,
+        domain: str | None = None,
+        category: str | None = None,
+        limit: int = Query(default=5_000, ge=1, le=10_000),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[ActivityInterval]:
+        service = await runtime()
+        return await service.activity.repository.list_events(
+            start=start,
+            end=end,
+            source=source,
+            app_name=app_name,
+            domain=domain,
+            category=category,
+            limit=limit,
+            offset=offset,
+        )
+
+    @app.get("/v1/activity/summary", response_model=ActivitySummary)
+    async def activity_summary(start: datetime, end: datetime) -> ActivitySummary:
+        service = await runtime()
+        return await service.activity.summary(start=start, end=end)
+
+    @app.get("/v1/activity/export", response_model=ActivityExportResponse)
+    async def export_activity(start: datetime, end: datetime) -> ActivityExportResponse:
+        service = await runtime()
+        events = await service.activity.repository.list_events_for_inference(
+            start=start,
+            end=end,
+        )
+        return ActivityExportResponse(
+            exported_at=datetime.now(UTC),
+            preferences=await service.activity.preferences(),
+            events=tuple(events),
+        )
+
+    @app.get("/v1/activity/inference/history", response_model=list[ActivityInferenceJob])
+    async def activity_inference_history(
+        limit: int = Query(default=100, ge=1, le=1_000),
+    ) -> list[ActivityInferenceJob]:
+        service = await runtime()
+        return await service.activity_inference_repository.list_history(limit=limit)
+
+    @app.get("/v1/activity/inference-jobs", response_model=list[ActivityInferenceJob])
+    async def activity_inference_jobs(
+        limit: int = Query(default=100, ge=1, le=1_000),
+    ) -> list[ActivityInferenceJob]:
+        service = await runtime()
+        jobs = await service.activity_inference_repository.list_history(limit=limit)
+        return [
+            job.model_copy(update={"request_payload": None, "response_payload": None})
+            for job in jobs
+        ]
+
+    @app.get(
+        "/v1/activity/inference-jobs/{job_id}",
+        response_model=ActivityInferenceJob,
+    )
+    async def activity_inference_job(job_id: str) -> ActivityInferenceJob:
+        service = await runtime()
+        job = await service.activity_inference_repository.get(job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "activity_inference_job_not_found"},
+            )
+        return job
+
+    @app.delete("/v1/activity/events", response_model=ActivityDeleteResult)
+    async def delete_activity(
+        request: ActivityDeleteRequest,
+        start: datetime,
+        end: datetime,
+    ) -> ActivityDeleteResult:
+        if not request.confirm:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "confirmation_required"},
+            )
+        service = await runtime()
+        deleted = await service.activity.delete_range(start=start, end=end)
+        return ActivityDeleteResult(deleted=deleted)
 
     @app.post("/v1/runs", response_model=Run, status_code=status.HTTP_201_CREATED)
     async def create_run(request: RunCreateRequest) -> Run:

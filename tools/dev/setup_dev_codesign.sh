@@ -67,7 +67,7 @@ security import "$P12" \
 
 # Limit the partition-list update to the newly imported private signing key.
 security set-key-partition-list \
-  -S apple-tool:,apple:,unsigned: \
+  -S apple-tool:,apple:,codesign:,unsigned: \
   -l "$IDENTITY" \
   -t private \
   -s \

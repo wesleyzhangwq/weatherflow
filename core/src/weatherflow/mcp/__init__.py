@@ -16,6 +16,7 @@ from weatherflow.mcp.client import (
     MCPUnavailableError,
 )
 from weatherflow.mcp.management import (
+    CuratedMCPPresetPackageInstaller,
     InMemoryMCPConnectionRepository,
     MCPConnectionRepository,
     MCPConnectionState,
@@ -36,6 +37,7 @@ from weatherflow.mcp.transport import StdioMCPTransport
 __all__ = [
     "ConnectedMCP",
     "CuratedMCPCatalog",
+    "CuratedMCPPresetPackageInstaller",
     "InMemoryMCPConnectionRepository",
     "MCPClient",
     "MCPConnectionRepository",

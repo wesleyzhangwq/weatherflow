@@ -84,8 +84,9 @@ def stop_stale_weatherflow_apps() -> None:
             continue
         pid_value, command = fields
         is_release = "WeatherFlow.app/Contents/MacOS/weatherflow-desktop" in command
-        is_this_debug_app = command.endswith(
-            "target/debug/weatherflow-desktop"
+        is_this_debug_app = (
+            command.endswith("target/debug/weatherflow-desktop")
+            or command.endswith("target/weatherflow-dev-signed/weatherflow-desktop")
         ) and str(root) in _process_cwd(int(pid_value))
         if not (is_release or is_this_debug_app):
             continue

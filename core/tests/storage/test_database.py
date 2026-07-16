@@ -64,15 +64,21 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
                 "'connector_bindings', 'connector_snapshots', "
                 "'provider_continuations', 'run_model_routes', "
                 "'automations', 'automation_run_links', 'mcp_connections', "
-                "'run_connector_routes', 'conversation_sessions', 'run_controls') "
+                "'run_connector_routes', 'conversation_sessions', 'run_controls', "
+                "'activity_preferences', 'activity_events', "
+                "'activity_heartbeat_receipts', 'activity_inference_jobs') "
                 "ORDER BY name"
             )
         ).fetchall()
 
     assert journal_mode == ("wal",)
-    assert migration == (23,)
+    assert migration == (26,)
     assert tables == [
         ("actions",),
+        ("activity_events",),
+        ("activity_heartbeat_receipts",),
+        ("activity_inference_jobs",),
+        ("activity_preferences",),
         ("approvals",),
         ("artifacts",),
         ("automation_run_links",),
@@ -123,7 +129,46 @@ async def test_initialize_is_idempotent(tmp_path: Path) -> None:
             await connection.execute("SELECT COUNT(*) FROM schema_migrations")
         ).fetchone()
 
-    assert tuple(count) == (23,)
+    assert tuple(count) == (26,)
+
+
+async def test_migration_26_backfills_activity_source_event_provenance(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "weatherflow.db"
+    await initialize_through(path, 25)
+    async with aiosqlite.connect(path) as connection:
+        await connection.execute(
+            """
+            INSERT INTO activity_events(
+                id, source, device_id, source_instance,
+                started_at, ended_at, observed_at, duration_seconds,
+                app_name, bundle_id, window_title,
+                browser_name, browser_window_id, browser_tab_id,
+                url, domain, tab_title, audible, incognito, focused,
+                idle_state, category, state_hash, created_at, updated_at
+            ) VALUES (
+                'event-1', 'macos_window', 'macbook', 'native-main',
+                '2026-07-16T06:00:00+00:00', '2026-07-16T06:00:10+00:00',
+                '2026-07-16T06:00:10+00:00', 10,
+                'Terminal', 'com.apple.Terminal', 'WeatherFlow',
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1,
+                'active', 'development', 'hash',
+                '2026-07-16T06:00:00+00:00', '2026-07-16T06:00:10+00:00'
+            )
+            """
+        )
+        await connection.commit()
+
+    await Database(path).initialize()
+
+    async with aiosqlite.connect(path) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT source_event_id FROM activity_events WHERE id = 'event-1'"
+            )
+        ).fetchone()
+    assert row == ("event-1",)
 
 
 async def test_migration_22_backfills_modes_and_preserves_connector_routes(

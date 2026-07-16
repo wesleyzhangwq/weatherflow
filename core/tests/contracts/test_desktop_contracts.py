@@ -47,7 +47,72 @@ def test_desktop_surfaces_are_compact_movable_and_responsive() -> None:
     assert "@media (max-width: 980px)" in styles
 
 
-def test_native_activity_response_has_no_raw_content_fields() -> None:
+def test_conversation_header_stays_compact_and_preserves_the_reading_area() -> None:
+    cockpit = (ROOT / "desktop/src/components/Cockpit.tsx").read_text()
+    styles = (ROOT / "desktop/src/styles.css").read_text()
+
+    assert 'className="workspace-header conversation-header"' in cockpit
+    assert ".conversation-header {" in styles
+    assert ".conversation-pane { grid-template-rows: 300px" not in styles
+    conversation_header = styles.split(".conversation-header {", maxsplit=1)[1].split(
+        "}", maxsplit=1
+    )[0]
+    assert "300px" not in conversation_header
+
+
+def test_light_theme_uses_semantic_icon_surfaces() -> None:
+    cockpit = (ROOT / "desktop/src/components/Cockpit.tsx").read_text()
+    styles = (ROOT / "desktop/src/styles.css").read_text()
+
+    assert '<SiGithub color="#f2f2f2"' not in cockpit
+    assert '<SiNotion color="#f2f2f2"' not in cockpit
+    for selector in (
+        ".skill-mark",
+        ".mcp-mark",
+        ".oauth-service-mark",
+        ".oauth-detail-mark",
+        ".mcp-title a",
+        ".capability-tags span",
+    ):
+        assert f':root[data-theme="light"] {selector}' in styles
+
+
+def test_desktop_palette_is_warm_neutral_and_connector_marks_are_theme_owned() -> None:
+    cockpit = (ROOT / "desktop/src/components/Cockpit.tsx").read_text()
+    styles = (ROOT / "desktop/src/styles.css").read_text()
+
+    assert "/* Warm-neutral theme consolidation. */" in styles
+    consolidated = styles.split("/* Warm-neutral theme consolidation. */", maxsplit=1)[1]
+    for token in (
+        "--wf-accent:",
+        "--wf-accent-soft:",
+        "--wf-gold:",
+        "--wf-gold-soft:",
+        "--wf-sage:",
+        "--wf-sage-soft:",
+        "--wf-taupe:",
+        "--wf-taupe-soft:",
+    ):
+        assert token in consolidated
+    assert "--wf-blue" not in styles
+
+    for cold_brand_color in (
+        "#4285F4",
+        "#168DE2",
+        "#7B83EB",
+        "#7B83FF",
+        "#2684FF",
+        "#579DFF",
+        "#3984FF",
+        "#7289DA",
+        "#18BFFF",
+    ):
+        assert cold_brand_color not in cockpit
+    assert cockpit.count('className="connector-brand-icon"') >= 20
+    assert cockpit.count("data-connector={status.connector}") >= 2
+
+
+def test_native_activity_response_is_limited_to_approved_vault_metadata() -> None:
     rust = (ROOT / "desktop/src-tauri/src/activity.rs").read_text()
     interface = (
         (ROOT / "desktop/src/activity.ts")
@@ -57,7 +122,23 @@ def test_native_activity_response_has_no_raw_content_fields() -> None:
 
     assert "pub struct ActivitySample" in rust
     assert "idle_seconds" in rust and "category" in rust
-    for forbidden in ("window_title", "keystrokes", "clipboard", "screenshot", "application_name"):
+    for required in ("app_name", "bundle_id", "window_title", "focused", "idle_state"):
+        assert required in interface
+    for forbidden in (
+        "keystrokes",
+        "keyboard_content",
+        "clipboard",
+        "screenshot",
+        "screen_pixels",
+        "audio_content",
+        "microphone",
+        "cookie",
+        "authorization",
+        "api_key",
+        "oauth_code",
+        "form_value",
+        "page_content",
+    ):
         assert forbidden not in interface
 
 

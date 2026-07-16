@@ -1,4 +1,4 @@
-import type { Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, InstallApprovalRequest, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, Session, SkillCatalogEntry, SystemStatus, ToolMode, Workspace } from "./types";
+import type { ActivityExport, ActivityHeartbeat, ActivityInferenceJob, ActivityInterval, ActivityPreferences, ActivitySummary, Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, InstallApprovalRequest, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, Session, SkillCatalogEntry, SystemStatus, ToolMode, Workspace } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
@@ -88,6 +88,46 @@ export class WeatherFlowClient {
   }
   ingestSignal(signal: Record<string, unknown>, workspaceId?: string | null): Promise<unknown> {
     return this.request(this.scoped("/v1/rhythm/signals", workspaceId), { method: "POST", body: JSON.stringify(signal) });
+  }
+  activityPreferences(): Promise<ActivityPreferences> { return this.request("/v1/activity/preferences"); }
+  updateActivityPreferences(preferences: Omit<ActivityPreferences, "version">, expectedVersion: number): Promise<ActivityPreferences> {
+    return this.request("/v1/activity/preferences", { method: "PUT", body: JSON.stringify({ ...preferences, expected_version: expectedVersion }) });
+  }
+  ingestActivityHeartbeat(heartbeat: ActivityHeartbeat): Promise<unknown> {
+    return this.request("/v1/activity/heartbeats", { method: "POST", body: JSON.stringify(heartbeat) });
+  }
+  activitySummary(start: Date, end: Date): Promise<ActivitySummary> {
+    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
+    return this.request(`/v1/activity/summary?${query}`);
+  }
+  async activityEvents(start: Date, end: Date): Promise<ActivityInterval[]> {
+    const events: ActivityInterval[] = [];
+    const pageSize = 10_000;
+    for (let offset = 0; ; offset += pageSize) {
+      const query = new URLSearchParams({
+        start: start.toISOString(),
+        end: end.toISOString(),
+        limit: String(pageSize),
+        offset: String(offset),
+      });
+      const page = await this.request<ActivityInterval[]>(`/v1/activity/events?${query}`);
+      events.push(...page);
+      if (page.length < pageSize) return events;
+    }
+  }
+  async activityInferenceHistory(limit = 100): Promise<ActivityInferenceJob[]> {
+    const jobs = await this.request<ActivityInferenceJob[]>(`/v1/activity/inference-jobs?limit=${limit}`);
+    if (!jobs.length) return jobs;
+    const latest = await this.request<ActivityInferenceJob>(`/v1/activity/inference-jobs/${encodeURIComponent(jobs[0].id)}`);
+    return [latest, ...jobs.slice(1)];
+  }
+  activityExport(start: Date, end: Date): Promise<ActivityExport> {
+    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
+    return this.request(`/v1/activity/export?${query}`);
+  }
+  deleteActivity(start: Date, end: Date): Promise<{ deleted: number }> {
+    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
+    return this.request(`/v1/activity/events?${query}`, { method: "DELETE", body: JSON.stringify({ confirm: true }) });
   }
   rhythmInsights(workspaceId?: string | null): Promise<RhythmInsights> { return this.request(this.scoped("/v1/rhythm/insights", workspaceId)); }
   status(workspaceId?: string | null): Promise<SystemStatus> { return this.request(this.scoped("/v1/system/status", workspaceId)); }

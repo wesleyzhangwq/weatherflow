@@ -97,6 +97,104 @@ export interface DesktopSnapshot {
   workspace: Workspace;
   metadata_sensor_enabled: boolean;
 }
+export interface ActivityPreferences {
+  collection_enabled: boolean;
+  macos_enabled: boolean;
+  browser_enabled: boolean;
+  incognito_enabled: boolean;
+  remote_inference_enabled: boolean;
+  model_workspace_id: string | null;
+  retention_days: 30 | 90 | 365 | null;
+  version: number;
+}
+export interface ActivityHeartbeat {
+  source: "macos_window" | "browser_tab" | "idle";
+  device_id: string;
+  source_instance: string;
+  source_event_id: string;
+  observed_at: string;
+  pulsetime_seconds: number;
+  app_name?: string | null;
+  bundle_id?: string | null;
+  window_title?: string | null;
+  browser_name?: string | null;
+  browser_window_id?: string | null;
+  browser_tab_id?: string | null;
+  url?: string | null;
+  domain?: string | null;
+  tab_title?: string | null;
+  audible?: boolean | null;
+  incognito?: boolean | null;
+  focused?: boolean | null;
+  idle_state: "active" | "idle" | "unknown";
+  category?: string | null;
+}
+export interface ActivityInterval {
+  id: string;
+  source: "macos_window" | "browser_tab" | "idle";
+  device_id: string;
+  source_instance: string;
+  source_event_id: string;
+  started_at: string;
+  ended_at: string;
+  observed_at: string;
+  duration_seconds: number;
+  app_name: string | null;
+  bundle_id: string | null;
+  window_title: string | null;
+  browser_name: string | null;
+  browser_window_id: string | null;
+  browser_tab_id: string | null;
+  url: string | null;
+  domain: string | null;
+  tab_title: string | null;
+  audible: boolean | null;
+  incognito: boolean | null;
+  focused: boolean | null;
+  idle_state: "active" | "idle" | "unknown";
+  category: string | null;
+}
+export interface ActivityRankItem { name: string; seconds: number }
+export interface ActivitySummary {
+  window_start: string;
+  window_end: string;
+  screen_seconds: number;
+  browser_seconds: number;
+  idle_seconds: number;
+  current_streak_seconds: number;
+  app_switch_count: number;
+  tab_switch_count: number;
+  category_seconds: Record<string, number>;
+  top_apps: ActivityRankItem[];
+  top_domains: ActivityRankItem[];
+}
+export interface ActivityInferenceJob {
+  id: string;
+  scheduled_for: string;
+  window_start: string;
+  window_end: string;
+  workspace_id: string;
+  status: "pending" | "executing" | "completed" | "failed" | "needs_review";
+  provider: string | null;
+  model: string | null;
+  base_url: string | null;
+  configuration_version: number | null;
+  event_ids: string[];
+  event_count: number;
+  chunk_count: number;
+  redaction_count: number;
+  request_payload: string | null;
+  response_payload: string | null;
+  error_code: string | null;
+  snapshot: CurrentRhythm["snapshot"] | null;
+  created_at: string;
+  updated_at: string;
+}
+export interface ActivityExport {
+  exported_at: string;
+  preferences: ActivityPreferences;
+  events: ActivityInterval[];
+}
 export interface Approval {
   id: string;
   action_id: string;

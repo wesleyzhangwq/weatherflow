@@ -767,4 +767,95 @@ MIGRATIONS = (
             ON connector_bindings(enabled, auto_fetch_enabled, next_sync_at);
         """,
     ),
+    Migration(
+        version=24,
+        sql="""
+        CREATE TABLE activity_preferences (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            config TEXT NOT NULL,
+            version INTEGER NOT NULL CHECK(version >= 0),
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE activity_events (
+            id TEXT PRIMARY KEY,
+            source TEXT NOT NULL CHECK(source IN ('macos_window', 'browser_tab', 'idle')),
+            device_id TEXT NOT NULL,
+            source_instance TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            duration_seconds REAL NOT NULL CHECK(duration_seconds >= 0),
+            app_name TEXT,
+            bundle_id TEXT,
+            window_title TEXT,
+            browser_name TEXT,
+            browser_window_id TEXT,
+            browser_tab_id TEXT,
+            url TEXT,
+            domain TEXT,
+            tab_title TEXT,
+            audible INTEGER,
+            incognito INTEGER,
+            focused INTEGER,
+            idle_state TEXT NOT NULL CHECK(idle_state IN ('active', 'idle', 'unknown')),
+            category TEXT,
+            state_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX idx_activity_events_interval
+            ON activity_events(started_at, ended_at, id);
+        CREATE INDEX idx_activity_events_source_interval
+            ON activity_events(source, started_at, ended_at, id);
+        CREATE INDEX idx_activity_events_source_instance
+            ON activity_events(source_instance, ended_at DESC, id DESC);
+        CREATE INDEX idx_activity_events_app
+            ON activity_events(app_name, started_at, id);
+        CREATE INDEX idx_activity_events_domain
+            ON activity_events(domain, started_at, id);
+
+        CREATE TABLE activity_heartbeat_receipts (
+            source_instance TEXT NOT NULL,
+            source_event_id TEXT NOT NULL,
+            activity_event_id TEXT NOT NULL REFERENCES activity_events(id) ON DELETE CASCADE,
+            observed_at TEXT NOT NULL,
+            PRIMARY KEY(source_instance, source_event_id)
+        );
+
+        CREATE INDEX idx_activity_heartbeat_receipts_event
+            ON activity_heartbeat_receipts(activity_event_id);
+        """,
+    ),
+    Migration(
+        version=25,
+        sql="""
+        CREATE TABLE activity_inference_jobs (
+            id TEXT PRIMARY KEY,
+            scheduled_for TEXT NOT NULL UNIQUE,
+            window_start TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN (
+                'pending', 'executing', 'completed', 'failed', 'needs_review'
+            )),
+            config TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX idx_activity_inference_jobs_status_schedule
+            ON activity_inference_jobs(status, scheduled_for, id);
+        """,
+    ),
+    Migration(
+        version=26,
+        sql="""
+        ALTER TABLE activity_events ADD COLUMN source_event_id TEXT;
+        UPDATE activity_events SET source_event_id = id WHERE source_event_id IS NULL;
+        CREATE INDEX idx_activity_events_source_event
+            ON activity_events(source_instance, source_event_id);
+        """,
+    ),
 )

@@ -1,22 +1,37 @@
 import { expect, it } from "vitest";
-import { ActivityAccumulator } from "./activity";
+import { nativeSampleToHeartbeat } from "./activity";
 
-it("aggregates only privacy-safe activity metadata", () => {
-  const start = new Date("2026-07-12T00:00:00Z");
-  const accumulator = new ActivityAccumulator(start);
-  accumulator.record({ idle_seconds: 1, category: "development" }, 5);
-  accumulator.record({ idle_seconds: 0, category: "communication" }, 5);
-  const payload = accumulator.flush(new Date("2026-07-12T00:00:10Z"));
+it("converts native exact window state into an idempotent raw-vault heartbeat", () => {
+  const payload = nativeSampleToHeartbeat(
+    {
+      idle_seconds: 3,
+      app_name: "Visual Studio Code",
+      bundle_id: "com.microsoft.VSCode",
+      window_title: "activity.ts — WeatherFlow",
+      focused: true,
+      idle_state: "active",
+      category: "development",
+      accessibility: "granted",
+    },
+    new Date("2026-07-16T06:00:00Z"),
+    "native-1",
+    "device-1",
+  );
 
   expect(payload).toEqual({
-    kind: "activity_metadata",
-    observed_at: "2026-07-12T00:00:10.000Z",
-    window_start: "2026-07-12T00:00:00.000Z",
-    window_end: "2026-07-12T00:00:10.000Z",
-    active_seconds: 9,
-    idle_seconds: 1,
-    app_switch_count: 1,
-    category_seconds: { development: 4, communication: 5 },
+    source: "macos_window",
+    device_id: "device-1",
+    source_instance: "weatherflow-desktop",
+    source_event_id: "native-1",
+    observed_at: "2026-07-16T06:00:00.000Z",
+    pulsetime_seconds: 15,
+    app_name: "Visual Studio Code",
+    bundle_id: "com.microsoft.VSCode",
+    window_title: "activity.ts — WeatherFlow",
+    focused: true,
+    idle_state: "active",
+    category: "development",
   });
-  expect(JSON.stringify(payload)).not.toMatch(/title|application|keystroke|clipboard|screen/i);
+  expect(payload).not.toHaveProperty("app_switch_count");
+  expect(JSON.stringify(payload)).not.toMatch(/keystroke|clipboard|screenshot|audio/i);
 });

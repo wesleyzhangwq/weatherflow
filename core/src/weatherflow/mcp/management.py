@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -318,6 +319,64 @@ class NpmMCPPresetPackageInstaller:
             shutil.rmtree(temporary)
 
 
+class CuratedMCPPresetPackageInstaller:
+    """Install catalog-owned npm packages or a marker for bundled MCP servers."""
+
+    marker = "weatherflow-builtin-mcp\n"
+
+    def __init__(self, *, sandbox: SandboxBackend | None = None) -> None:
+        self.npm = NpmMCPPresetPackageInstaller(sandbox=sandbox)
+
+    async def install(
+        self,
+        preset: MCPPreset,
+        *,
+        internal_root: Path,
+        approved_action_id: str,
+    ) -> Path:
+        if preset.package_manager == "npm":
+            return await self.npm.install(
+                preset,
+                internal_root=internal_root,
+                approved_action_id=approved_action_id,
+            )
+        if preset.package_manager != "builtin":
+            raise MCPInstallationError(f"unsupported installer for preset {preset.preset_id}")
+        if not approved_action_id.strip():
+            raise PermissionError("MCP installation requires an approved Action")
+        if not preset.available:
+            raise MCPPresetUnavailableError(preset.unavailable_reason or preset.preset_id)
+        return await asyncio.to_thread(self._install_builtin, preset, internal_root)
+
+    def is_installed(self, preset: MCPPreset, *, internal_root: Path) -> bool:
+        if preset.package_manager == "npm":
+            return self.npm.is_installed(preset, internal_root=internal_root)
+        if preset.package_manager != "builtin":
+            return False
+        root = internal_root.expanduser().resolve()
+        target = preset.installation_root(root)
+        marker = preset.executable_path(root)
+        return (
+            not NpmMCPPresetPackageInstaller._has_directory_symlink(root, target)
+            and marker.is_file()
+            and marker.resolve().is_relative_to(target.resolve())
+            and marker.read_text() == self.marker
+        )
+
+    @classmethod
+    def _install_builtin(cls, preset: MCPPreset, internal_root: Path) -> Path:
+        root = internal_root.expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        target = NpmMCPPresetPackageInstaller._ensure_private_tree(
+            root,
+            ("mcp", "servers", preset.preset_id, preset.package_version),
+        )
+        marker = preset.executable_path(root)
+        marker.write_text(cls.marker)
+        marker.chmod(0o600)
+        return target
+
+
 class WorkspaceRoutedMCPExecutor:
     """Route one canonical MCP tool id to the enabled Workspace connection."""
 
@@ -353,10 +412,14 @@ class MCPManagementService:
     ) -> None:
         self.catalog = catalog or CuratedMCPCatalog.default()
         self.repository = repository
-        self.package_installer = package_installer or NpmMCPPresetPackageInstaller(sandbox=sandbox)
+        self.package_installer = package_installer or CuratedMCPPresetPackageInstaller(
+            sandbox=sandbox
+        )
         self.registry = registry or MCPRegistry()
         self.transport_factory = transport_factory
         self.sandbox = sandbox
+        self.builtin_runtime_command = self._builtin_runtime_command()
+        self.builtin_runtime_roots = self._builtin_runtime_roots()
         self._connections: dict[tuple[str, str], ConnectedMCP] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
@@ -425,10 +488,7 @@ class MCPManagementService:
         ):
             raise MCPNotInstalledError(preset.preset_id)
         await self._close_connection(workspace.workspace_id, preset.preset_id)
-        argv = preset.launch_argv(
-            workspace.internal_root,
-            action_roots=workspace.action_roots,
-        )
+        argv = self._launch_argv(preset, workspace)
         transport: MCPTransport | None = None
         try:
             transport = self._transport_for(preset, workspace, argv)
@@ -489,13 +549,23 @@ class MCPManagementService:
             readable_roots += tuple(str(path) for path in workspace.action_roots)
         if state_root is not None:
             readable_roots += (str(state_root),)
+        runtime_path = os.environ.get("PATH", "/usr/bin:/bin")
+        if preset.package_manager == "npm":
+            _npm, runtime_root = NpmMCPPresetPackageInstaller._resolve_node_runtime()
+            readable_roots += (str(runtime_root),)
+            runtime_path = f"{runtime_root / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin"
+        elif preset.package_manager == "builtin":
+            readable_roots += tuple(str(root) for root in self.builtin_runtime_roots)
+            runtime_path = f"{Path(self.builtin_runtime_command[0]).parent}:/usr/bin:/bin"
         environment = {
             key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL"}
         }
+        environment["PATH"] = runtime_path
         if preset.state_environment_key is not None:
             state_file = preset.state_file(workspace.internal_root)
             assert state_file is not None
             environment[preset.state_environment_key] = str(state_file)
+        readable_roots = tuple(dict.fromkeys(readable_roots))
         sandbox_request = SandboxRequest(
             argv=argv,
             cwd=str(state_root or installation_root),
@@ -516,6 +586,45 @@ class MCPManagementService:
             sandbox=self.sandbox,
             sandbox_request=sandbox_request,
         )
+
+    def _launch_argv(
+        self,
+        preset: MCPPreset,
+        workspace: MCPWorkspaceContext,
+    ) -> tuple[str, ...]:
+        if preset.package_manager != "builtin":
+            return preset.launch_argv(
+                workspace.internal_root,
+                action_roots=workspace.action_roots,
+            )
+        root_args = tuple(str(path) for path in workspace.action_roots)
+        return (
+            *self.builtin_runtime_command,
+            preset.binary_name,
+            *(root_args if preset.requires_action_roots else ()),
+        )
+
+    @staticmethod
+    def _builtin_runtime_command() -> tuple[str, ...]:
+        if getattr(sys, "frozen", False):
+            return (str(Path(sys.executable).resolve()), "builtin-mcp")
+        return (
+            str(Path(sys.executable).absolute()),
+            "-m",
+            "weatherflow",
+            "builtin-mcp",
+        )
+
+    @staticmethod
+    def _builtin_runtime_roots() -> tuple[Path, ...]:
+        candidates = {
+            Path(sys.prefix).resolve(),
+            Path(sys.executable).resolve().parent.parent,
+            Path(__file__).resolve().parents[2],
+        }
+        if getattr(sys, "frozen", False):
+            candidates.add(Path(sys.executable).resolve().parent)
+        return tuple(sorted((path for path in candidates if path.exists()), key=str))
 
     async def persistent_state_count(
         self,

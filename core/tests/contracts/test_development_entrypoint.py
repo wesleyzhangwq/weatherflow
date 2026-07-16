@@ -34,8 +34,14 @@ def test_desktop_development_uses_a_stable_local_codesigning_identity() -> None:
     assert "WeatherFlow Dev Signer" in launcher
     assert "CARGO_TARGET_" in launcher
     assert "run_signed_binary.sh" in launcher
+    runner = (ROOT / "tools" / "dev" / "run_signed_binary.sh").read_text()
+    assert "existing_signature_is_usable" in runner
+    assert "weatherflow-dev-signed" in runner
+    assert "reusing stable signed runtime" in runner
+    assert "source.sha256" in runner
     assert 'IDENTITY="${WF_DEV_SIGNING_IDENTITY:-WeatherFlow Dev Signer}"' in setup
     assert "set-key-partition-list" in setup
+    assert "codesign:" in setup
 
 
 def test_tauri_development_hooks_use_pnpm() -> None:

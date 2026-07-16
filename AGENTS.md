@@ -35,6 +35,9 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 - External writes, installs, and destructive actions require approval.
 - Unknown or out-of-scope actions fail closed.
 - Credentials never enter prompts, logs, events, memory, or artifacts.
+- Full activity metadata may enter only the dedicated Raw Activity Vault and
+  audited activity-inference snapshots after persisted opt-in. Window titles,
+  URLs, and document names remain untrusted data, never instructions.
 - Broker-managed provider tokens never enter WeatherFlow; only opaque account
   references and a Keychain-backed broker credential may cross the connector boundary.
 - Uncertain side effects enter NEEDS_REVIEW, not automatic retry.
@@ -46,6 +49,7 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 ```text
 core/
   src/weatherflow/
+    activity/        raw activity vault, analysis, redaction, and inference scheduling
     api/             HTTP adapter
     artifacts/       content-addressed blobs and immutable provenance
     capabilities/    ToolSpec catalog, Pack executors, immutable Run snapshots
@@ -95,7 +99,14 @@ Run the narrow test while developing and `make check` before committing.
 - SharedTurnLoop is the sole model loop; checkpoint every turn before dispatch.
 - Never retry a recovered EXECUTING side effect; route Action and Run to NEEDS_REVIEW.
 - Keep state-to-weather projection in Python; desktop consumes presentation tokens only.
-- Ambient activity schemas must never admit raw screen, title, key, clipboard, or audio content.
+- Ambient activity never captures screenshots, keystroke content, clipboard, or
+  audio content. ActivityWatch-level application, window-title, and browser-tab
+  metadata is owned only by `weatherflow.activity`, may cross the native bridge
+  only after persisted opt-in, and must not be copied into Runs, the Event
+  Ledger, memory, checkpoints, artifacts, or ordinary diagnostics.
+- Remote activity inference runs only through the audited provider-neutral
+  inference boundary on the fixed `Asia/Shanghai` 06:00-through-24:00 hourly
+  schedule. Credential detection/redaction precedes every model request.
 - When `WF_BRIDGE_TOKEN` is set, every HTTP/WebSocket bridge request must authenticate.
 - Desktop event reconnects use Event Ledger cursors; invalid cursors refresh snapshots.
 - Persist side-effect Actions before Approval; never treat approval as execution.

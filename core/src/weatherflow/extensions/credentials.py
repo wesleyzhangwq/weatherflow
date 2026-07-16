@@ -41,6 +41,8 @@ class CredentialUnavailableError(LookupError):
 class CredentialStore(Protocol):
     def resolve(self, reference: CredentialRef) -> str | None: ...
 
+    def available(self, reference: CredentialRef) -> bool: ...
+
 
 class WritableCredentialStore(CredentialStore, Protocol):
     def set(self, reference: CredentialRef, secret: str) -> None: ...
@@ -54,6 +56,9 @@ class MappingCredentialStore:
 
     def resolve(self, reference: CredentialRef) -> str | None:
         return self._values.get(reference.key)
+
+    def available(self, reference: CredentialRef) -> bool:
+        return reference.key in self._values
 
     def __repr__(self) -> str:
         return f"MappingCredentialStore(keys={sorted(self._values)})"
@@ -80,13 +85,32 @@ class NativeCredentialResolver:
         self._timeout_seconds = timeout_seconds
 
     def resolve(self, reference: CredentialRef) -> str | None:
+        response = self._request(reference, operation="resolve")
+        if response.get("ok") is True:
+            secret = response.get("secret")
+            if not isinstance(secret, str) or not secret or len(secret) > 10_000:
+                raise CredentialUnavailableError(reference.key)
+            return secret
+        if response.get("code") == "not_found":
+            return None
+        raise CredentialUnavailableError(reference.key)
+
+    def available(self, reference: CredentialRef) -> bool:
+        response = self._request(reference, operation="status")
+        if response.get("ok") is True:
+            return True
+        if response.get("code") == "not_found":
+            return False
+        raise CredentialUnavailableError(reference.key)
+
+    def _request(self, reference: CredentialRef, *, operation: str) -> dict[str, object]:
         expected_name = NATIVE_CREDENTIAL_NAMES.get(reference.provider)
         if expected_name is None or reference.name != expected_name:
             raise CredentialUnavailableError(reference.key)
         request = (
             json.dumps(
                 {
-                    "operation": "resolve",
+                    "operation": operation,
                     "provider": reference.provider,
                     "token": self._token,
                 },
@@ -105,14 +129,9 @@ class NativeCredentialResolver:
             if not raw_response.endswith(b"\n") or len(raw_response) > 12_000:
                 raise ValueError("invalid native credential response size")
             response = json.loads(raw_response)
-            if response.get("ok") is True:
-                secret = response.get("secret")
-                if not isinstance(secret, str) or not secret or len(secret) > 10_000:
-                    raise ValueError("invalid native credential response")
-                return secret
-            if response.get("code") == "not_found":
-                return None
-            raise CredentialUnavailableError(reference.key)
+            if not isinstance(response, dict):
+                raise ValueError("invalid native credential response")
+            return response
         except CredentialUnavailableError:
             raise
         except Exception as error:
@@ -156,6 +175,9 @@ class KeyringCredentialStore:
             # executable changes. Keep backend details out of Runs and turn this into
             # the same recoverable condition as a missing credential.
             raise CredentialUnavailableError(reference.key) from error
+
+    def available(self, reference: CredentialRef) -> bool:
+        return self.resolve(reference) is not None
 
     def set(self, reference: CredentialRef, secret: str) -> None:
         if not secret or len(secret) > 10_000:

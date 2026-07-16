@@ -25,7 +25,9 @@ no code, API, or data compatibility obligation to v2.
 8. Python Harness Daemon is the sole business core.
 9. Tauri owns presentation and native OS bridging only.
 10. Capability and authority are separate systems.
-11. User data is local, inspectable, exportable, and deletable.
+11. User data is local-first, inspectable, exportable, and deletable. Consented
+    ActivityWatch-level activity metadata may leave the device only through the
+    audited remote-inference boundary described below.
 12. macOS is the only supported v3.0 desktop platform.
 13. The Cockpit's primary workspace is conversation; Runs, rhythm, approvals,
     integrations, and settings support that conversation instead of competing
@@ -40,7 +42,7 @@ Python Harness Daemon
   -> Run Coordinator + Agent Runtime + Capability Plane + Trust Plane
   -> Rhythm Intelligence
   -> Capability Packs
-  -> Operational SQLite + Event Ledger + Memory + Artifact Store
+  -> Operational SQLite + Event Ledger + Raw Activity Vault + Memory + Artifact Store
 ```
 
 The daemon is also usable through CLI and MCP. No client owns business state.
@@ -74,8 +76,9 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     the daemon then owns background execution through the same shared turn loop.
 18. A desktop Run always names an explicitly authorized Workspace. The default
     internal data directory is not a substitute for selecting a real project.
-19. Activity sensing is disabled until the persisted onboarding preference
-    explicitly enables it.
+19. Full activity sensing and remote activity inference are separate persisted
+    opt-ins. Sensing is disabled until enabled; remote inference remains disabled
+    until its own provider/model and consent record are active.
 20. Desktop credential mutation belongs to Tauri's native OS bridge. Renderer
     code may set, delete, or inspect presence for a fixed provider, but can never
     read a stored secret. Python may only resolve a fixed provider through the
@@ -88,8 +91,10 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     configuration is only the default for future Runs; SharedTurnLoop resolves
     the immutable Run route and never reads or mutates one process-global adapter.
 23. The Cockpit status-weather view is presentation-only. It combines the
-    current HumanStateSnapshot, privacy-safe recent behavior aggregates, and
-    active evidence-backed profile assertions. Any future deliberate-state
+    current HumanStateSnapshot, a first-class screen-time and browser-activity
+    visualization backed by the Raw Activity Vault, and active evidence-backed
+    profile assertions. Raw activity is inspectable there but never becomes a
+    command surface. Any future deliberate-state
     correction belongs behind a typed conversation or Capsule contract rather
     than a second check-in form.
 24. An Automation is a persisted schedule that submits an ordinary idempotent
@@ -116,7 +121,11 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     preset's Python-owned tool-name allowlist. Stateful presets may write only
     to their own Workspace-private internal state root; those files participate
     in the matching explicit privacy-reset category and never make a Workspace
-    action root writable.
+    action root writable. The desktop catalog presents runnable presets rather
+    than disabled roadmap cards. Offline Python-owned Time and read-only Git
+    presets run through the bundled WeatherFlow runtime inside the same MCP
+    Seatbelt boundary; network-bound presets remain absent until their dedicated
+    redirect-safe egress boundary exists.
 27. Cockpit groups user-managed agent facilities in one left-navigation Tools
     section: Automations, Skills, MCP Servers, LLM Models, and Composio. System
     and privacy preferences remain in Settings; conversation remains primary.
@@ -177,6 +186,29 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     roots, offline networking by default, resource/output limits, and process-
     group termination. Backend absence or failed confinement fails closed; there
     is no ordinary-subprocess fallback.
+37. Raw activity is installation-scoped personal telemetry, not Workspace or Run
+    audit data. The Python activity domain is its sole durable owner. It stores
+    application/window and browser-tab intervals in dedicated SQLite tables with
+    explicit export, retention, pause, and privacy-deletion semantics. Event
+    Ledger entries may reference activity event IDs but never copy raw titles,
+    URLs, or document names.
+38. The macOS and browser watchers may capture application name, bundle ID,
+    window title, full URL, domain, tab title, focus transitions, audible/private
+    state, and active/idle timing after explicit sensing consent. They never
+    capture screenshots, keystroke content, clipboard content, form values,
+    cookies, authorization headers, or audio content.
+39. Remote activity inference uses the user's selected reviewed model through a
+    provider-neutral, tool-free inference service rather than another Agent
+    loop. It runs at each `Asia/Shanghai` wall-clock hour from 06:00 through the
+    following 00:00 boundary, coalesces missed hours, and sends all unsent
+    activity intervals in bounded deterministic chunks under one idempotent job.
+    No remote inference runs between 00:00 and 06:00.
+40. Activity titles, URLs, and document names are untrusted evidence. Before a
+    remote request, deterministic credential detection removes userinfo,
+    authentication codes/tokens, cookies, signed URL material, and secret-shaped
+    text. The model receives activity as delimited structured data, returns only
+    a validated HumanStateSnapshot candidate with evidence IDs, and gains no
+    tool or execution authority.
 
 ## 4. v3.0 scope
 
@@ -185,10 +217,12 @@ Rhythm Intelligence, risk-based supervised autonomy, Developer/Research/
 Personal Operations capability packs, Skills, MCP, Agent Definitions,
 schedule-to-Run Automations, local ownership, diagnostics, and macOS packaging.
 
-v3.0 excludes Windows/Linux support, mobile/cloud/team features, content-level
-desktop monitoring, recursive agent networks, a workflow canvas, broad email or
-messaging catalogs beyond the bounded first-party Gmail connector, and all v2
-compatibility.
+v3.0 excludes Windows/Linux support, mobile/cloud/team features, screenshots,
+keystroke or clipboard capture, ambient audio, recursive agent networks, a
+workflow canvas, broad email or messaging catalogs beyond the bounded
+first-party Gmail connector, and all v2 compatibility. Full application/window
+and browser-tab activity metadata, local visual analytics, and consented remote
+state inference are included.
 
 ## 5. Change discipline
 
@@ -299,10 +333,13 @@ compatibility.
   backend is introduced. Connection never grants execution authority.
 - 2026-07-14: Reframed Cockpit's status-weather destination as a read-only
   personal insight surface. The page has exactly three product roles: show the
-  current human-state weather and dimensions, summarize recent privacy-safe
-  activity/task behavior, and display only active long-term profile assertions
-  with confidence and evidence counts. The former check-in/correction form was
-  removed because conversation is the primary deliberate-input surface.
+  current human-state weather and dimensions, summarize recent activity/task
+  behavior, and display only active long-term profile assertions with confidence
+  and evidence counts. The recent-behavior list remains aggregate-only; the
+  consented Raw Activity Vault and its complete title/URL views are isolated in
+  the screen-time component added by the 2026-07-16 decision. The former
+  check-in/correction form was removed because conversation is the primary
+  deliberate-input surface.
 - 2026-07-14: Added durable Workspace-scoped conversation sessions for Cockpit
   history management. Sessions may be empty, renamed, and pinned; new Runs may
   reference one session while historical Runs remain valid without a session.
@@ -493,3 +530,32 @@ compatibility.
   versioned temporary destination as writable/readable application data; it no
   longer exposes the whole Workspace internal root. Host `uvx` and unrestricted
   HTTPS are not fallback paths.
+- 2026-07-16: Promoted complete personal activity history into a first-class v3
+  product surface. Consented macOS and browser watchers now target an
+  installation-scoped Raw Activity Vault containing full application, window,
+  URL, tab, focus, and active/idle intervals. Cockpit owns a visually rich
+  screen-time component and detailed activity explorer. A separate persisted
+  opt-in permits audited, credential-scrubbed, tool-free remote state inference
+  at every `Asia/Shanghai` hour from 06:00 through 24:00; missed hours coalesce
+  and inference evidence references vault event IDs without copying raw content
+  into Runs, the Event Ledger, memory, artifacts, or ordinary diagnostics.
+- 2026-07-16: Closed the first desktop usability repair pass. Conversation
+  chrome is compact and never permanently consumes the reading area; semantic
+  icon surfaces follow the selected light/dark theme. The MCP catalog now shows
+  only runnable presets: npm servers receive their verified Node runtime as an
+  explicit read-only sandbox root, while Time and read-only Git use a bundled
+  Python-owned stdio MCP server under the same offline Seatbelt boundary.
+  Playwright, Fetch, and Context7 remain backend-known but are not advertised as
+  installable until redirect-safe host-bound egress exists. Screen-time queries
+  refresh while visible. Development launch fingerprints Cargo's linked bytes
+  and reuses a stable signed runtime copy until the next Rust relink, while
+  startup credential-presence checks are attribute-only, suppress
+  authentication UI, and never resolve secret material.
+- 2026-07-16: Consolidated Cockpit appearance onto one warm-neutral semantic
+  palette shared by light and dark modes. Terracotta owns primary interaction,
+  ochre/gold owns observation and browser activity, sage owns healthy state, and
+  warm taupe owns secondary surfaces. Dark surfaces are espresso/warm charcoal,
+  not neutral black; cold blue is not a Cockpit semantic color. OAuth vendor
+  marks keep their source icon shapes but inherit reviewed theme tones so
+  provider, automation, settings, activity, and integration surfaces remain
+  visually coherent.

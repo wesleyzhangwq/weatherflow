@@ -61,7 +61,7 @@ describe("Skill catalog", () => {
 });
 
 describe("MCP catalog", () => {
-  it("shows unavailable presets and installs only a fixed catalog id", async () => {
+  it("shows only runnable presets and installs only a fixed catalog id", async () => {
     const presets: MCPPreset[] = [{
       preset_id: "filesystem", title: "本地文件", description: "只访问项目目录", publisher: "MCP",
       source_url: "https://github.com/modelcontextprotocol/servers", version: "2026.7.10",
@@ -81,7 +81,8 @@ describe("MCP catalog", () => {
     const client = { mcpPresets: vi.fn().mockResolvedValue(presets), installMCP, decide } as unknown as WeatherFlowClient;
     render(<MCPServersView client={client} workspaceId="w1" onOperation={vi.fn()} />);
 
-    expect(await screen.findByRole("button", { name: "暂不可用" })).toBeDisabled();
+    expect(await screen.findByText("1 个需要公共网络安全边界的预设尚未发布；这里不再展示无法使用的占位卡片。")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "网页抓取" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "安装" }));
     await waitFor(() => expect(installMCP).toHaveBeenCalledWith("filesystem", "w1", expect.any(String)));
     fireEvent.click(screen.getByRole("button", { name: "批准安装" }));

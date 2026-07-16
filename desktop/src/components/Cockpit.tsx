@@ -13,6 +13,7 @@ import { WeatherFlowClient } from "../bridge";
 import { nativeCredentials, nativeWindows, type CredentialProvider } from "../native";
 import { getThemePreference, setThemePreference, type ThemePreference } from "../theme";
 import { AutomationView, MCPServersView, SkillsView } from "./ToolViews";
+import { ScreenTimePanel } from "./ScreenTimePanel";
 import type {
   Approval, Artifact, ConnectionAttempt, ConnectorKind, ConnectorStatus, DesktopSnapshot,
   LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, RhythmDimensionEstimate, RhythmDimensionName,
@@ -275,7 +276,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
       <section className="app-workspace">
         {view === "chat" && <ChatView client={client} providers={providers} workspaceId={selectedWorkspaceId} sessions={sessions} sessionsEnabled={sessionsEnabled} activeSession={activeSession} runs={runs} run={run} pending={pending} artifacts={artifacts} chatInput={chatInput} sending={sending} toolMode={toolMode} workspaceReady={Boolean(selectedWorkspaceId)} snapshot={snapshot} system={system} onInput={setChatInput} onToolMode={setToolMode} onSubmit={submitChat} onSelectRun={selectRun} onSelectSession={selectSession} onCreateSession={createConversation} onUpdateSession={updateConversation} onDeleteSession={deleteConversation} onDecide={decide} onDownload={downloadArtifact} onModelChanged={refresh} onOpenSettings={() => setView("models")} />}
         {view === "runs" && <RunsView runs={runs} run={run} timeline={timeline} artifacts={artifacts} pending={pending} onSelect={selectRun} onDecide={decide} onDownload={downloadArtifact} />}
-        {view === "rhythm" && <RhythmView snapshot={snapshot} insights={rhythmInsights} />}
+        {view === "rhythm" && <RhythmView client={client} workspaceId={selectedWorkspaceId} snapshot={snapshot} insights={rhythmInsights} />}
         {view === "automations" && <AutomationView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
         {view === "skills" && <SkillsView client={client} workspace={selectedWorkspace} onOperation={setOperation} />}
         {view === "mcp" && <MCPServersView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
@@ -306,7 +307,7 @@ function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, a
   return <div className={`chat-layout ${sessionsEnabled ? "has-session-rail" : ""}`}>
     {sessionsEnabled && <ConversationRail sessions={sessions} activeSessionId={activeSession?.id ?? null} workspaceReady={workspaceReady} onSelect={onSelectSession} onCreate={onCreateSession} onUpdate={onUpdateSession} onDelete={onDeleteSession} />}
     <section className="conversation-pane">
-      <header className="workspace-header">
+      <header className="workspace-header conversation-header">
         <div><span>对话</span><h1>今天想一起推进什么？</h1></div>
         <div className="conversation-signals">
           <div className="signal-chip weather" aria-label="人的状态天气" data-scene={scene}><CloudSun /><span><small>你的天气</small>{weatherText[scene]}</span></div>
@@ -505,7 +506,7 @@ function RunsView({ runs, run, timeline, artifacts, pending, onSelect, onDecide,
   return <div className="page-view"><header className="page-header"><span>任务</span><h1>执行、批准与产出</h1><p>这里展示智能体的工作状态；你的状态天气始终独立，不会被任务成败覆盖。</p></header><div className="runs-layout"><nav className="run-list" aria-label="任务列表">{runs.length === 0 ? <div className="run-list-empty">暂无任务</div> : runs.map((item) => <button className={item.id === run?.id ? "selected" : ""} key={item.id} onClick={() => onSelect(item.id)} aria-pressed={item.id === run?.id} aria-label={`${item.user_intent}，${runStatusText[item.status]}`}><span>{item.user_intent}</span><small><i className={`run-dot ${item.status}`} />{runStatusText[item.status]} · {formatRelativeTime(item.updated_at)}</small></button>)}</nav><section className="run-detail">{run ? <><div className="run-detail-heading"><span className={`status-pill ${run.status}`}>{runStatusText[run.status]}</span><time>{formatRelativeTime(run.updated_at)}</time></div><h2>{run.user_intent}</h2><div className="run-result"><span>当前结果</span><p>{runMessage(run)}</p></div><div className="section-heading"><h3>执行记录</h3><small>{timeline.length} 个事件</small></div>{timeline.length ? <ol className="timeline">{timeline.slice(-12).reverse().map((event) => <li key={event.id}><i /><div><strong>{formatEventType(event.type)}</strong><time>{new Date(event.recorded_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div></li>)}</ol> : <div className="detail-empty">等待第一条执行记录</div>}</> : <div className="detail-empty centered">选择一个任务查看完整执行记录</div>}</section><aside className="run-context"><div className="context-heading"><Wrench /><span>任务上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside></div></div>;
 }
 
-function RhythmView({ snapshot, insights }: { snapshot: DesktopSnapshot | null; insights: RhythmInsights | null }) {
+function RhythmView({ client, workspaceId, snapshot, insights }: { client: WeatherFlowClient; workspaceId?: string | null; snapshot: DesktopSnapshot | null; insights: RhythmInsights | null }) {
   const current = insights?.current ?? snapshot?.rhythm;
   const scene = current?.weather.scene ?? "mixed";
   const intensity = Math.round((current?.weather.intensity ?? 0) * 100);
@@ -518,9 +519,10 @@ function RhythmView({ snapshot, insights }: { snapshot: DesktopSnapshot | null; 
     <section className="status-overview"><div className="insight-section-heading"><div><span>此刻</span><h2>当前状态</h2></div><small>{current?.snapshot.observed_at ? `更新于 ${formatRelativeTime(current.snapshot.observed_at)}` : "等待状态证据"}</small></div><div className="rhythm-hero" data-scene={scene}><div className="rhythm-weather-icon"><CloudSun size={42} /></div><div className="rhythm-summary"><small>当前天气</small><h3>{weatherText[scene]}</h3><p>{summary}</p></div><dl><div><dt>协作模式</dt><dd>{workMode}</dd></div><div><dt>天气强度</dt><dd>{intensity}%</dd></div><div><dt>判断时效</dt><dd>{current ? new Date(current.snapshot.valid_until).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div></dl></div>
       <div className="rhythm-dimensions">{dimensions.length ? dimensions.map(([name, estimate]) => <article key={name}><div><span>{dimensionText[name]}</span><strong>{Math.round(estimate.value * 100)}%</strong></div><div className="dimension-track"><i style={{ width: `${Math.round(estimate.value * 100)}%` }} /></div><small>置信度 {Math.round(estimate.confidence * 100)}%</small></article>) : <div className="rhythm-empty compact">状态维度正在积累证据，暂不展示精确数值。</div>}</div>
     </section>
-    <div className="rhythm-insight-grid"><section className="insight-panel"><div className="insight-section-heading"><div><span>近期记录</span><h2>近期行为</h2></div><ClockCounterClockwise /></div>{insights?.recent_behaviors.length ? <ol className="behavior-list">{insights.recent_behaviors.map((behavior) => <li key={behavior.id}><i><Pulse /></i><div><strong>{behavior.kind === "activity" ? `${categoryText[behavior.dominant_category ?? "other"]}活动` : outcomeText[behavior.outcome ?? "needs_review"]}</strong><p>{behavior.kind === "activity" ? `活跃 ${formatMinutes(behavior.active_minutes)} · 空闲 ${formatMinutes(behavior.idle_minutes)} · 切换 ${behavior.app_switch_count ?? 0} 次` : `持续 ${formatMinutes(behavior.duration_minutes)} · ${behavior.step_count ?? 0} 个步骤`}</p><time>{formatRelativeTime(behavior.observed_at)}</time></div></li>)}</ol> : <div className="rhythm-empty"><Pulse /><strong>还没有可展示的近期行为</strong><p>WeatherFlow 只记录活跃、空闲、类别和切换次数等本机元数据，不采集窗口标题或屏幕内容。</p></div>}</section>
+    <ScreenTimePanel client={client} workspaceId={workspaceId} />
+    <div className="rhythm-insight-grid"><section className="insight-panel"><div className="insight-section-heading"><div><span>近期记录</span><h2>近期行为</h2></div><ClockCounterClockwise /></div>{insights?.recent_behaviors.length ? <ol className="behavior-list">{insights.recent_behaviors.map((behavior) => <li key={behavior.id}><i><Pulse /></i><div><strong>{behavior.kind === "activity" ? `${categoryText[behavior.dominant_category ?? "other"]}活动` : outcomeText[behavior.outcome ?? "needs_review"]}</strong><p>{behavior.kind === "activity" ? `活跃 ${formatMinutes(behavior.active_minutes)} · 空闲 ${formatMinutes(behavior.idle_minutes)} · 切换 ${behavior.app_switch_count ?? 0} 次` : `持续 ${formatMinutes(behavior.duration_minutes)} · ${behavior.step_count ?? 0} 个步骤`}</p><time>{formatRelativeTime(behavior.observed_at)}</time></div></li>)}</ol> : <div className="rhythm-empty"><Pulse /><strong>还没有可展示的近期行为</strong><p>这个列表只展示聚合行为；完整窗口标题与网页 URL 请查看上方屏幕时间组件。</p></div>}</section>
       <section className="insight-panel"><div className="insight-section-heading"><div><span>当前项目 · 跨时间形成</span><h2>长期画像</h2></div><Brain /></div>{insights?.profile.length ? <div className="profile-list">{insights.profile.map((item) => <article key={item.id}><p>{item.claim}</p><footer><span>{originText[item.origin]} · {item.evidence_count} 条证据</span><strong>{Math.round(item.confidence * 100)}% 可信</strong></footer></article>)}</div> : <div className="rhythm-empty"><Brain /><strong>还没有形成长期画像</strong><p>只有经过多次、可追溯证据支持的稳定模式才会出现在这里；当前天气不会被当作长期结论。</p></div>}</section></div>
-    <p className="rhythm-privacy-note"><ShieldCheck /> 近期行为只保留聚合元数据；长期画像来自可追溯的本机证据，并遵循你的删除与保留设置。</p>
+    <p className="rhythm-privacy-note"><ShieldCheck /> 完整窗口与标签页元数据只进入可删除的 Raw Activity Vault；长期画像仍来自可追溯证据，并遵循你的外发与保留设置。</p>
   </div></div>;
 }
 
@@ -564,26 +566,26 @@ function formatEventType(type: string) {
 }
 
 const connectorPresentation: Record<ConnectorKind, { note: string; icon: React.ReactElement }> = {
-  github: { note: "仓库、Issue 与 Pull Request", icon: <SiGithub color="#f2f2f2" /> },
-  gmail: { note: "邮件、会话与草稿", icon: <SiGmail color="#EA4335" /> },
-  google_calendar: { note: "日程、空闲时间与会议", icon: <SiGooglecalendar color="#4285F4" /> },
-  slack: { note: "频道、消息与团队协作", icon: <SlackLogo color="#E01E5A" weight="fill" /> },
-  notion: { note: "页面、数据库与知识库", icon: <SiNotion color="#f2f2f2" /> },
-  google_drive: { note: "云端文件与共享空间", icon: <SiGoogledrive color="#4285F4" /> },
-  google_sheets: { note: "表格、工作表与数据", icon: <SiGooglesheets color="#34A853" /> },
-  outlook: { note: "Microsoft 邮件与日历", icon: <MicrosoftOutlookLogo color="#168DE2" weight="fill" /> },
-  one_drive: { note: "Microsoft 云端文件", icon: <Cloud color="#168DE2" weight="fill" /> },
-  microsoft_teams: { note: "团队频道、会议与聊天", icon: <MicrosoftTeamsLogo color="#7B83EB" weight="fill" /> },
-  linear: { note: "产品问题与项目进度", icon: <SiLinear color="#7B83FF" /> },
-  jira: { note: "问题、看板与发布计划", icon: <SiJira color="#2684FF" /> },
-  confluence: { note: "团队知识库与页面", icon: <SiConfluence color="#579DFF" /> },
-  dropbox: { note: "文件、目录与共享链接", icon: <SiDropbox color="#3984FF" /> },
-  gitlab: { note: "代码、Issue 与合并请求", icon: <SiGitlab color="#FC6D26" /> },
-  discord: { note: "服务器、频道与社区", icon: <SiDiscord color="#7289DA" /> },
-  trello: { note: "看板、列表与卡片", icon: <SiTrello color="#579DFF" /> },
-  asana: { note: "任务、项目与团队计划", icon: <SiAsana color="#F06A6A" /> },
-  airtable: { note: "数据库、表格与记录", icon: <SiAirtable color="#18BFFF" /> },
-  clickup: { note: "任务、文档与工作流", icon: <SiClickup color="#A875FF" /> },
+  github: { note: "仓库、Issue 与 Pull Request", icon: <SiGithub className="connector-brand-icon" /> },
+  gmail: { note: "邮件、会话与草稿", icon: <SiGmail className="connector-brand-icon" /> },
+  google_calendar: { note: "日程、空闲时间与会议", icon: <SiGooglecalendar className="connector-brand-icon" /> },
+  slack: { note: "频道、消息与团队协作", icon: <SlackLogo className="connector-brand-icon" weight="fill" /> },
+  notion: { note: "页面、数据库与知识库", icon: <SiNotion className="connector-brand-icon" /> },
+  google_drive: { note: "云端文件与共享空间", icon: <SiGoogledrive className="connector-brand-icon" /> },
+  google_sheets: { note: "表格、工作表与数据", icon: <SiGooglesheets className="connector-brand-icon" /> },
+  outlook: { note: "Microsoft 邮件与日历", icon: <MicrosoftOutlookLogo className="connector-brand-icon" weight="fill" /> },
+  one_drive: { note: "Microsoft 云端文件", icon: <Cloud className="connector-brand-icon" weight="fill" /> },
+  microsoft_teams: { note: "团队频道、会议与聊天", icon: <MicrosoftTeamsLogo className="connector-brand-icon" weight="fill" /> },
+  linear: { note: "产品问题与项目进度", icon: <SiLinear className="connector-brand-icon" /> },
+  jira: { note: "问题、看板与发布计划", icon: <SiJira className="connector-brand-icon" /> },
+  confluence: { note: "团队知识库与页面", icon: <SiConfluence className="connector-brand-icon" /> },
+  dropbox: { note: "文件、目录与共享链接", icon: <SiDropbox className="connector-brand-icon" /> },
+  gitlab: { note: "代码、Issue 与合并请求", icon: <SiGitlab className="connector-brand-icon" /> },
+  discord: { note: "服务器、频道与社区", icon: <SiDiscord className="connector-brand-icon" /> },
+  trello: { note: "看板、列表与卡片", icon: <SiTrello className="connector-brand-icon" /> },
+  asana: { note: "任务、项目与团队计划", icon: <SiAsana className="connector-brand-icon" /> },
+  airtable: { note: "数据库、表格与记录", icon: <SiAirtable className="connector-brand-icon" /> },
+  clickup: { note: "任务、文档与工作流", icon: <SiClickup className="connector-brand-icon" /> },
 };
 
 type OAuthCategory = "all" | "communication" | "productivity" | "development" | "platform";
@@ -786,7 +788,7 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
     <div className="oauth-catalog-grid">{visibleStatuses.map((status) => {
       const state = oauthState(status);
       const presentation = connectorPresentation[status.connector];
-      return <button type="button" aria-label={`查看 ${status.label}`} aria-pressed={selectedStatus?.connector === status.connector} className={`oauth-service-card ${state.tone} ${selectedStatus?.connector === status.connector ? "selected" : ""}`} key={status.connector} onClick={() => setSelectedConnector(status.connector)}>
+      return <button type="button" aria-label={`查看 ${status.label}`} aria-pressed={selectedStatus?.connector === status.connector} className={`oauth-service-card ${state.tone} ${selectedStatus?.connector === status.connector ? "selected" : ""}`} data-connector={status.connector} key={status.connector} onClick={() => setSelectedConnector(status.connector)}>
         <span className="oauth-service-mark">{presentation.icon}</span>
         <strong>{status.label}</strong>
         <small>{state.label}</small>
@@ -811,7 +813,7 @@ function ConnectorDetail({ status, configured, busy, handoffUrl, confirmDisconne
   const conversationToolsSupported = supportsConversationTools(status);
   const availableToolIds = status.available_tool_ids;
   const canStartOAuth = configured && setup !== "unknown";
-  return <section className="oauth-detail" aria-label={`${status.label} 连接详情`}>
+  return <section className="oauth-detail" data-connector={status.connector} aria-label={`${status.label} 连接详情`}>
     <header><span className="oauth-detail-mark">{presentation.icon}</span><div><small>{state.label}</small><h2>{status.label}</h2><p>{presentation.note}</p></div><span className={`oauth-detail-state ${state.tone}`}>{state.label}</span></header>
     {status.connected ? <div className="oauth-detail-body">
       <div className="oauth-account"><span>当前账号</span><strong>{status.display_name || "授权账号"}</strong></div>

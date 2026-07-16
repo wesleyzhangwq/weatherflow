@@ -10,6 +10,14 @@ from uuid import uuid4
 
 import httpx
 
+from weatherflow.activity import (
+    ActivityInferenceRepository,
+    ActivityInferenceRoute,
+    ActivityInferenceScheduler,
+    ActivityInferenceService,
+    ActivityRepository,
+    ActivityService,
+)
 from weatherflow.artifacts import ArtifactManifest, ArtifactRepository, ArtifactStore
 from weatherflow.automations import AutomationRepository, AutomationScheduler, AutomationService
 from weatherflow.capabilities import (
@@ -172,6 +180,11 @@ class RuntimeContainer:
     onboarding: OnboardingService
     rhythm_snapshots: RhythmSnapshotRepository
     rhythm: RhythmService
+    activity_repository: ActivityRepository
+    activity: ActivityService
+    activity_inference_repository: ActivityInferenceRepository
+    activity_inference: ActivityInferenceService
+    activity_inference_scheduler: ActivityInferenceScheduler
     catalog: CapabilityCatalog
     model: ModelAdapter
     executors: ToolExecutorRegistry
@@ -294,6 +307,13 @@ class RuntimeContainer:
             snapshots=rhythm_snapshots,
             estimator=RhythmEstimator(),
         )
+        activity_repository = ActivityRepository(database)
+        activity_inference_repository = ActivityInferenceRepository(database)
+        activity = ActivityService(
+            repository=activity_repository,
+            inference_evidence=activity_inference_repository,
+            delete_projection=rhythm.delete_activity_evidence,
+        )
         memory = MemoryStore(database=database, ledger=ledger)
         diagnostics = DiagnosticsService(
             database=database,
@@ -380,6 +400,31 @@ class RuntimeContainer:
             client=model_http_client,
             routes=model_routes,
         )
+
+        async def resolve_activity_inference_route(
+            workspace_id: str,
+        ) -> ActivityInferenceRoute:
+            configuration = await model_configuration_repository.get(workspace_id)
+            if configuration is None:
+                raise LookupError("activity inference model is not configured")
+            return ActivityInferenceRoute(
+                adapter=model_configurations.adapter(configuration),
+                provider=configuration.provider.value,
+                model=configuration.model,
+                base_url=configuration.base_url,
+                configuration_version=configuration.version,
+            )
+
+        async def publish_activity_snapshot(snapshot) -> None:
+            await rhythm.accept_remote_snapshot(snapshot)
+
+        activity_inference = ActivityInferenceService(
+            activity=activity,
+            repository=activity_inference_repository,
+            resolve_route=resolve_activity_inference_route,
+            publish_snapshot=publish_activity_snapshot,
+        )
+        activity_inference_scheduler = ActivityInferenceScheduler(service=activity_inference)
         use_builtin_pack_resolution = catalog is None
         resolved_catalog = catalog or CapabilityCatalog(
             builtin_tool_specs(
@@ -551,6 +596,11 @@ class RuntimeContainer:
             onboarding=onboarding,
             rhythm_snapshots=rhythm_snapshots,
             rhythm=rhythm,
+            activity_repository=activity_repository,
+            activity=activity,
+            activity_inference_repository=activity_inference_repository,
+            activity_inference=activity_inference,
+            activity_inference_scheduler=activity_inference_scheduler,
             catalog=resolved_catalog,
             model=resolved_model,
             executors=executors,
@@ -576,6 +626,7 @@ class RuntimeContainer:
         )
         container_ref = container
         await container.installation_approvals.recover_executing()
+        await container.activity_inference_repository.recover_executing(now=datetime.now(UTC))
         await container._audit_startup_recovery()
         return container
 
@@ -621,6 +672,7 @@ class RuntimeContainer:
         *,
         include_connector_sync: bool = True,
         include_automation_scheduler: bool = True,
+        include_activity_inference_scheduler: bool = True,
     ) -> None:
         self._require_background_open()
         if self.background_started:
@@ -628,14 +680,19 @@ class RuntimeContainer:
                 await self.automation_scheduler.start()
             if include_connector_sync:
                 self.start_connector_background()
+            if include_activity_inference_scheduler:
+                await self.activity_inference_scheduler.start()
             return
         self.background_started = True
+        await self.activity.maybe_apply_retention(now=datetime.now(UTC))
         for workspace in await self.workspaces.list_all():
             self._require_background_open()
             await self._restore_workspace_mcp(workspace)
         self._require_background_open()
         if include_automation_scheduler:
             await self.automation_scheduler.start()
+        if include_activity_inference_scheduler:
+            await self.activity_inference_scheduler.start()
         recoverable = {
             RunStatus.QUEUED,
             RunStatus.PLANNING,
@@ -686,6 +743,7 @@ class RuntimeContainer:
     async def _shutdown_background(self) -> None:
         self.background_started = False
         await self.automation_scheduler.stop()
+        await self.activity_inference_scheduler.stop()
         connector_task = self.connector_sync_task
         self.connector_sync_task = None
         tasks = set(self.background_tasks.values())

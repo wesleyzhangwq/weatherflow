@@ -1,3 +1,4 @@
+use security_framework::item::{ItemClass, ItemSearchOptions};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -76,6 +77,7 @@ trait CredentialBackend: Send + Sync {
     fn set(&self, provider: CredentialProvider, secret: &str) -> Result<(), CredentialFailure>;
     fn delete(&self, provider: CredentialProvider) -> Result<(), CredentialFailure>;
     fn resolve(&self, provider: CredentialProvider) -> Result<String, CredentialFailure>;
+    fn exists(&self, provider: CredentialProvider) -> Result<bool, CredentialFailure>;
 }
 
 struct NativeKeychainBackend;
@@ -107,6 +109,21 @@ impl CredentialBackend for NativeKeychainBackend {
             Ok(secret) if !secret.is_empty() && secret.len() <= MAX_SECRET_BYTES => Ok(secret),
             Ok(_) => Err(CredentialFailure::Unavailable),
             Err(keyring::Error::NoEntry) => Err(CredentialFailure::NotFound),
+            Err(_) => Err(CredentialFailure::Unavailable),
+        }
+    }
+
+    fn exists(&self, provider: CredentialProvider) -> Result<bool, CredentialFailure> {
+        let result = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(provider.service())
+            .account(provider.account())
+            .load_attributes(true)
+            .skip_authenticated_items(true)
+            .search();
+        match result {
+            Ok(items) => Ok(!items.is_empty()),
+            Err(error) if error.code() == -25_300 => Ok(false),
             Err(_) => Err(CredentialFailure::Unavailable),
         }
     }
@@ -148,7 +165,6 @@ impl CredentialBrokerServer {
     }
 
     fn start(backend: Arc<dyn CredentialBackend>, socket_path: PathBuf) -> Result<Self, String> {
-        ensure_internal_continuation_key(backend.as_ref())?;
         if socket_path.exists() {
             fs::remove_file(&socket_path).map_err(|_| "credential_socket_unavailable")?;
         }
@@ -225,16 +241,12 @@ impl CredentialBrokerServer {
         if !provider.renderer_accessible() {
             return Err("credential_forbidden".to_owned());
         }
-        match self.backend.resolve(provider) {
-            Ok(_) => Ok(CredentialStatus {
+        match self.backend.exists(provider) {
+            Ok(key_present) => Ok(CredentialStatus {
                 provider,
-                key_present: true,
+                key_present,
             }),
-            Err(CredentialFailure::NotFound) => Ok(CredentialStatus {
-                provider,
-                key_present: false,
-            }),
-            Err(CredentialFailure::Unavailable) => Err("credential_unavailable".to_owned()),
+            Err(_) => Err("credential_unavailable".to_owned()),
         }
     }
 }
@@ -253,6 +265,7 @@ impl Drop for CredentialBrokerServer {
 #[serde(rename_all = "snake_case")]
 enum BrokerOperation {
     Resolve,
+    Status,
 }
 
 #[derive(Deserialize)]
@@ -286,14 +299,25 @@ fn handle_connection(
             match serde_json::from_str::<BrokerRequest>(&request_line) {
                 Ok(request) if constant_time_equal(&request.token, &config.token) => {
                     match request.operation {
-                        BrokerOperation::Resolve => match backend.resolve(request.provider) {
-                            Ok(secret) => write_response(&mut stream, true, None, Some(&secret)),
-                            Err(CredentialFailure::NotFound) => {
+                        BrokerOperation::Resolve => {
+                            match resolve_broker_credential(backend.as_ref(), request.provider) {
+                                Ok(secret) => {
+                                    write_response(&mut stream, true, None, Some(&secret))
+                                }
+                                Err(CredentialFailure::NotFound) => {
+                                    write_response(&mut stream, false, Some("not_found"), None)
+                                }
+                                Err(CredentialFailure::Unavailable) => {
+                                    write_response(&mut stream, false, Some("unavailable"), None)
+                                }
+                            }
+                        }
+                        BrokerOperation::Status => match backend.exists(request.provider) {
+                            Ok(true) => write_response(&mut stream, true, None, None),
+                            Ok(false) => {
                                 write_response(&mut stream, false, Some("not_found"), None)
                             }
-                            Err(CredentialFailure::Unavailable) => {
-                                write_response(&mut stream, false, Some("unavailable"), None)
-                            }
+                            Err(_) => write_response(&mut stream, false, Some("unavailable"), None),
                         },
                     }
                 }
@@ -396,6 +420,16 @@ fn ensure_internal_continuation_key(backend: &dyn CredentialBackend) -> Result<(
     }
 }
 
+fn resolve_broker_credential(
+    backend: &dyn CredentialBackend,
+    provider: CredentialProvider,
+) -> Result<String, CredentialFailure> {
+    if provider == CredentialProvider::ProviderContinuations {
+        ensure_internal_continuation_key(backend).map_err(|_| CredentialFailure::Unavailable)?;
+    }
+    backend.resolve(provider)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +463,10 @@ mod tests {
                 .get(&provider)
                 .cloned()
                 .ok_or(CredentialFailure::NotFound)
+        }
+
+        fn exists(&self, provider: CredentialProvider) -> Result<bool, CredentialFailure> {
+            Ok(self.values.lock().unwrap().contains_key(&provider))
         }
     }
 
@@ -500,10 +538,20 @@ mod tests {
                 "token":server.config.bootstrap_token(),
             }),
         );
+        let status = request(
+            &path,
+            serde_json::json!({
+                "operation":"status",
+                "provider":"minimax",
+                "token":server.config.bootstrap_token(),
+            }),
+        );
 
         assert_eq!(mode, 0o600);
         assert_eq!(unauthorized["code"], "unauthorized");
         assert_eq!(resolved["secret"], "provider-secret");
+        assert_eq!(status["ok"], true);
+        assert!(status.get("secret").is_none());
     }
 
     #[test]
@@ -520,7 +568,13 @@ mod tests {
     fn internal_continuation_key_is_generated_but_renderer_operations_are_denied() {
         let backend = Arc::new(MemoryBackend::default());
         let path = broker_socket_path();
-        let server = CredentialBrokerServer::start(backend, path.clone()).unwrap();
+        let server = CredentialBrokerServer::start(backend.clone(), path.clone()).unwrap();
+
+        assert!(!backend
+            .values
+            .lock()
+            .unwrap()
+            .contains_key(&CredentialProvider::ProviderContinuations));
 
         let resolved = request(
             &path,

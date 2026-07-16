@@ -615,8 +615,11 @@ class ModelConfigurationService:
         if configuration is None:
             return ModelStatus(configured=False, provider="echo")
         try:
+            presence_check = getattr(self.credential_store, "available", None)
             credential_available = (
-                self.credential_store.resolve(configuration.credential_ref) is not None
+                presence_check(configuration.credential_ref)
+                if callable(presence_check)
+                else self.credential_store.resolve(configuration.credential_ref) is not None
             )
         except Exception:
             # Keychain can be temporarily locked or deny a non-interactive lookup.

@@ -1,6 +1,7 @@
 # WeatherFlow v3 Design Specification
 
 - **Date:** 2026-07-12
+- **Last amended:** 2026-07-16 — complete activity intelligence
 - **Status:** Approved design
 - **Target:** macOS-first v3.0
 **Strategy:** Clean-slate rewrite; no v2 code or data compatibility
@@ -84,14 +85,28 @@ The following decisions are binding for v3.0.
 - v3.0 may use:
   - deliberate signals: conversation, check-ins, task behavior, Calendar,
     GitHub, bounded Gmail metadata, and user corrections;
-  - consented device metadata: active/idle periods, application category
+  - consented complete activity metadata: application name and bundle ID,
+    window title, browser URL/domain/tab title, focus transitions, audible and
+    private-window state, active/idle periods, real application switches, tab
     switches, and continuity of work sessions.
+- Complete activity sensing and remote activity inference are independent
+  persisted opt-ins. Recording may remain enabled while remote inference is
+  paused. The user can inspect, export, delete, pause, and configure retention
+  for raw activity without deleting Runs, conversations, or memory.
+- Raw activity is installation-scoped and owned by a dedicated Raw Activity
+  Vault. It is not copied into the Event Ledger, Runs, checkpoints, memory,
+  Profile Assertions, artifacts, or ordinary diagnostics. Those domains may
+  retain only activity event IDs and bounded derived summaries.
+- With remote-inference consent, WeatherFlow may send complete activity
+  intervals to the selected reviewed model on the fixed `Asia/Shanghai`
+  schedule. Every request is credential-scrubbed, auditable, tool-free, and
+  treats titles, URLs, and document names as untrusted quoted data.
 - v3.0 must not collect:
   - keystroke content;
-  - window or document contents through ambient sensing;
   - continuous screenshots;
   - clipboard history;
-  - always-on microphone data.
+  - form values, cookies, authorization headers, or browser credential stores;
+  - always-on microphone or audio content.
 
 ### 2.4 Autonomy
 
@@ -129,12 +144,16 @@ The following decisions are binding for v3.0.
 - Allow capabilities to expand through built-ins, Skills, MCP, and Agent
   Definitions without expanding the trusted core.
 - Preserve local ownership, deletion, export, and privacy controls.
+- Make personal screen time and browser activity visually legible as a core
+  daily-use surface rather than a diagnostic table.
 
 ### 3.2 Non-goals for v3.0
 
 - Windows or Linux production support.
 - Mobile clients, cloud synchronization, accounts, or team collaboration.
-- Screen-content monitoring, keystroke logging, or ambient audio analysis.
+- Screenshots, screen-pixel/content capture, keystroke logging, clipboard
+  capture, form-value capture, or ambient audio analysis. Application/window
+  titles and browser-tab metadata are explicitly in scope.
 - Recursive agent hierarchies, model councils, or arbitrary agent networks.
 - A visual workflow editor, BPMN runtime, or a second workflow engine.
 - A broad email/messaging integration marketplace. Gmail is the only bounded
@@ -195,6 +214,33 @@ Calendar, GitHub, Research, MCP discovery, extension marketplace UX, release
 packaging, and advanced memory automation are not acceptance dependencies for
 this reset.
 
+### 4.2 Complete activity intelligence acceptance
+
+The activity program is complete only when this second end-to-end story passes:
+
+1. The user separately enables complete macOS activity sensing, browser sensing,
+   and remote inference through persisted settings.
+2. Native and browser watchers produce exact application/window and browser-tab
+   intervals in the installation-scoped Raw Activity Vault. Heartbeats extend a
+   stable interval; a real state change closes it and creates the next interval.
+3. Cockpit presents a polished compact screen-time component and an expandable
+   activity explorer with daily timeline, trends, top applications/sites,
+   category composition, switching, focus/idle intervals, and a raw event view.
+4. Every `Asia/Shanghai` hour at 06:00, 07:00, ..., 23:00, and the following
+   00:00 boundary claims one durable idempotent inference job. There are no
+   scheduled requests between 00:00 and 06:00.
+5. A restart, sleep, or missed wall-clock hour coalesces into the next eligible
+   job instead of replaying a burst. That job covers every unsent activity event
+   since the last successful inference.
+6. Credential detection and URL sanitization run before deterministic chunking.
+   Every interval remains represented, but credential material is absent.
+7. The reviewed provider receives only delimited structured evidence and no
+   tools. Its validated result becomes a HumanStateSnapshot candidate with
+   confidence, validity, explanation, and evidence activity-event IDs.
+8. The component exposes model, send window, event/chunk counts, redactions,
+   status, evidence, and the exact credential-scrubbed payload. Collection and
+   inference can be paused independently; deletion and export remain available.
+
 ## 5. Top-level architecture
 
 ```text
@@ -212,6 +258,7 @@ Python Harness Daemon
   - Capability Plane
   - Trust Plane
   - Background Runtime
+  - Activity Intelligence
            |
            +---------------------------+
            |                           |
@@ -228,15 +275,26 @@ Rhythm Intelligence              Capability Packs
 Local Data Plane
   - Operational SQLite state
   - Append-only event/signal ledger
+  - Raw Activity Vault and inference audit
   - Memory and derived semantic index
   - Managed artifact files
+
+Activity Intelligence
+  -> credential-scrubbed, tool-free provider request
+  -> reviewed remote model selected for activity inference
+  -> validated HumanStateSnapshot candidate
 ```
 
 ### 5.1 Boundary rules
 
 - Tauri does not infer human state, classify tool risk, or run agent business
-  logic.
+  logic. It may collect exact native activity facts after consent and transport
+  them over the authenticated bridge.
 - The daemon is the only writer of WeatherFlow operational state.
+- The activity domain is the only writer of Raw Activity Vault and inference
+  audit records. The Event Ledger receives IDs and bounded summaries only.
+- Remote activity inference is a provider-neutral model call with no ToolSpecs,
+  delegation, Run mutation, or side-effect path. It is not a second Agent loop.
 - Rhythm Intelligence is a daemon domain with explicit interfaces, not a
   special system prompt fragment.
 - Capability Packs depend on public harness contracts; the harness core does
@@ -584,19 +642,22 @@ subprocess.
 Managed MCP processes use separate profiles from Developer commands. Approved,
 version-pinned npm installation receives only the internal temporary install
 root, one fixed read-only Node.js runtime prefix, and outbound HTTPS; it ignores
-package scripts and cannot read the rest of the Workspace internal root. The
-installed filesystem stdio server is offline and read-only over its fixed
-installation and Workspace roots. The official Knowledge Graph Memory preset is
-also offline; it cannot read Workspace action roots and may write only its
-Workspace-private MCP state root.
+package scripts and cannot read the rest of the Workspace internal root. At
+runtime the same verified Node prefix is included explicitly as a read-only
+sandbox root, so `/usr/bin/env node` cannot silently depend on an inaccessible
+user-managed runtime. The installed filesystem stdio server is offline and
+read-only over its fixed installation and Workspace roots. The official
+Knowledge Graph Memory preset is also offline; it cannot read Workspace action
+roots and may write only its Workspace-private MCP state root.
 That state participates in explicit memory and Workspace privacy resets. Every
 runnable preset owns a fixed tool-name allowlist, and unexpected discovery makes
 the whole connection unavailable. Backend absence marks it unavailable. Browser
 and remote-documentation MCP remain unavailable until WeatherFlow owns a
 redirect-safe public-network broker; an unrestricted network profile is not an
-acceptable compatibility path. Python reference servers remain unavailable
-until a separate sandboxed runtime is part of the packaged app; host `uvx` is
-not a release fallback.
+acceptable compatibility path. Time and read-only Git are supplied by a
+Python-owned stdio implementation inside the bundled WeatherFlow runtime. They
+run offline through Seatbelt, accept only their catalog-fixed tool schemas, and
+receive no writable Workspace or internal roots. Host `uvx` remains forbidden.
 
 The Developer Pack may admit direct Workspace executables and reviewed build/
 test frontends only after this backend is available. Shell command strings,
@@ -611,14 +672,17 @@ processes, but every descendant inherits the same OS profile and limits.
 ```text
 Raw Signals
   -> deterministic feature extraction
-  -> textual signal interpretation where needed
+  -> scheduled tool-free remote interpretation of consented raw activity
   -> evidence-aware fusion
   -> HumanStateSnapshot
   -> RhythmPolicy + WeatherPresentation
 ```
 
-Raw facts and user corrections are append-only events within their retention
-policy. HumanStateSnapshot, RhythmPolicy, and WeatherPresentation are derived.
+Deliberate signals and Run behavior remain Event Ledger facts. Complete activity
+intervals are Raw Activity Vault facts under their own retention policy. Remote
+inference results are immutable inference-audit records; evidence references the
+vault event IDs and the sanitized request digest. HumanStateSnapshot,
+RhythmPolicy, and WeatherPresentation remain derived.
 
 ### 7.2 Internal state dimensions
 
@@ -649,6 +713,7 @@ dimensions: map[dimension, DimensionEstimate]
 summary
 supporting_event_ids
 contradicting_event_ids
+activity_inference_job_id (optional)
 freshness
 valid_until
 estimator_version
@@ -656,6 +721,10 @@ estimator_version
 
 User correction creates a new high-weight signal and triggers recomputation. It
 does not edit the previous snapshot.
+
+An activity inference result is accepted only after its six dimensions,
+confidence, validity, evidence IDs, provider/model route, and response schema
+validate. It contributes evidence to fusion but never grants tools or authority.
 
 ### 7.4 RhythmPolicy
 
@@ -748,15 +817,35 @@ fixed `weatherflow.theme` key, applied before React renders, and `system` tracks
 macOS appearance changes. Theme state never enters Runs, events, memory,
 checkpoints, artifacts, prompts, or daemon configuration.
 
+Both modes use one warm-neutral semantic palette. Terracotta is the primary
+interactive accent, ochre/gold distinguishes observation and browser activity,
+sage communicates healthy/connected state, and warm taupe owns secondary
+surfaces. Dark mode uses espresso and warm charcoal rather than neutral black.
+Cold blue is not a Cockpit semantic color, including provider toggles, theme
+selection, OAuth filters, connector marks, status-weather icons, and activity
+charts. Third-party connector marks inherit reviewed theme colors instead of
+rendering vendor blues, while their recognizable source icons remain intact.
+
 ### 8.2 Status-weather presentation
 
 - Status weather is a read-only personal-insight destination; it has no
   check-in, correction, composer, or other command-entry control.
 - The current-state section shows WeatherPresentation, HumanStateSnapshot
   summary/dimensions, confidence, freshness, collaboration mode, and validity.
-- Recent behavior shows only privacy-safe aggregate activity and task behavior.
-  It never admits raw screen, window title, keystroke, clipboard, audio, or
-  deliberate check-in text.
+- A visually dominant screen-time component summarizes today's total screen and
+  browser time, current continuous activity, application/tab switches, and a
+  compact categorical timeline. It is a daily-use product surface, not a
+  diagnostic card.
+- Expanding the component reveals an all-day stacked timeline, screen/browser
+  trends, top applications and sites, category composition, switching density,
+  focus/idle intervals, and an inspectable raw activity timeline. Empty,
+  loading, permission-missing, paused, insufficient-data, inference-running,
+  and error states are designed and tested explicitly.
+- Raw titles and URLs are readable only inside this activity surface and the
+  explicit credential-scrubbed outbound-payload inspector. The page never shows
+  screenshot, keystroke, clipboard, form-value, cookie, or audio content.
+- The component shows the latest inference model, scheduled hour, source
+  window, event/chunk counts, redaction count, status, evidence, and result.
 - Long-term profile shows active evidence-backed Profile Assertions with
   confidence, origin, evidence count, and update time. Empty states must not
   manufacture durable claims from a single current-state snapshot.
@@ -783,7 +872,8 @@ Human-state weather remains visible through every Run state.
 - global shortcut;
 - companion positioning and display changes;
 - start/attach/health/restart management for the Python daemon;
-- macOS activity/idle/application-category metadata adapter;
+- exact macOS application/window interval adapter, including bundle identity,
+  title, focus changes, and idle state after persisted consent;
 - autostart and background-run preferences;
 - reduced-motion, particles, contrast, and always-on-top settings.
 - opening provider authorization URLs in the system browser; OAuth exchange,
@@ -792,19 +882,32 @@ Human-state weather remains visible through every Run state.
   credential-provider enum. Renderer code can set, delete, and read presence;
   it has no operation that returns secret material.
 
-The activity adapter emits metadata only. No raw content is passed to the
-daemon.
+The activity adapter emits exact ActivityWatch-level metadata over the
+authenticated bridge after sensing consent. It never emits pixels, keystrokes,
+clipboard/form values, cookies, request headers, or audio. Python validates and
+owns every durable interval; renderer state is never the activity truth source.
 
 ### 8.5 Daemon bridge
 
 Local macOS development uses a fixed code requirement. `pnpm dev:app` must sign
-the final Cargo debug executable after linking and before execution with the
+one stable runtime copy of the final Cargo debug executable after linking and
+before execution with the
 identifier `ai.weatherflow.desktop.dev` and one stable local code-signing
 certificate. A one-time setup command may create that self-signed certificate
 in the login Keychain. Development must not fall back to an ad-hoc signature,
 because its changing CDHash invalidates Keychain and TCC authorization after
-each rebuild. This local identity is separate from release Developer ID signing
-and notarization.
+each rebuild. Cargo may restore its unsigned artifact before every `cargo run`,
+so the launcher fingerprints the linked bytes and reuses a separately cached,
+verified signed runtime when that fingerprint is unchanged. Only a Rust relink
+creates and signs a new cached runtime; renderer and Python-only restarts do
+not access the signing private key.
+
+Startup health and provider-presence reads must not request Keychain secret
+material or permit authentication UI. Native presence checks use attribute-only
+queries with authenticated items skipped. Secret resolution, including lazy
+creation of the internal provider-continuation key, occurs only at an operation
+that genuinely needs the credential. This local identity and presence policy
+are separate from release Developer ID signing and notarization.
 
 - Bind only to loopback on a random available port.
 - Authenticate every request with a per-launch random token handed to Tauri in
@@ -844,6 +947,15 @@ GET  /v1/approvals
 POST /v1/approvals/{approval_id}/decision
 GET  /v1/artifacts/{artifact_id}
 GET  /v1/rhythm/current
+GET  /v1/activity/preferences
+PATCH /v1/activity/preferences
+POST /v1/activity/heartbeats
+GET  /v1/activity/summary
+GET  /v1/activity/events
+GET  /v1/activity/export
+DELETE /v1/activity/events
+GET  /v1/activity/inference-jobs
+GET  /v1/activity/inference-jobs/{job_id}
 GET  /v1/desktop/snapshot
 GET  /v1/workspaces
 POST /v1/workspaces
@@ -889,6 +1001,128 @@ decisions fail closed. Recovery never retries an approved or executing install:
 an executing Action is moved to `NEEDS_REVIEW`, while an approved-but-not-started
 Action waits for another explicit user decision.
 
+### 8.7 Complete Activity Intelligence
+
+#### 8.7.1 Ownership and scope
+
+Complete activity is installation-scoped personal telemetry. It continues to
+record when no Workspace or Cockpit window is selected and is not implicitly
+owned by the currently visible Workspace. The Raw Activity Vault, analysis
+queries, inference preferences, durable inference jobs, sanitized outbound
+chunks, and deletion/export lifecycle form one Python-owned `activity` domain.
+
+Remote inference configuration references one user-selected Workspace model
+configuration so it can reuse the reviewed provider catalog and native
+credential broker. Each claimed inference job freezes provider, model, endpoint,
+credential reference, and configuration version exactly once. The activity job
+is not a Run, owns no capability snapshot, and receives no tools.
+
+#### 8.7.2 Raw interval contract
+
+The canonical interval contains:
+
+```text
+activity_event_id: ULID
+source: macos_window | browser_tab | idle
+device_id
+source_instance
+source_event_id
+started_at / ended_at: UTC
+duration_seconds
+observed_at: UTC
+app_name / bundle_id (optional)
+window_title (optional)
+browser_name / url / domain / tab_title (optional)
+audible / incognito / focused (optional)
+idle_state: active | idle | unknown
+category (derived but stored beside the exact identity)
+created_at / updated_at
+```
+
+`source_event_id` makes watcher retries idempotent. A heartbeat for the same
+source instance and identical state within `pulsetime` extends the current
+interval. A different application, window, tab, URL, focus, private/audible, or
+idle state closes the previous interval at the transition timestamp and opens a
+new one. Real application changes increment application switching; browser tab
+changes increment a separate browser metric. Category changes are not a proxy
+for either count.
+
+The browser extension sends exact Tabs API metadata over the authenticated
+loopback bridge. It exposes clear permission, enabled, paused, disconnected, and
+private-window states. Private activity is recorded only when the browser grants
+the extension access and the user's browser-source preference permits it.
+
+#### 8.7.3 Retention, export, and deletion
+
+Raw intervals persist until user deletion by default. Settings may select a
+rolling 30-, 90-, 365-day, or unlimited policy. Retention expiry and explicit
+time-range deletion remove raw intervals, sanitized outbound chunks that contain
+them, and their inference evidence links in one activity-domain transaction.
+Affected current human-state projections are recomputed or expire; append-only
+audit semantics never defeat deletion. JSON export contains the exact locally
+stored intervals and preference metadata but never credentials or provider
+secrets.
+
+#### 8.7.4 Secret and untrusted-content boundary
+
+The local vault preserves the complete user-visible URL and title. Immediately
+before any remote request, a deterministic sanitizer:
+
+- removes URL userinfo and fragments;
+- redacts credential-bearing query keys, OAuth codes, signatures, tokens, and
+  secret-shaped values while preserving non-secret URL structure;
+- redacts credential-shaped text in titles and document names;
+- rejects cookies, authorization headers, form values, and unknown browser
+  payload fields at ingestion because they are outside the schema;
+- records field-level redaction metadata without recording the removed value.
+
+Sanitized events are serialized as JSON inside an explicit untrusted-data
+delimiter. System instructions state that event text is evidence, never
+instructions. Neither provider output nor text embedded in an activity event can
+select tools, change the schedule, modify preferences, or authorize an action.
+
+#### 8.7.5 Hourly inference schedule and recovery
+
+The only scheduled slots use `ZoneInfo("Asia/Shanghai")`: 06:00 through 23:00
+on a service day plus the following 00:00 slot attributed to that service day.
+There are no slots from 00:00 exclusive through 06:00 exclusive. A durable
+unique slot key and immediate transaction claim make execution idempotent.
+
+Each job freezes a high-water activity event cursor and starts after the last
+successful cursor. If the app sleeps, stops, or misses several slots, the next
+eligible slot claims one coalesced job covering every unsent event; it never
+replays one request per missed hour. No catch-up request runs during the quiet
+00:00-06:00 interval. Failed jobs keep their cursor unsent and retry only at a
+later eligible slot with bounded backoff metadata.
+
+The complete sanitized interval set is deterministically chunked at no more
+than 500 events or 128 KiB per provider request. Every event appears in exactly
+one chunk. Each chunk returns a validated evidence assessment; a final tool-free
+request fuses only those validated assessments into one candidate snapshot.
+One durable job may therefore own several bounded provider calls without
+creating a second Agent loop or dropping raw evidence.
+
+#### 8.7.6 Audited provider result
+
+The activity inference audit owns:
+
+```text
+job_id / slot_key / status / attempt
+window_start / window_end / event_cursor_start / event_cursor_end
+provider / model / configuration_version
+event_count / chunk_count / redaction_count
+sanitized chunk payloads and request digests
+provider-reported usage and cost when available
+validated candidate snapshot / error_code
+claimed_at / started_at / completed_at
+```
+
+Provider failures expose typed value-free errors outside the activity audit.
+Successful output must contain all six state dimensions, confidence, summary,
+validity, and evidence activity-event IDs drawn from the claimed snapshot. The
+activity service fuses the candidate with deliberate and task evidence through
+the existing Rhythm domain. It does not execute model-proposed actions.
+
 ## 9. Capability Plane and Trust Plane
 
 ### 9.1 Capability sources
@@ -908,16 +1142,19 @@ changes an existing Run or installed snapshot implicitly.
 The desktop MCP catalog is curated and version-pinned. Installation destinations
 live under WeatherFlow's internal root. Presets define their executable and safe
 arguments in Python; the renderer can select a preset and bounded Workspace
-options only. Enabling a preset discovers and normalizes its tools for future
-Runs. Disabling it closes the transport and removes it from future capability
-resolution without mutating frozen Run snapshots. A healthy enabled preset
-contributes its catalog-fixed `mcp:{preset}:use` scope only as an effective input
-to that future snapshot resolution. It does not mutate durable Workspace grants,
-and discovery metadata or MCP annotations cannot select or expand the scope.
-Discovered tool names must be a subset of the preset's Python-owned allowlist;
-an unexpected name fails the connection closed. A stateful preset receives a
-separate internal state root, never a writable Workspace action root, and its
-state is owned by the corresponding explicit privacy-reset lifecycle.
+options only. The user-facing catalog contains only presets whose execution
+boundary is currently runnable. Network-bound roadmap entries remain
+Python-owned definitions but are not rendered as disabled installation cards.
+Enabling a preset discovers and normalizes its tools for future Runs. Disabling
+it closes the transport and removes it from future capability resolution without
+mutating frozen Run snapshots. A healthy enabled preset contributes its
+catalog-fixed `mcp:{preset}:use` scope only as an effective input to that future
+snapshot resolution. It does not mutate durable Workspace grants, and discovery
+metadata or MCP annotations cannot select or expand the scope. Discovered tool
+names must be a subset of the preset's Python-owned allowlist; an unexpected name
+fails the connection closed. A stateful preset receives a separate internal state
+root, never a writable Workspace action root, and its state is owned by the
+corresponding explicit privacy-reset lifecycle.
 
 ### 9.2 ToolSpec
 
@@ -1064,6 +1301,8 @@ SQLite transaction tables own current mutable state:
 - checkpoints and cursors;
 - immutable per-Run model routes;
 - encrypted, retention-bounded provider continuations;
+- activity preferences, raw activity intervals, inference jobs, and sanitized
+  outbound chunks under the activity repository boundary;
 - artifact metadata;
 - current derived snapshot cache.
 
@@ -1093,6 +1332,11 @@ retention_class: audit | signal_raw | signal_aggregate
 User privacy deletion and retention expiration are explicit exceptions to
 append-only storage. Append-only is an audit property, not a reason to deny
 data deletion.
+
+Raw activity payloads are intentionally not Event Ledger payloads. The ledger
+may record a value-free lifecycle projection such as an inference job ID,
+status, counts, and request digest, but never an application name, title, URL,
+domain, tab title, or sanitized outbound body.
 
 ### 10.3 Memory roles
 
@@ -1126,7 +1370,11 @@ data deletion.
 
 ### 10.5 Retention defaults
 
-- Raw application-switch/active/idle events: 72 hours.
+- Complete raw activity intervals: unlimited until user deletion by default;
+  selectable rolling policies are 30, 90, or 365 days.
+- Sanitized inference payloads and inference jobs: follow the shortest
+  retention of their referenced raw intervals and the selected inference-audit
+  policy; deletion of source activity removes the payload copy.
 - Aggregated behavior features: 90 days.
 - User-authored conversations, task history, approved audit records, memory, and
   artifacts persist until user deletion or workspace policy expiration.
@@ -1246,7 +1494,9 @@ capability rather than a new core agent loop.
 | daemon crash | Tauri restarts with backoff; daemon scans non-terminal Runs |
 | Tauri crash/exit | daemon continues according to preference; reconnect by event cursor |
 | uncertain external side effect | mark `NEEDS_REVIEW`; never blindly repeat |
-| behavior sensor unavailable | continue with deliberate signals; lower state confidence |
+| activity watcher unavailable | preserve prior intervals, show source-specific degraded state, continue with other evidence, and lower confidence |
+| hourly inference missed during sleep/restart | wait for the next eligible `Asia/Shanghai` slot and submit one coalesced idempotent job |
+| activity provider failure | retain the unsent cursor, record a value-free error, and retry only at a later eligible slot |
 | checkpoint corruption | isolate record, retain audit/artifacts, mark `NEEDS_REVIEW` |
 | event cursor expired | refetch snapshots, then resume live events |
 | capability schema drift | current Run retains frozen snapshot; new Run receives new schema |
@@ -1319,6 +1569,10 @@ and structured events.
 - MCP discovery, disconnect, and schema drift;
 - artifact atomic commit and partial failure;
 - behavior metadata ingestion and retention expiration;
+- raw activity heartbeat merge/idempotency, query, export, deletion, and
+  retention expiration;
+- credential scrubbing, deterministic inference chunking, quiet-hour schedule,
+  missed-hour coalescing, job recovery, and validated provider output;
 - HTTP/WebSocket authentication and cursor replay.
 
 ### 14.3 Agent trajectory evaluations
@@ -1347,6 +1601,9 @@ must judge policy, state transition, provenance, and recovery contracts.
 - daemon crash and recovery;
 - Tauri restart and event/snapshot recovery;
 - reduced-motion and sensor-permission fallback.
+- compact/expanded screen-time component states and inference-audit inspection;
+- screenshot-based visual QA for representative populated, empty, paused,
+  permission-missing, and error states at supported Cockpit viewports.
 
 ### 14.5 Security and privacy checks
 
@@ -1356,7 +1613,10 @@ must judge policy, state transition, provenance, and recovery contracts.
 - credential leakage scans across logs/events/checkpoints/memory;
 - continuation AEAD tamper detection, model binding, expiry, terminal deletion,
   and absence from logs/events/checkpoints/memory/diagnostics;
-- forbidden raw sensor-content checks;
+- activity schema rejection of screenshots, pixels, keystroke/clipboard/form/
+  cookie/header/audio content and raw activity absence from non-activity stores;
+- prompt-injection fixtures in titles/URLs and credential-redaction scans across
+  local logs, events, checkpoints, memory, artifacts, and outbound payloads;
 - retention expiry;
 - external-write approval invariant.
 
@@ -1375,6 +1635,11 @@ must judge policy, state transition, provenance, and recovery contracts.
   closed instead of returning the original Run.
 - Low-confidence or expired human state projects to `mixed` rather than a false
   precise weather state.
+- One hour of raw activity is queryable for the compact component without a
+  full-table scan; day-level charts remain responsive at one year of interval
+  history through indexed interval queries and bounded aggregation.
+- A scheduled activity inference slot is claimed once, never runs during the
+  00:00-06:00 quiet interval, and never drops an unsent event during chunking.
 
 ## 16. Delivery phases
 
@@ -1403,6 +1668,15 @@ must judge policy, state transition, provenance, and recovery contracts.
 - macOS activity metadata adapter;
 - HumanStateSnapshot, RhythmPolicy, WeatherPresentation;
 - micro-weather and Run ring.
+
+### P2A: Complete Activity Intelligence
+
+- installation-scoped Raw Activity Vault and typed activity APIs;
+- exact macOS and browser watcher contracts with persisted opt-in;
+- screen-time component, detailed visual analytics, and raw timeline;
+- deterministic credential scrubbing and audited provider-neutral inference;
+- `Asia/Shanghai` 06:00-through-24:00 durable hourly scheduler;
+- deletion, export, configurable retention, recovery, and visual/security QA.
 
 ### P3: Flagship vertical slice
 
@@ -1458,6 +1732,13 @@ execution path to bypass the Run Coordinator.
     durable Action/Approval pair; renderer confirmation flags and fabricated
     authorization ids are not accepted, and interrupted execution never retries
     automatically.
+20. Raw activity has one installation-scoped owner and is never copied into
+    Runs, the Event Ledger, memory, checkpoints, artifacts, or diagnostics.
+21. Remote activity inference is separately consented, credential-scrubbed,
+    tool-free, evidence-linked, and scheduled only at the fixed
+    `Asia/Shanghai` 06:00-through-24:00 hours.
+22. Activity-derived state can change RhythmPolicy but cannot grant authority or
+    directly execute any side effect.
 
 ## 18. Design completion criteria
 

@@ -134,6 +134,32 @@ def test_native_resolver_rejects_arbitrary_provider_and_key_name(tmp_path) -> No
         resolver.resolve(CredentialRef(provider="minimax", name="other"))
 
 
+def test_native_resolver_checks_presence_without_requesting_secret(tmp_path) -> None:
+    socket_path = short_socket_path()
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    received: list[dict[str, str]] = []
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            received.append(json.loads(connection.makefile("rb").readline()))
+            connection.sendall(b'{"ok":true}\n')
+        listener.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    resolver = NativeCredentialResolver(socket_path=socket_path, token="f" * 64)
+
+    available = resolver.available(CredentialRef(provider="minimax", name="api_key"))
+
+    thread.join(timeout=2)
+    socket_path.unlink(missing_ok=True)
+    assert available is True
+    assert received == [{"operation": "status", "provider": "minimax", "token": "f" * 64}]
+
+
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
 def test_native_resolver_accepts_fixed_foreign_model_providers(
     provider: str,

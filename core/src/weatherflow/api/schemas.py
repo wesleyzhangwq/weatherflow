@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from weatherflow.activity import ActivityInterval, ActivityPreferences
 from weatherflow.automations import ScheduleSpec
 from weatherflow.capabilities import ToolEffect
 from weatherflow.models import (
@@ -193,6 +194,39 @@ class VersionedRequest(BaseModel):
 
     expected_version: int = Field(ge=0)
     confirm: bool = True
+
+
+class ActivityPreferencesUpdateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_version: int = Field(ge=0)
+    collection_enabled: bool
+    macos_enabled: bool
+    browser_enabled: bool
+    incognito_enabled: bool
+    remote_inference_enabled: bool
+    model_workspace_id: str | None = Field(default=None, min_length=1)
+    retention_days: Literal[30, 90, 365] | None = None
+
+
+class ActivityDeleteRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirm: bool = False
+
+
+class ActivityDeleteResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    deleted: int = Field(ge=0)
+
+
+class ActivityExportResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    exported_at: datetime
+    preferences: ActivityPreferences
+    events: tuple[ActivityInterval, ...]
 
 
 class SkillMutationRequest(BaseModel):

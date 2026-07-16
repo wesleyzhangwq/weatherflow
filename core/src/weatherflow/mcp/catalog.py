@@ -39,7 +39,7 @@ class MCPPreset:
     description: str
     publisher: str
     source_url: str
-    package_manager: Literal["npm", "python"]
+    package_manager: Literal["npm", "python", "builtin"]
     package_name: str
     package_version: str
     binary_name: str
@@ -86,6 +86,8 @@ class MCPPreset:
 
     def executable_path(self, internal_root: Path) -> Path:
         target = self.installation_root(internal_root)
+        if self.package_manager == "builtin":
+            return target / ".weatherflow-builtin-mcp"
         if self.package_manager == "npm":
             return target / "node_modules" / ".bin" / self.binary_name
         return target / "bin" / self.binary_name
@@ -144,6 +146,7 @@ class CuratedMCPCatalog:
                     capabilities=("文件读取", "目录检索", "受审批的文件写入"),
                     risk_note="只注入 Workspace action roots；写入工具仍需 Trust 审批。",
                     allowed_tool_names=(
+                        "read_file",
                         "read_text_file",
                         "read_media_file",
                         "read_multiple_files",
@@ -247,20 +250,13 @@ class CuratedMCPCatalog:
                     source_url=(
                         "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
                     ),
-                    package_manager="python",
-                    package_name="mcp-server-time",
-                    package_version="2026.7.10",
-                    binary_name="mcp-server-time",
+                    package_manager="builtin",
+                    package_name="weatherflow-builtin-time",
+                    package_version="3.0.0",
+                    binary_name="time",
                     capabilities=("当前时间", "时区转换"),
-                    risk_note=(
-                        "官方实现只读且可离线运行，但正式 App 尚未内置隔离的 Python MCP 运行时。"
-                    ),
+                    risk_note=("WeatherFlow 内置只读实现；通过离线 Seatbelt 沙箱运行。"),
                     allowed_tool_names=("get_current_time", "convert_time"),
-                    available=False,
-                    unavailable_reason=(
-                        "The packaged app does not yet include a separately sandboxed Python MCP "
-                        "runtime; host uvx execution is not an accepted fallback"
-                    ),
                 ),
                 MCPPreset(
                     preset_id="git-readonly",
@@ -270,10 +266,10 @@ class CuratedMCPCatalog:
                     source_url=(
                         "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
                     ),
-                    package_manager="python",
-                    package_name="mcp-server-git",
-                    package_version="2026.7.10",
-                    binary_name="mcp-server-git",
+                    package_manager="builtin",
+                    package_name="weatherflow-builtin-git-readonly",
+                    package_version="3.0.0",
+                    binary_name="git-readonly",
                     capabilities=("仓库状态", "差异与历史", "分支只读检查"),
                     risk_note=(
                         "只计划暴露官方只读工具并以只读 Workspace 根运行；"
@@ -289,12 +285,6 @@ class CuratedMCPCatalog:
                         "git_branch",
                     ),
                     requires_action_roots=True,
-                    fixed_arguments=("--repository",),
-                    available=False,
-                    unavailable_reason=(
-                        "The packaged app does not yet include a separately sandboxed Python MCP "
-                        "runtime and multi-root repository routing"
-                    ),
                 ),
                 MCPPreset(
                     preset_id="context7",
@@ -327,4 +317,5 @@ class CuratedMCPCatalog:
         return tuple(
             preset.to_summary()
             for preset in sorted(self._presets.values(), key=lambda item: item.preset_id)
+            if preset.available
         )

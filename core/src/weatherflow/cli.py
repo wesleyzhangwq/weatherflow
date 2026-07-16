@@ -35,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--desktop-bootstrap-stdin", action="store_true", help=argparse.SUPPRESS)
 
     subparsers.add_parser("mcp-server", help="Run the WeatherFlow stdio MCP server")
+    builtin_mcp = subparsers.add_parser("builtin-mcp", help=argparse.SUPPRESS)
+    builtin_mcp.add_argument("preset", choices=("git-readonly", "time"))
+    builtin_mcp.add_argument("roots", nargs="*")
 
     configure_minimax = subparsers.add_parser(
         "configure-minimax",
@@ -75,6 +78,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command is None:
         parser.error("a command is required")
+
+    if args.command == "builtin-mcp":
+        from weatherflow.mcp.builtin_server import serve_stdio
+
+        return serve_stdio(args.preset, tuple(Path(root) for root in args.roots))
 
     if args.command == "serve":
         if args.desktop_bootstrap_stdin:
