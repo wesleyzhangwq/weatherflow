@@ -1,18 +1,9 @@
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ulid import ULID
-
-
-class AppCategory(StrEnum):
-    DEVELOPMENT = "development"
-    COMMUNICATION = "communication"
-    RESEARCH = "research"
-    PLANNING = "planning"
-    CREATIVE = "creative"
-    OTHER = "other"
 
 
 class DimensionName(StrEnum):
@@ -183,27 +174,3 @@ class WeatherPresentation(BaseModel):
     snapshot_id: str
     valid_until: datetime
     presentation_version: str = "weather-v1"
-
-
-def expired_snapshot(workspace_id: str) -> HumanStateSnapshot:
-    now = datetime.now(UTC)
-    estimate = DimensionEstimate(
-        value=0.5,
-        confidence=0,
-        trend=Trend.STEADY,
-        supporting_event_ids=(),
-        contradicting_event_ids=(),
-        freshness=Freshness.EXPIRED,
-    )
-    return HumanStateSnapshot.new(
-        workspace_id=workspace_id,
-        observed_at=now,
-        window_start=now - timedelta(hours=1),
-        window_end=now,
-        dimensions={name: estimate for name in DimensionName},
-        summary="Insufficient current evidence",
-        supporting_event_ids=(),
-        contradicting_event_ids=(),
-        valid_until=now,
-        freshness=Freshness.EXPIRED,
-    )

@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 
 from weatherflow.bootstrap import RuntimeContainer
-from weatherflow.eval.models import TrajectoryCheck, TrajectoryReport
 from weatherflow.runs import RunStatus
 from weatherflow.runtime import MessageRole
+
+from .models import TrajectoryCheck, TrajectoryReport
 
 
 class FlagshipTrajectoryEvaluator:

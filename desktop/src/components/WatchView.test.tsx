@@ -205,8 +205,6 @@ function client(overrides: Partial<WeatherFlowClient> = {}) {
     watchSourceStatus: vi.fn().mockResolvedValue(sourceStatus),
     watchCurrent: vi.fn().mockResolvedValue(current),
     watchDashboard: vi.fn().mockResolvedValue({ statistics, timeline }),
-    watchStatistics: vi.fn().mockResolvedValue(statistics),
-    watchTimeline: vi.fn().mockResolvedValue(timeline),
     watchSummaries: vi.fn().mockResolvedValue(summaries),
     watchTasks: vi.fn().mockImplementation(async (
       _limit: number,
@@ -676,8 +674,6 @@ it("keeps Agent database summaries and tasks visible when ActivityWatch is offli
     }),
     watchCurrent: vi.fn().mockRejectedValue(new Error("offline")),
     watchDashboard: vi.fn().mockRejectedValue(new Error("offline")),
-    watchStatistics: vi.fn().mockRejectedValue(new Error("offline")),
-    watchTimeline: vi.fn().mockRejectedValue(new Error("offline")),
   });
 
   render(<WatchView client={mockClient} now={new Date("2026-07-16T02:00:00Z")} />);

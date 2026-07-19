@@ -69,7 +69,7 @@ core/
 desktop/
   src/               Companion, Capsule, Cockpit, typed bridge, metadata aggregation
   src-tauri/         thin window shell and sidecar supervisor
-docs/superpowers/    approved specifications and implementation plans
+docs/superpowers/    approved specification
 weatherflow-architecture-v3.md
 ```
 

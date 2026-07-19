@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 from weatherflow.activity import (
-    ActivityAnalysisRouteMismatchError,
     ActivitySourceHealth,
+    ActivitySummaryRouteMismatchError,
     ActivityWatchDiscovery,
     ActivityWatchInfo,
     ActivityWatchUnavailable,
@@ -95,7 +95,7 @@ async def test_activity_summary_route_rejects_stale_provider_or_configuration_ve
     resolver = container.activity_recovery.summaries.analyzer.resolve_route
     assert resolver is not None
 
-    with pytest.raises(ActivityAnalysisRouteMismatchError):
+    with pytest.raises(ActivitySummaryRouteMismatchError):
         await resolver(task)
 
 

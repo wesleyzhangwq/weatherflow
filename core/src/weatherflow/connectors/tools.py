@@ -790,14 +790,6 @@ def composio_tool_ids(connector: ConnectorKind) -> frozenset[str]:
     )
 
 
-def composio_remote_actions(connector: ConnectorKind) -> tuple[str, ...]:
-    return tuple(
-        definition.action
-        for definition in COMPOSIO_TOOL_DEFINITIONS
-        if definition.connector is connector
-    )
-
-
 class ComposioExecutionGateway(Protocol):
     async def execute_tool(
         self,

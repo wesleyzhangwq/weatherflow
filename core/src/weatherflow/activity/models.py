@@ -13,7 +13,7 @@ from weatherflow.models.errors import ModelResponseFailureStage
 ACTIVITY_TIMEZONE = "Asia/Shanghai"
 BOUNDARY_POLICY_VERSION = "activity-window-boundaries-v1"
 STATISTICS_VERSION = "activity-statistics-v1"
-PROMPT_VERSION = "activity-summary-prompt-v5-privacy-context-sequence-zh-fixed"
+_PROMPT_VERSION = "activity-summary-prompt-v5-privacy-context-sequence-zh-fixed"
 ACTIVITY_SUMMARY_SYSTEM_PROMPT = (
     "你是 WeatherFlow 的只读活动总结器。所有自然语言内容必须使用简体中文；"
     "产品名、Category 和必要专有名词可以保留原文，但应用名不得出现在最终总结中。"
@@ -47,11 +47,9 @@ def canonical_digest(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def activity_summary_prompt_version(prompt: str | None = None) -> str:
-    if prompt is not None and prompt.strip() != ACTIVITY_SUMMARY_SYSTEM_PROMPT:
-        raise ValueError("activity summary prompt is fixed by WeatherFlow")
+def _activity_summary_prompt_version() -> str:
     return (
-        f"{PROMPT_VERSION}:"
+        f"{_PROMPT_VERSION}:"
         f"{canonical_digest({'summary_prompt': ACTIVITY_SUMMARY_SYSTEM_PROMPT})[:16]}"
     )
 
@@ -64,7 +62,7 @@ def _canonical_json_default(value: Any) -> Any:
     raise TypeError(f"unsupported canonical JSON value: {type(value).__name__}")
 
 
-ACTIVITY_SUMMARY_PROMPT_VERSION = activity_summary_prompt_version()
+ACTIVITY_SUMMARY_PROMPT_VERSION = _activity_summary_prompt_version()
 
 
 class ActivityWatchProtocolError(RuntimeError):

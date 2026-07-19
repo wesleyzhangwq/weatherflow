@@ -640,24 +640,3 @@ async def test_watch_api_bounds_queries_and_reports_missing_summary() -> None:
     assert excessive_window.status_code == 422
     assert missing.status_code == 404
     assert missing.json()["detail"]["code"] == "activity_summary_not_found"
-
-
-async def test_public_rhythm_api_rejects_direct_activity_metadata() -> None:
-    container = StubContainer()
-    transport = ASGITransport(app=create_app(container=container))
-    payload = {
-        "kind": "activity_metadata",
-        "observed_at": NOW.isoformat(),
-        "window_start": START.isoformat(),
-        "window_end": NOW.isoformat(),
-        "active_seconds": 18_000,
-        "idle_seconds": 1_200,
-        "app_switch_count": 24,
-        "category_seconds": {"development": 14_000},
-    }
-
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/v1/rhythm/signals", json=payload)
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "activity_metadata_ingest_forbidden"

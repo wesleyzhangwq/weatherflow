@@ -81,7 +81,7 @@ class ActivityModelResult(BaseModel):
 
 
 @dataclass(frozen=True)
-class ActivityAnalysisRoute:
+class ActivitySummaryRoute:
     adapter: ModelAdapter | None
     provider: str
     model: str
@@ -91,14 +91,14 @@ class ActivityAnalysisRoute:
     connector_feed: ConnectorFeed | None = None
 
 
-class ActivityAnalysisRouteResolver(Protocol):
+class ActivitySummaryRouteResolver(Protocol):
     async def __call__(
         self,
         task: ActivitySummaryTask,
-    ) -> ActivityAnalysisRoute | None: ...
+    ) -> ActivitySummaryRoute | None: ...
 
 
-class ActivityAnalysisRouteMismatchError(RuntimeError):
+class ActivitySummaryRouteMismatchError(RuntimeError):
     """The persisted summary route no longer matches its Workspace configuration."""
 
 
@@ -107,7 +107,7 @@ class ActivityModelOutputRejectedError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ActivityAnalysisResult:
+class ActivitySummaryResult:
     summary_text: str
     connector_evidence_refs: tuple[ActivityConnectorEvidenceRef, ...]
     connector_coverage: tuple[ActivityConnectorCoverage, ...]
@@ -148,7 +148,7 @@ class ActivitySummaryAnalyzer:
     def __init__(
         self,
         *,
-        resolve_route: ActivityAnalysisRouteResolver | None = None,
+        resolve_route: ActivitySummaryRouteResolver | None = None,
         sanitizer: ActivitySanitizer | None = None,
     ) -> None:
         self.resolve_route = resolve_route
@@ -160,7 +160,7 @@ class ActivitySummaryAnalyzer:
         task: ActivitySummaryTask,
         evidence: ActivityWindowEvidence,
         lower_summaries: tuple[ActivitySummaryRevision, ...] = (),
-    ) -> ActivityAnalysisResult:
+    ) -> ActivitySummaryResult:
         route = await self.resolve_route(task) if self.resolve_route is not None else None
         connector_feed = route.connector_feed if route is not None else None
         payload, redaction_count, connector_refs, connector_coverage = self._payload(
@@ -217,7 +217,7 @@ class ActivitySummaryAnalyzer:
                 connector_feed=connector_feed,
             )
             usage = turn.usage.model_dump(mode="json")
-            return ActivityAnalysisResult(
+            return ActivitySummaryResult(
                 summary_text=result.summary,
                 connector_evidence_refs=connector_refs,
                 connector_coverage=connector_coverage,
@@ -946,12 +946,12 @@ class ActivitySummaryAnalyzer:
         fallback_reason: str | None = None,
         requested_provider: str | None = None,
         requested_model: str | None = None,
-    ) -> ActivityAnalysisResult:
+    ) -> ActivitySummaryResult:
         result = self._deterministic_result(
             evidence=evidence,
             connector_feed=connector_feed,
         )
-        return ActivityAnalysisResult(
+        return ActivitySummaryResult(
             summary_text=result.summary,
             connector_evidence_refs=connector_refs,
             connector_coverage=connector_coverage,

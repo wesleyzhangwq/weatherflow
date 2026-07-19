@@ -747,3 +747,13 @@ watchers and a second raw activity vault are excluded.
   coverage keys, next refresh, aggregate raw/normalized counts, and
   normalization health; credentials and provider account identities remain
   outside the projection.
+- 2026-07-19: Slimmed the completed v3 tree without changing product or storage
+  ownership. Deterministic flagship-eval helpers now live only under tests;
+  production activity-summary modules and contracts use summary terminology.
+  Replaced the unconsumed standalone Rhythm Insights read model with a narrow
+  Watch-only active Profile Assertion projection; removed desktop wrappers
+  superseded by the combined Watch dashboard request, the v2 activity-metadata
+  request tombstone, and unreachable remote-activity snapshot methods. Existing
+  migrations, ActivityWatch semantic queries, Watch, recovery, and the flagship
+  acceptance gate remain intact. Superseded implementation plans and design-QA
+  outputs remain recoverable from Git history rather than the active tree.

@@ -33,32 +33,6 @@ export interface RhythmDimensionEstimate {
   trend: "rising" | "steady" | "falling";
   freshness: "fresh" | "aging" | "expired";
 }
-export interface RecentBehaviorInsight {
-  id: string;
-  kind: "activity" | "task";
-  observed_at: string;
-  active_minutes: number | null;
-  idle_minutes: number | null;
-  app_switch_count: number | null;
-  dominant_category: "development" | "communication" | "research" | "planning" | "creative" | "other" | null;
-  outcome: "succeeded" | "failed" | "needs_review" | null;
-  duration_minutes: number | null;
-  step_count: number | null;
-}
-export interface ProfileInsight {
-  id: string;
-  claim: string;
-  confidence: number;
-  origin: "user" | "agent" | "derived";
-  evidence_count: number;
-  updated_at: string;
-}
-export interface RhythmInsights {
-  current: CurrentRhythm;
-  recent_behaviors: RecentBehaviorInsight[];
-  profile: ProfileInsight[];
-}
-
 export interface Run {
   id: string;
   workspace_id: string;

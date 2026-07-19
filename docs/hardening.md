@@ -1,31 +1,29 @@
 # WeatherFlow v3 local hardening
 
-WeatherFlow does not contain a telemetry upload client. Run metrics are derived
-locally from SQLite facts, and a diagnostic file is written only after the user
-requests it. Private event payloads and credential-like values are redacted;
-the export records `upload_attempted: false` and stays beneath the Workspace
-internal root.
+WeatherFlow has no telemetry upload client. Durable Runs, events, derived
+activity records, memory, and artifacts remain local. A diagnostic export is
+created only after an explicit request, is written beneath the Workspace
+internal root, redacts credential-like values, and records that no upload was
+attempted.
 
-Privacy controls preview and independently reset behavior evidence, episodic
-memory, profile assertions, artifacts, or all Workspace-owned content. Reset
-audit events contain category and count only. Raw behavior expires after 72
-hours and aggregate behavior after 90 days; audit facts are not expired by that
-policy.
+ActivityWatch remains an independent, read-only raw fact source. WeatherFlow
+does not own a watcher, heartbeat write path, or raw activity vault. Its
+database contains only derived task/revision/statistics metadata and bounded
+evidence references; raw titles, URLs, application names, AFK events, and
+ActivityWatch-derived state inference are forbidden.
 
-Recovery is deliberately conservative:
+Recovery is conservative:
 
-- retryable model failures receive three bounded attempts, then pause the Run;
-- invalid checkpoints are content-addressed into a local quarantine and the Run
-  enters `NEEDS_REVIEW`;
-- startup audits non-terminal Runs but never silently executes them;
-- unavailable provider tools are recorded and hidden from new Run snapshots;
-- ambiguous external Actions remain governed by the existing review path.
+- retryable model failures receive bounded attempts and then pause;
+- invalid checkpoints enter local quarantine and route the Run to review;
+- startup audits non-terminal Runs but never silently replays side effects;
+- unavailable provider tools are hidden from new capability snapshots;
+- ambiguous external Actions remain in `NEEDS_REVIEW`.
 
-The Cockpit shows local ownership, metadata-only behavior sensing, installed
-Packs, retention, provider health, explicit diagnostic export, and a two-click
-behavior-reset flow. The ambient companion remains silent and display-only.
+Privacy controls separately preview and delete supported Workspace-owned data.
+Deletion outranks append-only retention. Reset audit events retain category and
+count only, never deleted content.
 
-`make security-check` exercises the durable-store scanner. It inspects events,
-checkpoints and quarantine, memory/profile, Workspace configuration, and
-artifact manifests for credential values and forbidden raw sensor fields. A
-finding reports only table, row ID, field, and kind—not the detected content.
+`make security-check` scans durable stores for credential values and forbidden
+raw sensor fields. Findings expose only the table, row identifier, field, and
+kind. `make check` runs this as a dedicated gate exactly once.

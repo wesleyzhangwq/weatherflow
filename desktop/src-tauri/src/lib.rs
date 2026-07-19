@@ -308,8 +308,7 @@ pub fn run() {
             credential_set,
             credential_delete,
             credential_status,
-            supervisor::daemon_bridge,
-            supervisor::restart_daemon
+            supervisor::daemon_bridge
         ])
         .build(tauri::generate_context!())
         .expect("WeatherFlow desktop shell failed");

@@ -6,11 +6,10 @@
 - **Target:** macOS-first v3.0
 **Strategy:** Clean-slate rewrite; no v2 code or data compatibility
 
-**Authority boundary:** `weatherflow-architecture-v2.md` remains authoritative
-for the existing v2 runtime until P0 begins. This specification is authoritative
-for the approved v3 replacement design only. Before any v3 implementation edit,
-P0 must create `weatherflow-architecture-v3.md`, update `AGENTS.md` to point to
-it, and record the supersession explicitly.
+**Authority boundary:** `weatherflow-architecture-v3.md` is the authoritative
+architecture entrypoint. This specification is the approved detailed v3 design.
+The archived v2 runtime remains available only through Git history and tag
+`weatherflow-v2-final`; it is not a compatibility target.
 
 ## 1. Executive summary
 

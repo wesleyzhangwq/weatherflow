@@ -291,8 +291,6 @@ describe("WeatherFlowClient", () => {
     await client.watchCurrent();
     await client.watchOAuthFeed("workspace/1", 18);
     await client.watchDashboard(start, end);
-    await client.watchStatistics(start, end);
-    await client.watchTimeline(start, end);
     await client.watchSummaries(20);
     await client.watchTasks(30, "failed");
     await client.watchRegenerateTask("task/with spaces");
@@ -309,8 +307,6 @@ describe("WeatherFlowClient", () => {
       ["http://127.0.0.1:9000/v1/watch/current", undefined],
       ["http://127.0.0.1:9000/v1/watch/oauth-feed?workspace_id=workspace%2F1&limit=18", undefined],
       ["http://127.0.0.1:9000/v1/watch/dashboard?start=2026-07-15T16%3A00%3A00.000Z&end=2026-07-16T02%3A00%3A00.000Z&limit=500", undefined],
-      ["http://127.0.0.1:9000/v1/watch/statistics?start=2026-07-15T16%3A00%3A00.000Z&end=2026-07-16T02%3A00%3A00.000Z", undefined],
-      ["http://127.0.0.1:9000/v1/watch/timeline?start=2026-07-15T16%3A00%3A00.000Z&end=2026-07-16T02%3A00%3A00.000Z&limit=500", undefined],
       ["http://127.0.0.1:9000/v1/watch/summaries?limit=20", undefined],
       ["http://127.0.0.1:9000/v1/watch/tasks?limit=30&status=failed", undefined],
       ["http://127.0.0.1:9000/v1/watch/tasks/task%2Fwith%20spaces/regenerate", "POST"],
@@ -318,10 +314,10 @@ describe("WeatherFlowClient", () => {
       ["http://127.0.0.1:9000/v1/watch/settings/summary", undefined],
       ["http://127.0.0.1:9000/v1/watch/settings/summary", "PATCH"],
     ]);
-    expect(JSON.parse(fetchMock.mock.calls[8]?.[1]?.body as string)).toEqual({
+    expect(JSON.parse(fetchMock.mock.calls[6]?.[1]?.body as string)).toEqual({
       reason: "user_requested",
     });
-    expect(JSON.parse(fetchMock.mock.calls[11]?.[1]?.body as string)).toEqual({
+    expect(JSON.parse(fetchMock.mock.calls[9]?.[1]?.body as string)).toEqual({
       model_workspace_id: "workspace-1",
       model: "MiniMax-M3-fast",
       expected_version: 2,

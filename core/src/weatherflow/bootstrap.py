@@ -13,13 +13,13 @@ import httpx
 
 from weatherflow.activity import (
     ACTIVITY_SUMMARY_PROMPT_VERSION,
-    ActivityAnalysisRoute,
-    ActivityAnalysisRouteMismatchError,
     ActivityRecoveryCoordinator,
     ActivityRepository,
     ActivitySemanticQueryService,
     ActivityService,
     ActivitySummaryAnalyzer,
+    ActivitySummaryRoute,
+    ActivitySummaryRouteMismatchError,
     ActivitySummaryScheduler,
     ActivitySummaryService,
     ActivitySummarySettings,
@@ -528,7 +528,7 @@ class RuntimeContainer:
             )
         )
 
-        async def resolve_activity_analysis_route(_task) -> ActivityAnalysisRoute | None:
+        async def resolve_activity_summary_route(_task) -> ActivitySummaryRoute | None:
             summary_settings = await activity_repository.summary_settings()
             if summary_settings is None:
                 return None
@@ -545,7 +545,7 @@ class RuntimeContainer:
                 summary_settings.model_configuration_version,
             )
             if selected_route == (None, None, None):
-                return ActivityAnalysisRoute(
+                return ActivitySummaryRoute(
                     adapter=None,
                     provider="local",
                     model="deterministic-activity-v1",
@@ -567,17 +567,17 @@ class RuntimeContainer:
                 summary_settings.model_configuration_version,
             )
             if current_route_identity != selected_route_identity:
-                raise ActivityAnalysisRouteMismatchError(
+                raise ActivitySummaryRouteMismatchError(
                     "activity summary model route no longer matches its configuration"
                 )
             if configuration is None or summary_settings.model is None:
-                raise ActivityAnalysisRouteMismatchError(
+                raise ActivitySummaryRouteMismatchError(
                     "activity summary model route is incomplete"
                 )
             summary_configuration = configuration.model_copy(
                 update={"model": summary_settings.model}
             )
-            return ActivityAnalysisRoute(
+            return ActivitySummaryRoute(
                 adapter=model_configurations.adapter(summary_configuration),
                 provider=summary_configuration.provider.value,
                 model=summary_configuration.model,
@@ -588,7 +588,7 @@ class RuntimeContainer:
             )
 
         activity_summaries.analyzer = ActivitySummaryAnalyzer(
-            resolve_route=resolve_activity_analysis_route
+            resolve_route=resolve_activity_summary_route
         )
 
         use_builtin_pack_resolution = catalog is None

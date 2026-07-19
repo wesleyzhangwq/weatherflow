@@ -113,6 +113,27 @@ class MemoryStore:
             )
         return assertion
 
+    async def list_active_assertions(
+        self,
+        workspace_id: str,
+        *,
+        limit: int = 8,
+    ) -> tuple[ProfileAssertion, ...]:
+        if not 1 <= limit <= 50:
+            raise ValueError("profile assertion limit must be between 1 and 50")
+        assertions = await self.assertions.list_workspace(workspace_id)
+        return tuple(
+            sorted(
+                (
+                    assertion
+                    for assertion in assertions
+                    if assertion.status is ProfileAssertionStatus.ACTIVE
+                ),
+                key=lambda assertion: (assertion.updated_at, assertion.id),
+                reverse=True,
+            )[:limit]
+        )
+
     async def update_assertion(
         self,
         assertion_id: str,

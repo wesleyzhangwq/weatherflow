@@ -8,8 +8,6 @@ from pathlib import Path
 import pytest
 
 from weatherflow.activity import (
-    ActivityAnalysisRoute,
-    ActivityAnalysisRouteMismatchError,
     ActivityCoverageStatus,
     ActivityModelOutputRejectedError,
     ActivityModelResult,
@@ -19,6 +17,8 @@ from weatherflow.activity import (
     ActivityStatistics,
     ActivitySummaryAnalyzer,
     ActivitySummaryRevision,
+    ActivitySummaryRoute,
+    ActivitySummaryRouteMismatchError,
     ActivitySummaryService,
     ActivitySummaryTask,
     ActivityWindowEvidence,
@@ -122,7 +122,7 @@ async def test_analyzer_scrubs_model_input_and_output_and_disables_tools() -> No
     adapter = CapturingAdapter(evidence_key)
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="test-provider",
             model="test-model",
@@ -223,7 +223,7 @@ async def test_analyzer_removes_partial_latin_app_names_and_chinese_title_fragme
     )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="test-provider",
             model="test-model",
@@ -404,7 +404,7 @@ async def test_analyzer_never_persists_raw_activity_or_connector_scalars() -> No
     )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="test-provider",
             model="test-model",
@@ -485,7 +485,7 @@ async def test_analyzer_delimits_all_activity_labels_and_neutralizes_delimiter_t
     )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="test-provider",
             model="test-model",
@@ -562,7 +562,7 @@ async def test_analyzer_caps_fact_pairs_before_building_a_model_payload() -> Non
     adapter = CapturingAdapter(first_evidence_key)
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="test-provider",
             model="test-model",
@@ -628,7 +628,7 @@ async def test_analyzer_clips_cross_boundary_facts_in_the_model_payload() -> Non
     adapter = StaticContentAdapter('{"summary":"窗口内有一段可验证的观测记录。"}')
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="test-provider",
             model="test-model",
@@ -845,7 +845,7 @@ async def test_model_hallucinated_evidence_claim_fails_closed(model_summary: str
     )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="minimax",
             model="MiniMax-M3",
@@ -903,7 +903,7 @@ async def test_forbidden_model_inference_fails_closed_to_category_only_fallback(
     )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="minimax",
             model="MiniMax-M3",
@@ -966,7 +966,7 @@ async def test_analyzer_rejects_truncated_model_json_without_local_fallback() ->
     adapter = StaticContentAdapter('```json\n{"summary":"截断')
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="minimax",
             model="MiniMax-M3",
@@ -1221,7 +1221,7 @@ async def execute_analysis_failure(
                 raise error
 
         async def resolve_route(_task):
-            return ActivityAnalysisRoute(
+            return ActivitySummaryRoute(
                 adapter=FailingAdapter(),
                 provider="minimax",
                 model="MiniMax-M3",
@@ -1323,7 +1323,7 @@ async def test_activity_route_mismatch_has_a_distinct_retryable_code(
 ) -> None:
     repository, failed, run_at = await execute_analysis_failure(
         tmp_path,
-        ActivityAnalysisRouteMismatchError("stale route"),
+        ActivitySummaryRouteMismatchError("stale route"),
     )
 
     assert failed.status is SummaryTaskStatus.NEEDS_RETRY
@@ -1385,7 +1385,7 @@ async def test_authentication_failure_completes_on_the_next_due_compensation_pas
             )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=RecoveredAdapter(),
             provider="minimax",
             model="MiniMax-M3",

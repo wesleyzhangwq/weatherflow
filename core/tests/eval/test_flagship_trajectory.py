@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from weatherflow.eval import run_flagship_fixture
+from .fixture import run_flagship_fixture
 
 
 async def test_overloaded_release_trajectory_passes_all_deterministic_checks(

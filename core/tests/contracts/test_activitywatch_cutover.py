@@ -45,8 +45,5 @@ def test_legacy_activity_metadata_is_not_a_rhythm_domain_signal() -> None:
     rhythm_estimator = (ROOT / "core/src/weatherflow/rhythm/estimator.py").read_text(
         encoding="utf-8"
     )
-    rhythm_insights = (ROOT / "core/src/weatherflow/rhythm/insights.py").read_text(encoding="utf-8")
-
     assert "class ActivityMetadata" not in rhythm_models
     assert "ActivityMetadata" not in rhythm_estimator
-    assert "ActivityMetadata" not in rhythm_insights

@@ -13,7 +13,7 @@ def test_activity_summary_and_connector_calendar_import_in_a_fresh_process() -> 
             "-c",
             (
                 "from weatherflow.connectors.calendar import ComposioCalendarAdapter; "
-                "from weatherflow.activity.inference import ActivitySummaryAnalyzer"
+                "from weatherflow.activity.summarization import ActivitySummaryAnalyzer"
             ),
         ],
         cwd=project_root,

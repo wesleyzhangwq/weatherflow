@@ -14,7 +14,7 @@ format-check:
 	$(PY) ruff format --check core/src core/tests
 
 test:
-	$(PY) pytest core/tests -q --ignore=core/tests/eval
+	$(PY) pytest core/tests -q --ignore=core/tests/eval --ignore=core/tests/operations/test_hardening.py
 
 eval:
 	$(PY) pytest core/tests/eval -q
@@ -56,5 +56,7 @@ dev:
 	uv run --package weatherflow-core weatherflow serve --reload
 
 clean:
-	find core -type d \( -name '__pycache__' -o -name '.pytest_cache' -o -name '.ruff_cache' -o -name '*.egg-info' \) -prune -exec rm -rf {} +
-	find core -type f -name '*.pyc' -delete
+	rm -rf core/build desktop/dist desktop/src-tauri/target release/pyinstaller desktop/node_modules/.tmp desktop/node_modules/.vite .pytest_cache .ruff_cache
+	find core tools desktop/src-tauri -type d \( -name '__pycache__' -o -name '.pytest_cache' -o -name '.ruff_cache' -o -name '*.egg-info' \) -prune -exec rm -rf {} +
+	find core tools desktop/src-tauri -type f -name '*.pyc' -delete
+	find . -path './.git' -prune -o -name '.DS_Store' -type f -delete

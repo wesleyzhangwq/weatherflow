@@ -5,11 +5,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from weatherflow.activity.activitywatch import ActivityWatchReadClient
-from weatherflow.activity.inference import (
-    ActivityAnalysisRouteMismatchError,
-    ActivityModelOutputRejectedError,
-    ActivitySummaryAnalyzer,
-)
 from weatherflow.activity.models import (
     ACTIVITY_SUMMARY_PROMPT_VERSION,
     ActivitySourceHealth,
@@ -28,6 +23,11 @@ from weatherflow.activity.semantic import (
     ActivityCategoryRulesChanged,
     ActivityQueryLimitExceeded,
     ActivitySemanticQueryService,
+)
+from weatherflow.activity.summarization import (
+    ActivityModelOutputRejectedError,
+    ActivitySummaryAnalyzer,
+    ActivitySummaryRouteMismatchError,
 )
 from weatherflow.activity.windows import FINAL_GRACE, PROVISIONAL_GRACE, ActivityWindowPlanner
 from weatherflow.extensions import CredentialUnavailableError
@@ -284,7 +284,7 @@ class ActivitySummaryService:
             (*_MODEL_RETRYABLE_ERRORS, httpx.TimeoutException, httpx.NetworkError),
         ):
             return "activity_model_temporarily_unavailable", True, None
-        if isinstance(error, ActivityAnalysisRouteMismatchError):
+        if isinstance(error, ActivitySummaryRouteMismatchError):
             return "activity_model_route_version_mismatch", True, None
         if isinstance(error, CredentialUnavailableError) or _has_cause(
             error,

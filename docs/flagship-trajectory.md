@@ -19,9 +19,8 @@ it never contacts or mutates an external service.
    policy binding and frozen `developer + research` capability surface.
 3. `release-preparer`, `researcher`, and `release-validator` execute as durable
    leaf child Runs through `SharedTurnLoop`.
-4. Scoped local files, an allowlisted validation command, a source-backed
-   research note, a release checklist, and a validation report execute without
-   additional user interaction.
+4. Scoped local file reads/writes, a source-backed research note, a release
+   checklist, and a validation report execute without additional interaction.
 5. The GitHub release call becomes a durable Action. The parent parks in
    `WAITING_APPROVAL`; the fake provider has still received zero mutations.
 6. Approval resumes the same checkpoint, executes the provider once, commits

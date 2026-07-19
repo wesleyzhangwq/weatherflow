@@ -61,7 +61,9 @@ struct DesktopBootstrap<'a> {
 pub struct DaemonSupervisor {
     child: Option<DaemonChild>,
     pub bridge: BridgeConfig,
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     credential_bootstrap: CredentialBrokerConfig,
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     failures: u32,
 }
 
@@ -79,6 +81,7 @@ impl DaemonSupervisor {
         })
     }
 
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     fn replace(&mut self, app: &AppHandle) -> Result<(), String> {
         if let Some(child) = self.child.take() {
             child.kill();
@@ -304,18 +307,6 @@ async fn tokio_sleep(duration: Duration) {
 #[tauri::command]
 pub fn daemon_bridge(state: tauri::State<'_, Mutex<DaemonSupervisor>>) -> BridgeConfig {
     state.lock().expect("daemon state poisoned").bridge.clone()
-}
-
-#[tauri::command]
-pub fn restart_daemon(
-    app: AppHandle,
-    state: tauri::State<'_, Mutex<DaemonSupervisor>>,
-) -> Result<BridgeConfig, String> {
-    let mut supervisor = state
-        .lock()
-        .map_err(|_| "daemon state poisoned".to_string())?;
-    supervisor.replace(&app)?;
-    Ok(supervisor.bridge.clone())
 }
 
 #[cfg(test)]

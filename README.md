@@ -1,172 +1,102 @@
 # WeatherFlow v3
 
-WeatherFlow is a rhythm-aware personal agent OS. v3 is a clean-slate rewrite
-with a local Python harness daemon and a macOS-first Tauri desktop shell.
+WeatherFlow is a local, rhythm-aware personal agent OS for macOS. The desktop
+shell stays small and quiet; a Python daemon owns durable Runs, model turns,
+capabilities, approvals, automation, connectors, memory, and recovery.
 
-P0 established the clean v3 package, health API, CLI, and quality gates. P1a
-added the WAL-mode SQLite foundation and append-only Event Ledger. P1b now adds
-durable Runs, idempotent creation, optimistic concurrency, deterministic
-transitions, and atomic audit events through the sole Run Coordinator. P1c1
-adds immutable Workspace authority boundaries, canonical ToolSpec descriptions,
-and a fail-closed supervised Trust Policy. P1c2a adds durable, versioned Action
-proposals and separate human Approval records with idempotency constraints.
-P1c2b atomically persists side-effect proposals before parking Runs, resumes
-after approve/deny without executing implicitly, and pauses expired approvals.
-P1c3 resolves the smallest authorized tool surface and freezes canonical,
-digest-addressed ToolSpecs per Run; catalog changes affect only new Runs.
-P1d1 adds SHA-256 content-addressed artifacts with immutable manifests,
-provenance events, physical deduplication, and rollback cleanup. The shared turn
-loop begins with P1d2a provider-neutral model/tool protocols and optimistic,
-durable Run checkpoints. P1d2b1 adds the sole shared loop: frozen-schema tool
-visibility, checkpoint-before-dispatch, safe execution, atomic final commits,
-and idempotent approval parking. P1d2b2 resumes approved actions exactly once
-when possible; ambiguous execution failures and recovered EXECUTING actions
-enter NEEDS_REVIEW without automatic retry.
-P1d3 completes the headless core with one reconstructable RuntimeContainer,
-durable Workspaces, local Run/approval/artifact HTTP APIs, machine-readable CLI
-commands, and restart recovery from SQLite checkpoints.
-P2a adds append-only deliberate/activity signals, six evidence-aware human-state
-dimensions, silent RhythmPolicy, and backend-only weather projection. Ambient
-metadata is limited to active/idle duration, switch counts, and coarse category
-totals; raw screen, title, keystroke, clipboard, and audio content are rejected.
-P2b adds optional per-launch bearer authentication (`WF_BRIDGE_TOKEN`) and an
-ordered `WS /v1/events?cursor=` stream. Invalid cursors explicitly require a
-fresh desktop snapshot instead of silently losing state.
-P2c/P2d add the tested Companion, pure-input Capsule, explicit Cockpit, thin
-Tauri window shell, authenticated sidecar supervision, bounded daemon recovery,
-reduced-motion UI, and privacy-safe macOS activity aggregation.
-P3a adds first-party Developer, Research, Calendar, and GitHub release
-capabilities. Workspace-installed Packs and granted scopes define the smallest
-per-Run frozen tool surface; unavailable providers are hidden, local mutations
-remain root-bounded, and external mutations execute only through durable
-approval Actions.
-P3b adds durable leaf Worker delegation through the same shared turn loop.
-Worker child Runs inherit only a filtered subset of the parent's frozen
-capabilities, high-risk approval effects are excluded, concurrency is capped at
-three, and the parent receives only a compact result plus Artifact references.
-P3c binds immutable Rhythm strategy to Runs and validates the complete
-overloaded-release story with deterministic trajectory, integrated desktop,
-and native macOS shell gates.
-P4 completes verified extension packages, supervised MCP client/server
-surfaces, Personal Operations, source-linked local memory, diagnostics,
-retention/reset, recovery, onboarding, and a standalone arm64 macOS release.
-The MiniMax production adapter defaults to OpenAI-compatible `MiniMax-M3` text
-and tool calling while keeping API keys in macOS Keychain. M3 thinking is
-explicitly disabled at the provider boundary so hidden reasoning never has to
-enter durable WeatherFlow history.
-P5 resets the product loop around real daily use: Cockpit explicitly authorizes
-a project directory, Capsule durably acknowledges a Workspace-bound Run before
-MiniMax work starts, the daemon owns background execution and safe recovery,
-and Cockpit exposes Run history, cancellation, results, follow-ups, approvals,
-timeline evidence, and authenticated Artifact downloads. Deliberate rhythm
-check-ins work by default; native activity metadata remains off until the user
-opts in for that Workspace.
+```text
+Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
+```
+
+The current architecture is a clean v3 implementation. WeatherFlow v2 remains
+available at Git tag `weatherflow-v2-final`, but it is not a compatibility
+target.
 
 ## Read first
 
-- `weatherflow-architecture-v3.md`
-- `docs/superpowers/specs/2026-07-12-weatherflow-v3-design.md`
-- `docs/first-party-capabilities.md`
-- `docs/worker-delegation.md`
-- `docs/flagship-trajectory.md`
-- `docs/extensions.md`
-- `docs/mcp.md`
-- `docs/minimax.md`
+- `weatherflow-architecture-v3.md` — authoritative contracts and decision log
+- `docs/superpowers/specs/2026-07-12-weatherflow-v3-design.md` — approved design
+- `docs/release-checklist.md` — reproducible macOS release process
+- `docs/flagship-trajectory.md` — deterministic end-to-end acceptance scenario
+- `docs/first-party-capabilities.md`, `docs/extensions.md`, and `docs/mcp.md` —
+  capability boundaries
 
-WeatherFlow v2 is preserved in Git history and the local tag
-`weatherflow-v2-final`; it is not a compatibility target.
+## Core boundaries
+
+- ActivityWatch is the only raw activity fact source and runs independently.
+  WeatherFlow reads it through the loopback REST API, uses only a short-lived
+  read-only SQLite fallback for bounded diagnostics or historical analysis, and
+  never writes raw activity into its own database.
+- Activity titles, URLs, application names, connector content, and model output
+  are untrusted data. They never become instructions or execution authority.
+- WeatherFlow stores only derived activity task/revision/statistics metadata and
+  reproducible evidence references. Fixed summary windows use `Asia/Shanghai`
+  boundaries and are recovered idempotently after restarts.
+- Human weather and Agent task state remain separate. Rhythm policy changes
+  execution strategy, not the user's goal.
+- Capabilities describe what exists; Trust Policy decides what may execute.
+  External writes, installs, and destructive actions require durable approval.
+- Broker-managed provider tokens never enter WeatherFlow. The Composio project
+  credential is stored in macOS Keychain; connected accounts remain broker-owned.
 
 ## Requirements
 
-- Python 3.12
-- uv
-- Node.js 22+
-- pnpm 10
-- Rust stable
+- macOS 13 or newer on Apple Silicon
+- Python 3.12 and `uv`
+- Node.js 22+, pnpm 10, and Rust stable
+- A locally running ActivityWatch installation for Watch data
 
-## Quick start
+## Develop
 
 ```bash
 make install
 make check
-pnpm dev:signing:setup # once, only if this Mac has no local development signer
-pnpm model:configure:cn  # one time; hidden API-key prompt
+pnpm dev:signing:setup   # once per Mac when no local development signer exists
+pnpm model:configure:cn  # optional MiniMax configuration; prompts without echo
 pnpm dev:app
 ```
 
-`pnpm dev:app` starts Vite, the debug Tauri shell, and the current Python core
-source. It signs the final debug executable with the fixed identifier
-`ai.weatherflow.desktop.dev` before launch, so one Keychain **Always Allow**
-decision survives Rust rebuilds. Python source changes require an app restart;
-Vite renderer changes remain live. The command does not use the last
-PyInstaller release sidecar. International MiniMax accounts should run
-`pnpm model:configure` instead of the `:cn` command.
+`pnpm dev:app` launches the current source tree: Vite, the Tauri shell, and the
+Python daemon. It does not open a stale release bundle or reuse the last
+PyInstaller application. The daemon listens on `127.0.0.1:8765` by default.
 
-On the first launch:
-
-1. Open Cockpit from the small `⌁` control on the Companion.
-2. Choose a real project directory. Capsule will not create a desktop Run until
-   a project has been explicitly authorized.
-3. Choose either **Check-ins only** or **Enable metadata**. The latter records
-   only coarse active/idle time, app-switch counts, and category totals.
-4. Press `⌘⇧Space`, type a goal, and press Return. Capsule closes after durable
-   acceptance while execution continues in the daemon; reopen Cockpit to see
-   progress, evidence, results, follow-ups, and any approval request.
-
-Useful development commands:
+Useful focused commands:
 
 ```bash
-make check
+make test           # Python tests, excluding dedicated eval/security gates
+make eval           # deterministic flagship trajectory
+make security-check
+make desktop-check
+make rust-check
+make clean          # reproducible caches and build output only
 pnpm dev:web
 pnpm model:status
 ```
 
-The release desktop bundles a standalone arm64 Python sidecar. Development may
-still run the daemon directly through the `weatherflow` CLI.
-
-P2 native acceptance also runs successfully with:
+## Release
 
 ```bash
-cd desktop
-pnpm tauri build --debug --no-bundle
+make release-app    # assemble the current local macOS release
+make run-release    # verify and launch the assembled WeatherFlow.app
+make release-check  # full quality, sidecar, checksum, signing, and DMG gates
 ```
 
-Release assembly and local ad-hoc validation are documented in
-`docs/release-checklist.md`.
+The canonical local application is `release/macos/WeatherFlow.app`. Large
+application and DMG products are reproducible and ignored; checksums, SBOM,
+license inventory, release status, and signing blocker records remain tracked.
 
-The daemon listens on `127.0.0.1:8765` by default.
-
-```bash
-curl http://127.0.0.1:8765/health
-```
-
-Expected response:
-
-```json
-{"status":"ok","service":"weatherflow-core","version":"3.0.0a1"}
-```
-
-Create and inspect a durable local Run:
-
-```bash
-weatherflow --data-dir ~/.local/share/weatherflow run "Explain this repository"
-weatherflow --data-dir ~/.local/share/weatherflow status <run_id>
-weatherflow --data-dir ~/.local/share/weatherflow timeline <run_id>
-weatherflow --data-dir ~/.local/share/weatherflow approve <approval_id>
-weatherflow --data-dir ~/.local/share/weatherflow mcp-server
-weatherflow --data-dir ~/.local/share/weatherflow configure-minimax
-weatherflow --data-dir ~/.local/share/weatherflow model-status
-```
-
-Equivalent HTTP entrypoints begin at `POST /v1/runs`, `GET /v1/runs/{run_id}`,
-`GET /v1/runs/{run_id}/timeline`, and `GET /v1/approvals`.
-
-## Current repository
+## Repository map
 
 ```text
-core/                    Python daemon package and tests
-docs/superpowers/        Approved design and implementation plans
-weatherflow-architecture-v3.md
+core/src/weatherflow/   Python business core and restart boundary
+core/tests/             unit, contract, integration, security, and eval gates
+desktop/src/            Companion, Capsule, Cockpit, Watch, and typed bridge
+desktop/src-tauri/      thin native shell and sidecar supervisor
+extensions/             verified extension packages
+tools/dev/              current-source development launch tooling
+tools/release/          reproducible macOS release tooling
+docs/                   current operating and capability documentation
 ```
 
-Do not restore or copy v2 runtime modules into the v3 package.
+Run `make check` before committing. Do not restore v2 runtime modules or add a
+second workflow, policy, activity collection, or model loop.

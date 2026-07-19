@@ -70,6 +70,7 @@ from weatherflow.api.schemas import (
     VersionedRequest,
     WatchCurrentView,
     WatchOAuthFeedView,
+    WatchProfileAssertionView,
     WorkspaceCreateRequest,
 )
 from weatherflow.artifacts import ArtifactManifest
@@ -124,7 +125,7 @@ from weatherflow.operations import (
     SecurityScan,
     SecurityScanner,
 )
-from weatherflow.rhythm import CurrentRhythm, RhythmInsights, RhythmInsightsService
+from weatherflow.rhythm import CurrentRhythm
 from weatherflow.runs import InvalidTransitionError, Run, RunIdempotencyConflict, RunStatus
 from weatherflow.runtime import (
     RunControl,
@@ -417,6 +418,26 @@ def create_app(
         workspace = await selected_workspace(service, workspace_id)
         feed = await service.connector_feed.get(workspace.id, limit=limit)
         return WatchOAuthFeedView.model_validate(feed.model_dump(mode="json"))
+
+    @app.get("/v1/watch/profile", response_model=list[WatchProfileAssertionView])
+    async def watch_profile(
+        workspace_id: str | None = None,
+        limit: int = Query(default=8, ge=1, le=50),
+    ) -> list[WatchProfileAssertionView]:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        assertions = await service.memory.list_active_assertions(workspace.id, limit=limit)
+        return [
+            WatchProfileAssertionView(
+                id=assertion.id,
+                claim=assertion.claim,
+                confidence=assertion.confidence,
+                origin=assertion.origin,
+                evidence_count=len(assertion.evidence_event_ids),
+                updated_at=assertion.updated_at,
+            )
+            for assertion in assertions
+        ]
 
     @app.get("/v1/watch/dashboard", response_model=ActivityWatchDashboardView)
     async def watch_dashboard(
@@ -1270,11 +1291,6 @@ def create_app(
     async def ingest_rhythm_signal(
         signal: RhythmSignalRequest, workspace_id: str | None = None
     ) -> CurrentRhythm:
-        if signal.kind == "activity_metadata":
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "activity_metadata_ingest_forbidden"},
-            )
         service = await runtime()
         workspace = await selected_workspace(service, workspace_id)
         return await service.rhythm.ingest(workspace.id, signal)
@@ -1284,17 +1300,6 @@ def create_app(
         service = await runtime()
         workspace = await selected_workspace(service, workspace_id)
         return await service.rhythm.current(workspace.id)
-
-    @app.get("/v1/rhythm/insights", response_model=RhythmInsights)
-    async def rhythm_insights(workspace_id: str | None = None) -> RhythmInsights:
-        service = await runtime()
-        workspace = await selected_workspace(service, workspace_id)
-        insights = RhythmInsightsService(
-            rhythm=service.rhythm,
-            ledger=service.ledger,
-            profiles=service.memory.assertions,
-        )
-        return await insights.current(workspace.id)
 
     @app.get("/v1/desktop/snapshot", response_model=DesktopSnapshot)
     async def desktop_snapshot(workspace_id: str | None = None) -> DesktopSnapshot:

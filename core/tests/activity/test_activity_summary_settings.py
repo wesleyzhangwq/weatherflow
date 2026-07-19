@@ -7,7 +7,6 @@ import pytest
 from weatherflow.activity import (
     ACTIVITY_SUMMARY_PROMPT_VERSION,
     ACTIVITY_SUMMARY_SYSTEM_PROMPT,
-    ActivityAnalysisRoute,
     ActivityCoverageStatus,
     ActivityModelOutputRejectedError,
     ActivityRepository,
@@ -15,6 +14,7 @@ from weatherflow.activity import (
     ActivitySourceState,
     ActivityStatistics,
     ActivitySummaryAnalyzer,
+    ActivitySummaryRoute,
     ActivitySummaryService,
     ActivitySummarySettings,
     ActivitySummarySettingsVersionConflict,
@@ -145,7 +145,7 @@ async def test_analyzer_uses_fixed_chinese_prompt_and_all_three_connector_source
     adapter = Adapter()
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=adapter,
             provider="minimax",
             model="MiniMax-M3",
@@ -201,7 +201,7 @@ async def test_english_only_model_output_is_rejected_without_a_local_revision() 
             return FinalTurn(content='{"summary":"One hour of active work was observed."}')
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=Adapter(),
             provider="minimax",
             model="MiniMax-M3",
@@ -232,7 +232,7 @@ async def test_unavailable_configured_model_propagates_for_durable_retry() -> No
             raise MiniMaxAuthenticationError("credential unavailable")
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=UnavailableAdapter(),
             provider="minimax",
             model="MiniMax-M3",
@@ -292,7 +292,7 @@ async def test_local_fallback_counts_calendar_event_overlapping_window_start() -
     )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=None,
             provider="minimax",
             model="MiniMax-M3",
@@ -355,7 +355,7 @@ async def test_summary_revision_persists_connector_evidence_refs(tmp_path: Path)
     )
 
     async def resolve_route(_task):
-        return ActivityAnalysisRoute(
+        return ActivitySummaryRoute(
             adapter=None,
             provider="local",
             model="deterministic-activity-v1",

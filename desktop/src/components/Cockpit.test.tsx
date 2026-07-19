@@ -75,12 +75,6 @@ it("opens the workspace-scoped Watch view as the unified state surface", async (
       },
       timeline: [],
     }),
-    watchStatistics: vi.fn().mockResolvedValue({
-      window_start: "2026-07-15T16:00:00Z", window_end: "2026-07-16T02:00:00Z",
-      active_seconds: 0, afk_seconds: 0, app_switch_count: 0, category_switch_count: 0,
-      app_seconds: {}, category_seconds: {}, category_rule_version: "aw-categories-v1",
-    }),
-    watchTimeline: vi.fn().mockResolvedValue([]),
     watchSummaries: vi.fn().mockResolvedValue([]),
     watchTasks: vi.fn().mockResolvedValue([]),
     watchTrends: vi.fn().mockResolvedValue([]),

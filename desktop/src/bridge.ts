@@ -1,10 +1,8 @@
 import type {
-  ActivityStatistics,
   ActivitySummaryRecord,
   ActivitySummarySettings,
   ActivitySummarySettingsUpdate,
   ActivitySummaryTask,
-  ActivityTimelineEntry,
   ActivityTrendPoint,
   ActivityWatchDashboard,
   ActivityWatchSourceStatus,
@@ -29,7 +27,6 @@ import type {
   ProviderModelCatalog,
   ResetPreview,
   ResetResult,
-  RhythmInsights,
   Run,
   Session,
   SkillCatalogEntry,
@@ -184,7 +181,6 @@ export class WeatherFlowClient {
   approvals(): Promise<Approval[]> { return this.request("/v1/approvals"); }
   timeline(runId: string): Promise<LedgerEvent[]> { return this.request(`/v1/runs/${runId}/timeline`); }
   artifacts(runId: string): Promise<Artifact[]> { return this.request(`/v1/runs/${runId}/artifacts`); }
-  cancel(runId: string): Promise<Run> { return this.request(`/v1/runs/${runId}/cancel`, { method: "POST" }); }
   createRun(userIntent: string, clientRequestId: string, workspaceId?: string | null, contextRunId?: string | null, sessionId?: string | null, toolMode: ToolMode = "ask"): Promise<Run> {
     return this.request("/v1/runs", {
       method: "POST",
@@ -197,9 +193,6 @@ export class WeatherFlowClient {
       body: JSON.stringify({ decision, expected_version: version, resume: true, ...(workspaceId ? { workspace_id: workspaceId } : {}) }),
     });
   }
-  ingestSignal(signal: Record<string, unknown>, workspaceId?: string | null): Promise<unknown> {
-    return this.request(this.scoped("/v1/rhythm/signals", workspaceId), { method: "POST", body: JSON.stringify(signal) });
-  }
   watchSourceStatus(): Promise<ActivityWatchSourceStatus> {
     return this.request("/v1/watch/source-status");
   }
@@ -210,10 +203,6 @@ export class WeatherFlowClient {
     const query = new URLSearchParams({ workspace_id: workspaceId, limit: String(limit) });
     return this.request(`/v1/watch/oauth-feed?${query}`);
   }
-  watchStatistics(start: Date, end: Date): Promise<ActivityStatistics> {
-    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
-    return this.request(`/v1/watch/statistics?${query}`);
-  }
   watchDashboard(start: Date, end: Date, limit = 500): Promise<ActivityWatchDashboard> {
     const query = new URLSearchParams({
       start: start.toISOString(),
@@ -221,14 +210,6 @@ export class WeatherFlowClient {
       limit: String(limit),
     });
     return this.request(`/v1/watch/dashboard?${query}`);
-  }
-  watchTimeline(start: Date, end: Date, limit = 500): Promise<ActivityTimelineEntry[]> {
-    const query = new URLSearchParams({
-      start: start.toISOString(),
-      end: end.toISOString(),
-      limit: String(limit),
-    });
-    return this.request(`/v1/watch/timeline?${query}`);
   }
   watchSummaries(limit = 20): Promise<ActivitySummaryRecord[]> {
     const query = new URLSearchParams({ limit: String(limit) });
@@ -267,7 +248,6 @@ export class WeatherFlowClient {
       body: JSON.stringify(settings),
     });
   }
-  rhythmInsights(workspaceId?: string | null): Promise<RhythmInsights> { return this.request(this.scoped("/v1/rhythm/insights", workspaceId)); }
   status(workspaceId?: string | null): Promise<SystemStatus> { return this.request(this.scoped("/v1/system/status", workspaceId)); }
   async modelProviders(): Promise<ModelProviderPreset[]> { return (await this.request<{ providers: ModelProviderPreset[] }>("/v1/models/providers")).providers; }
   providerModels(provider: string): Promise<ProviderModelCatalog> {

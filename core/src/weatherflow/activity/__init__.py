@@ -10,22 +10,10 @@ from weatherflow.activity.categories import (
     category_rule_version,
     normalize_category_rules,
 )
-from weatherflow.activity.inference import (
-    ActivityAnalysisResult,
-    ActivityAnalysisRoute,
-    ActivityAnalysisRouteMismatchError,
-    ActivityAnalysisRouteResolver,
-    ActivityModelOutputRejectedError,
-    ActivityModelResult,
-    ActivitySummaryAnalyzer,
-)
 from weatherflow.activity.models import (
     ACTIVITY_SUMMARY_PROMPT_VERSION,
     ACTIVITY_SUMMARY_SYSTEM_PROMPT,
     ACTIVITY_TIMEZONE,
-    BOUNDARY_POLICY_VERSION,
-    PROMPT_VERSION,
-    STATISTICS_VERSION,
     ActivityConnectorCoverage,
     ActivityConnectorEvidenceRef,
     ActivityCoverageStatus,
@@ -58,7 +46,6 @@ from weatherflow.activity.models import (
     SummaryFinality,
     SummaryTaskStatus,
     SummaryTaskType,
-    activity_summary_prompt_version,
 )
 from weatherflow.activity.recovery import (
     ActivityRecoveryCoordinator,
@@ -77,6 +64,15 @@ from weatherflow.activity.semantic import (
     ActivityWindowEvidence,
 )
 from weatherflow.activity.service import ActivityService, ActivitySummaryService
+from weatherflow.activity.summarization import (
+    ActivityModelOutputRejectedError,
+    ActivityModelResult,
+    ActivitySummaryAnalyzer,
+    ActivitySummaryResult,
+    ActivitySummaryRoute,
+    ActivitySummaryRouteMismatchError,
+    ActivitySummaryRouteResolver,
+)
 from weatherflow.activity.windows import (
     BIWEEKLY_ANCHOR,
     FINAL_GRACE,
@@ -90,17 +86,14 @@ __all__ = [
     "ACTIVITY_SUMMARY_PROMPT_VERSION",
     "ACTIVITY_SUMMARY_SYSTEM_PROMPT",
     "BIWEEKLY_ANCHOR",
-    "BOUNDARY_POLICY_VERSION",
     "DEFAULT_ACTIVITYWATCH_API",
     "DEFAULT_ACTIVITYWATCH_DATABASE",
     "FINAL_GRACE",
-    "PROMPT_VERSION",
     "PROVISIONAL_GRACE",
-    "STATISTICS_VERSION",
-    "ActivityAnalysisResult",
-    "ActivityAnalysisRoute",
-    "ActivityAnalysisRouteMismatchError",
-    "ActivityAnalysisRouteResolver",
+    "ActivitySummaryResult",
+    "ActivitySummaryRoute",
+    "ActivitySummaryRouteMismatchError",
+    "ActivitySummaryRouteResolver",
     "ActivityCategoryRulesChanged",
     "ActivityConnectorCoverage",
     "ActivityConnectorEvidenceRef",
@@ -155,7 +148,6 @@ __all__ = [
     "SummaryTaskStatus",
     "SummaryTaskType",
     "StaleActivitySummaryAttempt",
-    "activity_summary_prompt_version",
     "category_rule_version",
     "normalize_category_rules",
 ]

@@ -32,16 +32,8 @@ class HealthResponse(BaseModel):
     version: str
 
 
-class ForbiddenActivityMetadataRequest(BaseModel):
-    """API-only tombstone for the removed WeatherFlow watcher ingest path."""
-
-    model_config = ConfigDict(frozen=True, extra="allow")
-
-    kind: Literal["activity_metadata"]
-
-
 RhythmSignalRequest = Annotated[
-    CheckInSignal | CorrectionSignal | TaskBehaviorSignal | ForbiddenActivityMetadataRequest,
+    CheckInSignal | CorrectionSignal | TaskBehaviorSignal,
     Field(discriminator="kind"),
 ]
 
@@ -360,6 +352,17 @@ class WatchOAuthFeedView(BaseModel):
     items: tuple[WatchOAuthFeedItemView, ...] = Field(max_length=30)
 
 
+class WatchProfileAssertionView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    claim: str
+    confidence: float = Field(ge=0, le=1)
+    origin: Literal["user", "agent", "derived"]
+    evidence_count: int = Field(ge=1)
+    updated_at: datetime
+
+
 class ActivityStatisticsView(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -486,20 +489,6 @@ class ActivityTrendPointView(BaseModel):
     afk_seconds: float = Field(ge=0)
     app_switch_count: int = Field(ge=0)
     dominant_category: str | None
-
-
-class ActivityEvidenceView(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    bucket_id: str
-    event_id: str
-    timestamp: datetime
-    duration_seconds: float = Field(ge=0)
-    source: str
-    app_name: str | None
-    window_title: str | None
-    url: str | None
-    afk_state: Literal["active", "afk", "unknown"]
 
 
 class SkillMutationRequest(BaseModel):

@@ -8,12 +8,13 @@ from pydantic import BaseModel, ConfigDict
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.capabilities.builtin import GitHubRelease, ResearchSource
 from weatherflow.config import Settings
-from weatherflow.eval.models import TrajectoryReport
-from weatherflow.eval.trajectory import FlagshipTrajectoryEvaluator
 from weatherflow.rhythm import CheckInSignal
 from weatherflow.runs import ToolMode
 from weatherflow.runtime import DelegationTurn, FinalTurn, ToolCallTurn
 from weatherflow.workspaces import Workspace
+
+from .models import TrajectoryReport
+from .trajectory import FlagshipTrajectoryEvaluator
 
 
 class FlagshipFixtureResult(BaseModel):
