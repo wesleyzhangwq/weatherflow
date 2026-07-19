@@ -98,7 +98,9 @@ async def test_restart_parks_recovered_run_when_model_is_not_configured(
         await rebuilt.stop_background()
 
 
-async def test_missing_provider_is_recorded_for_new_run(tmp_path: Path) -> None:
+async def test_missing_calendar_connection_hides_connector_backed_personal_tools(
+    tmp_path: Path,
+) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
     workspace = Workspace.new(
         name="Personal",
@@ -119,9 +121,16 @@ async def test_missing_provider_is_recorded_for_new_run(tmp_path: Path) -> None:
 
     events = await container.ledger.list_correlation(run.id, limit=1000)
     degraded = [event for event in events if event.type == "provider.degraded"]
-    assert len(degraded) == 1
-    assert degraded[0].payload["tool_ids"] == [
-        "calendar.list_events",
-        "personal.prepare_meeting",
-        "personal.propose_schedule",
-    ]
+    snapshot = await container.snapshots.get_by_run_id(run.id)
+
+    assert degraded == []
+    assert snapshot is not None
+    assert not (
+        {
+            "calendar.list_events",
+            "calendar.create_event",
+            "personal.prepare_meeting",
+            "personal.propose_schedule",
+        }
+        & {tool.tool_id for tool in snapshot.tools}
+    )

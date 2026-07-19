@@ -56,6 +56,8 @@ class SecurityScanner:
                 ("provider", "model", "base_url", "credential_ref"),
             ),
             "run_model_routes": ("run_id", ("base_url", "credential_ref")),
+            "activity_summary_revisions": ("id", ("config",)),
+            "activity_summary_settings": ("singleton_id", ("config",)),
         }
         findings: list[SecurityFinding] = []
         artifact_rows = []

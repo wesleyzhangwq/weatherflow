@@ -1,5 +1,8 @@
 {
   "version": "3.0.0-alpha.1",
   "architecture": "arm64",
-  "signing": "adhoc_unsigned_credentials_missing"
+  "signing": "adhoc_unsigned_credentials_missing",
+  "source_digest": "4deba7315bc4d849b91ebd775ccdf83f24a711a868385b642476af039d9e558c",
+  "gui_sha256": "b50f63197d2d23a1ca3d317b3c54f738441310e2038d78233e2c82258a794cbc",
+  "sidecar_sha256": "66f148b58f720ace1848138a4f49e7ccbc732408cc19a90e50d22656a503a0d0"
 }

@@ -25,7 +25,11 @@ def package_install_tool_spec() -> ToolSpec:
         },
         output_schema={"type": "object"},
         effect=ToolEffect.INSTALL,
-        required_scopes=frozenset({"extensions:install"}),
+        # Installation mutates only this already-authorized Workspace and never
+        # grants the installed package's requested scopes. Reuse the explicit
+        # workspace-write grant; ToolEffect.INSTALL still requires an approved
+        # Action before the executor can run.
+        required_scopes=frozenset({"workspace:write"}),
         source="builtin.extensions",
         source_version="1",
     )

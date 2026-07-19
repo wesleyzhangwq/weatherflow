@@ -23,6 +23,7 @@ class DiagnosticExport(BaseModel):
 
 class ResetCategory(StrEnum):
     BEHAVIOR = "behavior"
+    ACTIVITY = "activity"
     MEMORY = "memory"
     PROFILE = "profile"
     ARTIFACTS = "artifacts"

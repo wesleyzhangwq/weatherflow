@@ -15,7 +15,9 @@ class Database:
     async def connect(self) -> AsyncIterator[aiosqlite.Connection]:
         connection = await aiosqlite.connect(self.path)
         connection.row_factory = aiosqlite.Row
+        await connection.execute("PRAGMA busy_timeout = 5000")
         await connection.execute("PRAGMA foreign_keys = ON")
+        await connection.execute("PRAGMA secure_delete = ON")
         try:
             yield connection
         finally:
@@ -60,3 +62,42 @@ class Database:
                     f"VALUES ({migration.version});\n"
                     "COMMIT;"
                 )
+            compaction = await (
+                await connection.execute(
+                    """
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'privacy_compaction_requests'
+                    """
+                )
+            ).fetchone()
+            if compaction is not None:
+                requested = await (
+                    await connection.execute(
+                        "SELECT 1 FROM privacy_compaction_requests WHERE id = 1"
+                    )
+                ).fetchone()
+                if requested is not None:
+                    await self._compact_in(connection)
+                    await connection.execute("DELETE FROM privacy_compaction_requests WHERE id = 1")
+                    await connection.commit()
+                    await self._checkpoint_in(connection)
+
+    async def secure_compact(self) -> None:
+        """Remove deleted sensitive content from free pages and the WAL."""
+
+        async with self.connect() as connection:
+            await self._compact_in(connection)
+
+    @staticmethod
+    async def _checkpoint_in(connection: aiosqlite.Connection) -> None:
+        cursor = await connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        await cursor.fetchone()
+        await cursor.close()
+
+    @classmethod
+    async def _compact_in(cls, connection: aiosqlite.Connection) -> None:
+        await connection.commit()
+        await cls._checkpoint_in(connection)
+        await connection.execute("VACUUM")
+        await cls._checkpoint_in(connection)

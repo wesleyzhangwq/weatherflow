@@ -12,7 +12,6 @@ import type { DesktopSnapshot, RunStatus, WeatherScene } from "../types";
 interface CompanionProps {
   snapshot: DesktopSnapshot | null;
   offline?: boolean;
-  sensorAvailable?: boolean;
   onStartDrag: () => void | Promise<void>;
   onOpenCapsule: () => void;
   onOpenCockpit: () => void;
@@ -46,7 +45,7 @@ function runState(status?: RunStatus): string {
   return "attention";
 }
 
-export function Companion({ snapshot, offline = false, sensorAvailable = true, onStartDrag, onOpenCapsule, onOpenCockpit }: CompanionProps) {
+export function Companion({ snapshot, offline = false, onStartDrag, onOpenCapsule, onOpenCockpit }: CompanionProps) {
   const weather: WeatherScene = snapshot?.rhythm.weather.scene ?? "mixed";
   const state = offline ? "offline" : runState(snapshot?.latest_run?.status);
   const WeatherIcon = weatherIcons[weather];
@@ -102,9 +101,6 @@ export function Companion({ snapshot, offline = false, sensorAvailable = true, o
           aria-label={state === "approval" ? "等待批准" : "查看任务状态"}
           onClick={onOpenCockpit}
         />
-      )}
-      {snapshot?.metadata_sensor_enabled && !sensorAvailable && (
-        <span className="sensor-unavailable" role="status" aria-label="行为信号暂不可用" />
       )}
     </main>
   );

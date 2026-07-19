@@ -44,7 +44,7 @@ def main() -> int:
             stderr=subprocess.PIPE,
         )
         try:
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + 90
             while time.monotonic() < deadline:
                 try:
                     request = urllib.request.Request(
@@ -54,15 +54,55 @@ def main() -> int:
                     with urllib.request.urlopen(request, timeout=1) as response:
                         payload = json.load(response)
                     if payload["status"] == "ok":
-                        print(json.dumps(payload, sort_keys=True))
+                        source_request = urllib.request.Request(
+                            f"http://127.0.0.1:{port}/v1/watch/source-status",
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
+                        with urllib.request.urlopen(
+                            source_request,
+                            timeout=60,
+                        ) as response:
+                            source = json.load(response)
+                        required = {
+                            "reachable",
+                            "server_version",
+                            "data_start",
+                            "data_end",
+                            "checked_at",
+                            "last_reconciled_at",
+                            "error_code",
+                        }
+                        if not isinstance(source, dict) or not required.issubset(
+                            source
+                        ):
+                            raise RuntimeError(
+                                "sidecar Watch source-status contract is invalid"
+                            )
+                        print(
+                            json.dumps(
+                                {
+                                    **payload,
+                                    "watch_source_status": "ok",
+                                    "activitywatch_reachable": source["reachable"],
+                                },
+                                sort_keys=True,
+                            )
+                        )
                         return 0
                 except Exception:
                     if process.poll() is not None:
                         break
                     time.sleep(0.2)
-            stdout, stderr = process.communicate(timeout=2)
+            if process.poll() is None:
+                process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate(timeout=5)
             raise SystemExit(
                 "sidecar failed health smoke\n"
+                f"returncode={process.returncode}\n"
                 f"stdout={stdout.decode(errors='replace')[-2000:]}\n"
                 f"stderr={stderr.decode(errors='replace')[-2000:]}"
             )

@@ -1,9 +1,8 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from weatherflow.activity import ActivityInterval, ActivityPreferences
 from weatherflow.automations import ScheduleSpec
 from weatherflow.capabilities import ToolEffect
 from weatherflow.models import (
@@ -13,7 +12,12 @@ from weatherflow.models import (
     ProviderPreset,
     normalize_model_base_url,
 )
-from weatherflow.rhythm import CurrentRhythm
+from weatherflow.rhythm import (
+    CheckInSignal,
+    CorrectionSignal,
+    CurrentRhythm,
+    TaskBehaviorSignal,
+)
 from weatherflow.runs import Run, ToolMode
 from weatherflow.runtime import RunControlKind
 from weatherflow.trust import Approval
@@ -26,6 +30,20 @@ class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     service: Literal["weatherflow-core"] = "weatherflow-core"
     version: str
+
+
+class ForbiddenActivityMetadataRequest(BaseModel):
+    """API-only tombstone for the removed WeatherFlow watcher ingest path."""
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    kind: Literal["activity_metadata"]
+
+
+RhythmSignalRequest = Annotated[
+    CheckInSignal | CorrectionSignal | TaskBehaviorSignal | ForbiddenActivityMetadataRequest,
+    Field(discriminator="kind"),
+]
 
 
 class RunCreateRequest(BaseModel):
@@ -90,7 +108,6 @@ class DesktopSnapshot(BaseModel):
     rhythm: CurrentRhythm
     latest_run: Run | None = None
     workspace: Workspace
-    metadata_sensor_enabled: bool = False
 
 
 class ApprovalView(Approval):
@@ -106,10 +123,17 @@ class ResetConfirmRequest(BaseModel):
 
 
 class OnboardingCompleteRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     confirm_local_ownership: bool
-    enable_metadata_sensor: bool = False
+
+
+class OnboardingView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    workspace_id: str
+    completed: bool
+    version: int = Field(ge=0)
 
 
 class SystemStatus(BaseModel):
@@ -162,7 +186,7 @@ class ConnectorSettingsRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     auto_fetch_enabled: bool
-    interval_minutes: int = Field(ge=15, le=1440)
+    interval_minutes: Literal[1440]
 
 
 class ConnectorDisconnectRequest(BaseModel):
@@ -196,37 +220,286 @@ class VersionedRequest(BaseModel):
     confirm: bool = True
 
 
-class ActivityPreferencesUpdateRequest(BaseModel):
+class ActivityEvidenceRefView(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    activitywatch_server_id: str | None = None
+    bucket_id: str
+    event_id: str
+    event_timestamp: datetime | None = None
+    event_duration: float | None = Field(default=None, ge=0)
+    event_digest: str | None = None
+    fields_used: tuple[str, ...] = ()
+
+
+class ActivityConnectorEvidenceRefView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    connector: Literal["github", "gmail", "google_calendar"]
+    source_id_digest: str
+    occurred_at: datetime
+    ends_at: datetime | None
+    item_digest: str
+    snapshot_fetched_at: datetime
+
+
+class ActivityConnectorCoverageView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    connector: Literal["github", "gmail", "google_calendar"]
+    health: Literal[
+        "healthy",
+        "degraded",
+        "requires_reconnect",
+        "disabled",
+        "unavailable",
+        "stale",
+    ]
+    connected: bool
+    enabled: bool
+    stale: bool
+    snapshot_fetched_at: datetime | None
+    window_item_count: int = Field(ge=0, le=30)
+    snapshot_watermark: str = Field(min_length=64, max_length=64)
+
+
+class ActivityWatchSourceStatusView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reachable: bool
+    server_version: str | None
+    data_start: datetime | None
+    data_end: datetime | None
+    checked_at: datetime
+    last_reconciled_at: datetime | None
+    error_code: str | None
+
+
+class ActivityObservedFactView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    observed_at: datetime
+    started_at: datetime
+    duration_seconds: float = Field(ge=0)
+    app_name: str | None
+    window_title: str | None
+    url: str | None
+    afk_state: Literal["active", "afk", "unknown"]
+    evidence_refs: tuple[ActivityEvidenceRefView, ...]
+
+
+class WatchCurrentView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    observed: ActivityObservedFactView | None
+    afk_state: Literal["active", "afk", "unknown"]
+    observed_at: datetime
+    source_health: Literal["available", "degraded"]
+
+
+WatchOAuthConnector = Literal["github", "gmail", "google_calendar"]
+WatchOAuthSourceHealth = Literal[
+    "healthy",
+    "degraded",
+    "requires_reconnect",
+    "disabled",
+    "unavailable",
+    "stale",
+]
+WatchOAuthRefreshCadence = Literal["daily"]
+WatchOAuthFetchStrategy = Literal[
+    "github_unread_notifications_and_recent_activity",
+    "gmail_unread_metadata_30d",
+    "google_calendar_all_calendars_past_7d_future_14d",
+]
+WatchOAuthNormalizationHealth = Literal["unknown", "healthy", "partial", "failed"]
+
+
+class WatchOAuthFeedItemView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    connector: WatchOAuthConnector
+    source_id: str = Field(min_length=1, max_length=500)
+    occurred_at: datetime
+    ends_at: datetime | None = None
+    title: str = Field(min_length=1, max_length=500)
+    summary: str = Field(max_length=2_000)
+    url: str | None = Field(default=None, max_length=2_000)
+    untrusted: Literal[True] = True
+
+
+class WatchOAuthFeedSourceView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    connector: WatchOAuthConnector
+    label: str
+    health: WatchOAuthSourceHealth
+    connected: bool
+    enabled: bool
+    stale: bool
+    item_count: int = Field(ge=0, le=10)
+    last_sync_at: datetime | None = None
+    next_sync_at: datetime | None = None
+    snapshot_fetched_at: datetime | None = None
+    refresh_cadence: WatchOAuthRefreshCadence
+    fetch_strategy: WatchOAuthFetchStrategy
+    coverage_past_days: int = Field(ge=0, le=365)
+    coverage_future_days: int = Field(ge=0, le=365)
+    raw_item_count: int | None = Field(default=None, ge=0)
+    normalized_item_count: int | None = Field(default=None, ge=0, le=100)
+    normalization_health: WatchOAuthNormalizationHealth
+    last_error_code: str | None = Field(default=None, max_length=100)
+
+
+class WatchOAuthFeedView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_id: str
+    generated_at: datetime
+    sources: tuple[WatchOAuthFeedSourceView, ...] = Field(max_length=3)
+    items: tuple[WatchOAuthFeedItemView, ...] = Field(max_length=30)
+
+
+class ActivityStatisticsView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    window_start: datetime
+    window_end: datetime
+    active_seconds: float = Field(ge=0)
+    afk_seconds: float = Field(ge=0)
+    browser_seconds: float = Field(default=0, ge=0)
+    app_switch_count: int = Field(ge=0)
+    category_switch_count: int = Field(ge=0)
+    app_seconds: dict[str, float]
+    category_seconds: dict[str, float]
+    category_rule_version: str
+    observed_seconds: float = Field(default=0, ge=0)
+    unobserved_seconds: float = Field(default=0, ge=0)
+    window_observed_seconds: float = Field(default=0, ge=0)
+    afk_observed_seconds: float = Field(default=0, ge=0)
+    web_observed_seconds: float = Field(default=0, ge=0)
+    coverage_ratio: float = Field(default=0, ge=0, le=1)
+    coverage_status: Literal["none", "partial", "complete"] = "none"
+    source_bucket_ids: tuple[str, ...] = ()
+
+
+class ActivityTimelineEntryView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    started_at: datetime
+    ended_at: datetime
+    duration_seconds: float = Field(ge=0)
+    app_name: str | None
+    category: str | None
+    afk_state: Literal["active", "afk", "unknown"]
+    window_title: str | None = None
+    url: str | None = None
+    evidence_refs: tuple[ActivityEvidenceRefView, ...] = ()
+
+
+class ActivityWatchDashboardView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    statistics: ActivityStatisticsView
+    timeline: tuple[ActivityTimelineEntryView, ...]
+
+
+class ActivitySummaryView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    task_id: str
+    kind: Literal["stage_6h", "daily_24h", "weekly", "biweekly", "monthly"]
+    finality: Literal["provisional", "final"]
+    timezone: Literal["Asia/Shanghai"]
+    window_start: datetime
+    window_end: datetime
+    statistics: ActivityStatisticsView
+    narrative: str
+    evidence_refs: tuple[ActivityEvidenceRefView, ...]
+    connector_evidence_refs: tuple[ActivityConnectorEvidenceRefView, ...] = ()
+    connector_coverage: tuple[ActivityConnectorCoverageView, ...] = ()
+    category_rule_version: str
+    rules_stale: bool
+    provider: str | None = None
+    model_version: str | None = None
+    requested_provider: str | None = None
+    requested_model: str | None = None
+    fallback_reason: str | None = Field(default=None, max_length=120)
+    summary_settings_version: int = Field(default=0, ge=0)
+    prompt_version: str
+    completed_at: datetime
+    attempt_count: int | None = Field(default=None, ge=0)
+    source_watermark: str | None = None
+    evidence_count: int | None = Field(default=None, ge=0)
+
+
+class ActivitySummaryTaskView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    kind: Literal["stage_6h", "daily_24h", "weekly", "biweekly", "monthly"]
+    window_start: datetime
+    window_end: datetime
+    status: Literal["pending", "running", "completed", "failed", "needs_retry"]
+    attempt_count: int = Field(ge=0)
+    completed_at: datetime | None
+    next_attempt_at: datetime | None
+    error_code: str | None
+    finality: Literal["provisional", "final"] | None = None
+    regeneration_reason: str | None = None
+
+
+class ActivityRegenerationRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    reason: str = Field(default="user_requested", min_length=1, max_length=200)
+
+
+class ActivitySummarySettingsView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_workspace_id: str
+    provider: str | None
+    model: str | None
+    model_configuration_version: int | None = Field(default=None, ge=0)
+    prompt_version: str
+    version: int = Field(ge=0)
+    updated_at: datetime
+
+
+class ActivitySummarySettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    model_workspace_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=200)
     expected_version: int = Field(ge=0)
-    collection_enabled: bool
-    macos_enabled: bool
-    browser_enabled: bool
-    incognito_enabled: bool
-    remote_inference_enabled: bool
-    model_workspace_id: str | None = Field(default=None, min_length=1)
-    retention_days: Literal[30, 90, 365] | None = None
 
 
-class ActivityDeleteRequest(BaseModel):
+class ActivityTrendPointView(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    confirm: bool = False
+    window_start: datetime
+    window_end: datetime
+    active_seconds: float = Field(ge=0)
+    afk_seconds: float = Field(ge=0)
+    app_switch_count: int = Field(ge=0)
+    dominant_category: str | None
 
 
-class ActivityDeleteResult(BaseModel):
+class ActivityEvidenceView(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    deleted: int = Field(ge=0)
-
-
-class ActivityExportResponse(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    exported_at: datetime
-    preferences: ActivityPreferences
-    events: tuple[ActivityInterval, ...]
+    bucket_id: str
+    event_id: str
+    timestamp: datetime
+    duration_seconds: float = Field(ge=0)
+    source: str
+    app_name: str | None
+    window_title: str | None
+    url: str | None
+    afk_state: Literal["active", "afk", "unknown"]
 
 
 class SkillMutationRequest(BaseModel):

@@ -1,7 +1,75 @@
-import type { ActivityExport, ActivityHeartbeat, ActivityInferenceJob, ActivityInterval, ActivityPreferences, ActivitySummary, Approval, Artifact, Automation, AutomationRunLink, AutomationSchedule, ConnectionAttempt, ConnectHandoff, ConnectorKind, ConnectorSnapshot, ConnectorStatus, DesktopSnapshot, DiagnosticExport, InstallApprovalRequest, LedgerEvent, MCPPreset, ModelConfigurationResponse, ModelConfigureInput, ModelProviderPreset, ProviderModelCatalog, ResetPreview, ResetResult, RhythmInsights, Run, Session, SkillCatalogEntry, SystemStatus, ToolMode, Workspace } from "./types";
+import type {
+  ActivityStatistics,
+  ActivitySummaryRecord,
+  ActivitySummarySettings,
+  ActivitySummarySettingsUpdate,
+  ActivitySummaryTask,
+  ActivityTimelineEntry,
+  ActivityTrendPoint,
+  ActivityWatchDashboard,
+  ActivityWatchSourceStatus,
+  Approval,
+  Artifact,
+  Automation,
+  AutomationRunLink,
+  AutomationSchedule,
+  ConnectionAttempt,
+  ConnectHandoff,
+  ConnectorKind,
+  ConnectorSnapshot,
+  ConnectorStatus,
+  DesktopSnapshot,
+  DiagnosticExport,
+  InstallApprovalRequest,
+  LedgerEvent,
+  MCPPreset,
+  ModelConfigurationResponse,
+  ModelConfigureInput,
+  ModelProviderPreset,
+  ProviderModelCatalog,
+  ResetPreview,
+  ResetResult,
+  RhythmInsights,
+  Run,
+  Session,
+  SkillCatalogEntry,
+  SystemStatus,
+  ToolMode,
+  WatchCurrent,
+  WatchOAuthFeed,
+  Workspace,
+} from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface BridgeConfig { baseUrl: string; token?: string }
+
+export class WeatherFlowBridgeError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string | null,
+  ) {
+    super(`WeatherFlow bridge ${status}${code ? ` (${code})` : ""}`);
+    this.name = "WeatherFlowBridgeError";
+  }
+}
+
+function bridgeErrorCode(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const detail = (payload as { detail?: unknown }).detail;
+  if (!detail || typeof detail !== "object") return null;
+  const code = (detail as { code?: unknown }).code;
+  return typeof code === "string" && /^[a-z0-9_]{1,128}$/.test(code) ? code : null;
+}
+
+async function bridgeError(response: Response): Promise<WeatherFlowBridgeError> {
+  let code: string | null = null;
+  try {
+    code = bridgeErrorCode(await response.json());
+  } catch {
+    // An invalid body is discarded; renderer errors retain only status and a validated code.
+  }
+  return new WeatherFlowBridgeError(response.status, code);
+}
 
 declare global {
   interface Window { __WEATHERFLOW_BRIDGE__?: BridgeConfig }
@@ -14,10 +82,18 @@ export function bridgeConfig(): BridgeConfig {
 }
 
 export async function resolveBridgeConfig(): Promise<BridgeConfig> {
-  if (!("__TAURI_INTERNALS__" in window)) return bridgeConfig();
+  if (!isTauriShell()) return bridgeConfig();
+  const embedded = explicitBridgeConfig();
+  if (embedded) return embedded;
+  return resolveDaemonBridgeConfig();
+}
+
+function isTauriShell(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
+async function resolveDaemonBridgeConfig(): Promise<BridgeConfig> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const embedded = explicitBridgeConfig();
-    if (embedded) return embedded;
     try {
       return await invoke<BridgeConfig>("daemon_bridge");
     } catch {
@@ -32,18 +108,53 @@ function explicitBridgeConfig(): BridgeConfig | null {
 }
 
 export class WeatherFlowClient {
-  constructor(private readonly config: BridgeConfig) {}
+  constructor(private config: BridgeConfig) {}
 
   private headers(): HeadersInit {
     return this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {};
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.config.baseUrl}${path}`, {
+  private fetchOnce(path: string, init?: RequestInit): Promise<Response> {
+    return fetch(`${this.config.baseUrl}${path}`, {
       ...init,
       headers: { "Content-Type": "application/json", ...this.headers(), ...init?.headers },
     });
-    if (!response.ok) throw new Error(`WeatherFlow bridge ${response.status}`);
+  }
+
+  private async refreshBridgeConfig(): Promise<boolean> {
+    if (!isTauriShell()) return false;
+    try {
+      // The injected WebView config is a startup snapshot and can be stale after
+      // the Rust supervisor replaces its sidecar. Always ask Tauri for the live
+      // bridge here instead of calling resolveBridgeConfig(), which intentionally
+      // prefers that startup snapshot during initial boot.
+      this.config = await resolveDaemonBridgeConfig();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async fetchWithBridgeRefresh(path: string, init?: RequestInit): Promise<Response> {
+    const readOnlyGet = (init?.method ?? "GET").toUpperCase() === "GET";
+    let response: Response;
+    try {
+      response = await this.fetchOnce(path, init);
+    } catch (error) {
+      if (!readOnlyGet || !(await this.refreshBridgeConfig())) throw error;
+      return this.fetchOnce(path, init);
+    }
+    if (!readOnlyGet || response.status !== 401) return response;
+    const error = await bridgeError(response);
+    if (error.code !== "bridge_unauthorized" || !(await this.refreshBridgeConfig())) {
+      throw error;
+    }
+    return this.fetchOnce(path, init);
+  }
+
+  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await this.fetchWithBridgeRefresh(path, init);
+    if (!response.ok) throw await bridgeError(response);
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   }
@@ -89,45 +200,72 @@ export class WeatherFlowClient {
   ingestSignal(signal: Record<string, unknown>, workspaceId?: string | null): Promise<unknown> {
     return this.request(this.scoped("/v1/rhythm/signals", workspaceId), { method: "POST", body: JSON.stringify(signal) });
   }
-  activityPreferences(): Promise<ActivityPreferences> { return this.request("/v1/activity/preferences"); }
-  updateActivityPreferences(preferences: Omit<ActivityPreferences, "version">, expectedVersion: number): Promise<ActivityPreferences> {
-    return this.request("/v1/activity/preferences", { method: "PUT", body: JSON.stringify({ ...preferences, expected_version: expectedVersion }) });
+  watchSourceStatus(): Promise<ActivityWatchSourceStatus> {
+    return this.request("/v1/watch/source-status");
   }
-  ingestActivityHeartbeat(heartbeat: ActivityHeartbeat): Promise<unknown> {
-    return this.request("/v1/activity/heartbeats", { method: "POST", body: JSON.stringify(heartbeat) });
+  watchCurrent(): Promise<WatchCurrent> {
+    return this.request("/v1/watch/current");
   }
-  activitySummary(start: Date, end: Date): Promise<ActivitySummary> {
+  watchOAuthFeed(workspaceId: string, limit = 30): Promise<WatchOAuthFeed> {
+    const query = new URLSearchParams({ workspace_id: workspaceId, limit: String(limit) });
+    return this.request(`/v1/watch/oauth-feed?${query}`);
+  }
+  watchStatistics(start: Date, end: Date): Promise<ActivityStatistics> {
     const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
-    return this.request(`/v1/activity/summary?${query}`);
+    return this.request(`/v1/watch/statistics?${query}`);
   }
-  async activityEvents(start: Date, end: Date): Promise<ActivityInterval[]> {
-    const events: ActivityInterval[] = [];
-    const pageSize = 10_000;
-    for (let offset = 0; ; offset += pageSize) {
-      const query = new URLSearchParams({
-        start: start.toISOString(),
-        end: end.toISOString(),
-        limit: String(pageSize),
-        offset: String(offset),
-      });
-      const page = await this.request<ActivityInterval[]>(`/v1/activity/events?${query}`);
-      events.push(...page);
-      if (page.length < pageSize) return events;
-    }
+  watchDashboard(start: Date, end: Date, limit = 500): Promise<ActivityWatchDashboard> {
+    const query = new URLSearchParams({
+      start: start.toISOString(),
+      end: end.toISOString(),
+      limit: String(limit),
+    });
+    return this.request(`/v1/watch/dashboard?${query}`);
   }
-  async activityInferenceHistory(limit = 100): Promise<ActivityInferenceJob[]> {
-    const jobs = await this.request<ActivityInferenceJob[]>(`/v1/activity/inference-jobs?limit=${limit}`);
-    if (!jobs.length) return jobs;
-    const latest = await this.request<ActivityInferenceJob>(`/v1/activity/inference-jobs/${encodeURIComponent(jobs[0].id)}`);
-    return [latest, ...jobs.slice(1)];
+  watchTimeline(start: Date, end: Date, limit = 500): Promise<ActivityTimelineEntry[]> {
+    const query = new URLSearchParams({
+      start: start.toISOString(),
+      end: end.toISOString(),
+      limit: String(limit),
+    });
+    return this.request(`/v1/watch/timeline?${query}`);
   }
-  activityExport(start: Date, end: Date): Promise<ActivityExport> {
-    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
-    return this.request(`/v1/activity/export?${query}`);
+  watchSummaries(limit = 20): Promise<ActivitySummaryRecord[]> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this.request(`/v1/watch/summaries?${query}`);
   }
-  deleteActivity(start: Date, end: Date): Promise<{ deleted: number }> {
-    const query = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
-    return this.request(`/v1/activity/events?${query}`, { method: "DELETE", body: JSON.stringify({ confirm: true }) });
+  watchTasks(
+    limit = 30,
+    status?: ActivitySummaryTask["status"],
+  ): Promise<ActivitySummaryTask[]> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (status) query.set("status", status);
+    return this.request(`/v1/watch/tasks?${query}`);
+  }
+  watchRegenerateTask(taskId: string, reason = "user_requested"): Promise<ActivitySummaryTask> {
+    return this.request(`/v1/watch/tasks/${encodeURIComponent(taskId)}/regenerate`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  }
+  watchTrends(start: Date, end: Date, granularity: "week" | "month"): Promise<ActivityTrendPoint[]> {
+    const query = new URLSearchParams({
+      start: start.toISOString(),
+      end: end.toISOString(),
+      granularity,
+    });
+    return this.request(`/v1/watch/trends?${query}`);
+  }
+  watchSummarySettings(): Promise<ActivitySummarySettings> {
+    return this.request("/v1/watch/settings/summary");
+  }
+  updateWatchSummarySettings(
+    settings: ActivitySummarySettingsUpdate,
+  ): Promise<ActivitySummarySettings> {
+    return this.request("/v1/watch/settings/summary", {
+      method: "PATCH",
+      body: JSON.stringify(settings),
+    });
   }
   rhythmInsights(workspaceId?: string | null): Promise<RhythmInsights> { return this.request(this.scoped("/v1/rhythm/insights", workspaceId)); }
   status(workspaceId?: string | null): Promise<SystemStatus> { return this.request(this.scoped("/v1/system/status", workspaceId)); }
@@ -138,18 +276,9 @@ export class WeatherFlowClient {
   configureModel(configuration: ModelConfigureInput, workspaceId?: string | null): Promise<ModelConfigurationResponse> {
     return this.request(this.scoped("/v1/models/configure", workspaceId), { method: "POST", body: JSON.stringify(configuration) });
   }
-  completeOnboarding(enableMetadataSensor: boolean, workspaceId?: string | null): Promise<unknown> {
-    return this.request(this.scoped("/v1/onboarding/complete", workspaceId), {
-      method: "POST",
-      body: JSON.stringify({
-        confirm_local_ownership: true,
-        enable_metadata_sensor: enableMetadataSensor,
-      }),
-    });
-  }
   async artifactContent(artifactId: string): Promise<Blob> {
-    const response = await fetch(`${this.config.baseUrl}/v1/artifacts/${artifactId}/content`, { headers: this.headers() });
-    if (!response.ok) throw new Error(`WeatherFlow bridge ${response.status}`);
+    const response = await this.fetchWithBridgeRefresh(`/v1/artifacts/${artifactId}/content`);
+    if (!response.ok) throw await bridgeError(response);
     return response.blob();
   }
   exportDiagnostics(workspaceId?: string | null): Promise<DiagnosticExport> {

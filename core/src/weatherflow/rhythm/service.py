@@ -212,6 +212,10 @@ class RhythmService:
         for stored in events:
             if not stored.type.startswith("rhythm.signal."):
                 continue
+            if stored.type == "rhythm.signal.activity_metadata":
+                # Migration 29 removes legacy v2 watcher facts. This guard
+                # prevents an in-flight upgrade from reviving that path.
+                continue
             parsed = TypeAdapter(RhythmSignal).validate_python(stored.payload["signal"])
             facts.append((stored.id, parsed))
         snapshot = self.estimator.estimate(workspace_id, facts, now=observed_now)

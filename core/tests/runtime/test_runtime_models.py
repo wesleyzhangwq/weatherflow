@@ -47,6 +47,20 @@ def test_model_request_round_trips_domain_contracts() -> None:
         request.messages[0].content = "mutated"
 
 
+def test_tool_free_model_request_rejects_exposed_tools() -> None:
+    with pytest.raises(ValidationError, match="tool-free model requests cannot expose tools"):
+        ModelRequest(
+            run_id="run-restricted",
+            agent=AgentDefinition(
+                agent_id="orchestrator",
+                system_prompt="Analyze bounded observations only",
+            ),
+            messages=(AgentMessage(role=MessageRole.USER, content="Summarize"),),
+            tools=(tool(),),
+            tool_free=True,
+        )
+
+
 @pytest.mark.parametrize(
     "value",
     [

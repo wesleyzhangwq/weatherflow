@@ -1,12 +1,13 @@
 import asyncio
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from weatherflow.capabilities import ToolSpec
+from weatherflow.capabilities import ToolEffect, ToolSpec
 from weatherflow.events import Actor, Event, EventLedger
 from weatherflow.runs import Run, RunRepository
 from weatherflow.runtime.action_execution import (
@@ -14,8 +15,13 @@ from weatherflow.runtime.action_execution import (
     ActionExecutionStatus,
 )
 from weatherflow.runtime.checkpoints import RunCheckpoint
-from weatherflow.runtime.models import ToolCallTurn, ToolExecutionContext
-from weatherflow.runtime.outcomes import LoopOutcome, LoopStatus
+from weatherflow.runtime.models import (
+    AgentMessage,
+    MessageRole,
+    ToolCallTurn,
+    ToolExecutionContext,
+)
+from weatherflow.runtime.outcomes import BoundedObservation, LoopOutcome, LoopStatus
 from weatherflow.runtime.protocols import PublicToolError
 from weatherflow.runtime.repository import RunCheckpointRepository
 from weatherflow.runtime.tools import ToolExecutorNotFound, ToolExecutorRegistry
@@ -47,16 +53,45 @@ class ToolDispatchResult(BaseModel):
 
     checkpoint: RunCheckpoint | None = None
     outcome: LoopOutcome | None = None
+    ephemeral_observation: AgentMessage | None = None
+    redaction_values: tuple[str, ...] = ()
+    durable_projection: dict[str, Any] | None = None
+    tool_free_next_turn: bool = False
 
     @model_validator(mode="after")
     def validate_next_state(self) -> Self:
         if (self.checkpoint is None) == (self.outcome is None):
             raise ValueError("tool dispatch must produce one durable next state")
+        if self.outcome is not None and (
+            self.ephemeral_observation is not None
+            or self.redaction_values
+            or self.durable_projection is not None
+            or self.tool_free_next_turn
+        ):
+            raise ValueError("terminal tool dispatch cannot carry an ephemeral observation")
+        if self.ephemeral_observation is None and (
+            self.redaction_values or self.durable_projection is not None
+        ):
+            raise ValueError("ephemeral metadata requires an ephemeral observation")
         return self
 
     @classmethod
-    def from_checkpoint(cls, checkpoint: RunCheckpoint) -> "ToolDispatchResult":
-        return cls(checkpoint=checkpoint)
+    def from_checkpoint(
+        cls,
+        checkpoint: RunCheckpoint,
+        *,
+        ephemeral_observation: AgentMessage | None = None,
+        redaction_values: tuple[str, ...] = (),
+        durable_projection: dict[str, Any] | None = None,
+        tool_free_next_turn: bool = False,
+    ) -> "ToolDispatchResult":
+        return cls(
+            checkpoint=checkpoint,
+            ephemeral_observation=ephemeral_observation,
+            redaction_values=redaction_values,
+            durable_projection=durable_projection,
+            tool_free_next_turn=tool_free_next_turn,
+        )
 
     @classmethod
     def from_outcome(cls, outcome: LoopOutcome) -> "ToolDispatchResult":
@@ -218,6 +253,8 @@ class ToolDispatcher:
         request: ToolDispatchRequest,
         tool: ToolSpec,
     ) -> ToolDispatchResult:
+        transient_result = None
+        tool_free_next_turn = False
         try:
             executor = self.executors.require(tool.tool_id)
             result = await asyncio.wait_for(
@@ -227,6 +264,7 @@ class ToolDispatcher:
                     ToolExecutionContext(
                         run_id=request.run.id,
                         workspace_id=request.run.workspace_id,
+                        time_anchor=request.run.created_at,
                     ),
                 ),
                 timeout=tool.timeout_seconds,
@@ -234,6 +272,9 @@ class ToolDispatcher:
             output_validation = validate_tool_output(tool.output_schema, result.output)
             if output_validation.valid:
                 output = result.output
+                tool_free_next_turn = result.tool_free_next_turn
+                if result.transient:
+                    transient_result = result
             else:
                 output = {
                     "error": (
@@ -262,7 +303,26 @@ class ToolDispatcher:
                 "error": "tool_execution_failed",
                 "message": "tool execution failed",
             }
-        return await self._observe(request, output)
+        if transient_result is not None:
+            if not _transient_observation_allowed(tool):
+                return await self._observe(
+                    request,
+                    {
+                        "error": "transient_tool_output_forbidden",
+                        "message": "Only built-in ActivityWatch observe tools may be transient.",
+                    },
+                )
+            assert transient_result.checkpoint_output is not None
+            return await self._observe_transient(
+                request,
+                output=output,
+                checkpoint_output=transient_result.checkpoint_output,
+            )
+        return await self._observe(
+            request,
+            output,
+            tool_free_next_turn=tool_free_next_turn,
+        )
 
     async def _dispatch_approval(
         self,
@@ -375,6 +435,8 @@ class ToolDispatcher:
         self,
         request: ToolDispatchRequest,
         output: dict[str, Any],
+        *,
+        tool_free_next_turn: bool = False,
     ) -> ToolDispatchResult:
         checkpoint = await self.committer.record_observation(
             request.checkpoint,
@@ -382,8 +444,53 @@ class ToolDispatcher:
             output,
             clear_pending=request.clear_pending,
             batch_next_index=request.batch_next_index,
+            tool_free_next_turn=tool_free_next_turn,
         )
-        return ToolDispatchResult.from_checkpoint(checkpoint)
+        return ToolDispatchResult.from_checkpoint(
+            checkpoint,
+            tool_free_next_turn=tool_free_next_turn,
+        )
+
+    async def _observe_transient(
+        self,
+        request: ToolDispatchRequest,
+        *,
+        output: dict[str, Any],
+        checkpoint_output: dict[str, Any],
+    ) -> ToolDispatchResult:
+        observation_key = (
+            f"{request.checkpoint.run_id}:{request.checkpoint.step_index}:"
+            f"{request.batch_next_index}:{request.turn.tool_id}"
+        )
+        safe_projection = _safe_transient_projection(
+            checkpoint_output,
+            output=output,
+        )
+        checkpoint = await self.committer.record_transient_observation(
+            request.checkpoint,
+            request.turn,
+            safe_projection,
+            observation_key=observation_key,
+        )
+        observation = BoundedObservation.from_output(output, max_chars=128 * 1024)
+        message = AgentMessage(
+            role=MessageRole.TOOL,
+            name=request.turn.tool_id,
+            tool_call_id=request.turn.call_id,
+            content=json.dumps(
+                observation.output,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        return ToolDispatchResult.from_checkpoint(
+            checkpoint,
+            ephemeral_observation=message,
+            redaction_values=_transient_redaction_values(observation.output),
+            durable_projection=safe_projection,
+            tool_free_next_turn=True,
+        )
 
     @staticmethod
     def _needs_review(
@@ -418,3 +525,206 @@ class ToolDispatcher:
             f"runtime:{request.run.id}:step:{request.checkpoint.step_index}:"
             f"slot:{request.batch_next_index - 1}:{digest}"
         )
+
+
+_TRANSIENT_PROJECTION_FIELDS = frozenset(
+    {
+        "operation",
+        "data_classification",
+        "fact_count",
+        "item_count",
+        "summary_count",
+        "window_fact_count",
+        "web_fact_count",
+        "afk_fact_count",
+        "redaction_count",
+        "truncated",
+        "window_start",
+        "window_end",
+        "source_health",
+        "active_seconds",
+        "afk_seconds",
+        "category_rule_version",
+        "coverage_ratio",
+        "coverage_status",
+        "app_switch_count",
+        "category_switch_count",
+        "tab_switch_count",
+        "application_switches",
+        "category_switches",
+        "tab_switches",
+        "context_switches",
+    }
+)
+
+
+def _transient_observation_allowed(tool: ToolSpec) -> bool:
+    return (
+        tool.effect is ToolEffect.OBSERVE
+        and tool.source == "builtin.activitywatch"
+        and tool.tool_id.startswith("activity.")
+    )
+
+
+def _safe_transient_projection(
+    projection: dict[str, Any],
+    *,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key in _TRANSIENT_PROJECTION_FIELDS:
+        value = projection.get(key)
+        if value is None or isinstance(value, (bool, int, float, str)):
+            safe[key] = value[:300] if isinstance(value, str) else value
+    category_seconds = projection.get("category_seconds")
+    if isinstance(category_seconds, Mapping):
+        safe["category_seconds"] = {
+            name[:300]: float(seconds)
+            for name, seconds in list(category_seconds.items())[:50]
+            if isinstance(name, str)
+            and isinstance(seconds, (int, float))
+            and math.isfinite(float(seconds))
+            and seconds >= 0
+        }
+    episodes = projection.get("category_episodes")
+    if isinstance(episodes, (list, tuple)):
+        safe_episodes: list[dict[str, Any]] = []
+        for episode in episodes[:24]:
+            if not isinstance(episode, Mapping):
+                continue
+            start = episode.get("start")
+            end = episode.get("end")
+            category = episode.get("category")
+            duration = episode.get("duration_seconds")
+            if not (
+                isinstance(start, str)
+                and isinstance(end, str)
+                and isinstance(category, str)
+                and isinstance(duration, (int, float))
+                and math.isfinite(float(duration))
+                and duration >= 0
+            ):
+                continue
+            safe_episodes.append(
+                {
+                    "start": start[:64],
+                    "end": end[:64],
+                    "duration_seconds": float(duration),
+                    "category": category[:300],
+                }
+            )
+        safe["category_episodes"] = safe_episodes
+    transitions = projection.get("category_transitions")
+    if isinstance(transitions, (list, tuple)):
+        safe_transitions: list[dict[str, Any]] = []
+        for transition in transitions[:24]:
+            if not isinstance(transition, Mapping):
+                continue
+            occurred_at = transition.get("occurred_at")
+            from_category = transition.get("from_category")
+            to_category = transition.get("to_category")
+            gap_seconds = transition.get("gap_seconds")
+            if not (
+                isinstance(occurred_at, str)
+                and isinstance(from_category, str)
+                and isinstance(to_category, str)
+                and isinstance(gap_seconds, (int, float))
+                and math.isfinite(float(gap_seconds))
+                and gap_seconds >= 0
+            ):
+                continue
+            safe_transitions.append(
+                {
+                    "occurred_at": occurred_at[:64],
+                    "from_category": from_category[:300],
+                    "to_category": to_category[:300],
+                    "gap_seconds": float(gap_seconds),
+                }
+            )
+        safe["category_transitions"] = safe_transitions
+    summary_items = projection.get("summary_items")
+    if isinstance(summary_items, (list, tuple)):
+        safe_summary_items: list[dict[str, Any]] = []
+        for item in summary_items[:20]:
+            if not isinstance(item, Mapping):
+                continue
+            window_start = item.get("window_start")
+            window_end = item.get("window_end")
+            finality = item.get("finality")
+            if not (
+                isinstance(window_start, str)
+                and isinstance(window_end, str)
+                and isinstance(finality, str)
+            ):
+                continue
+            safe_item: dict[str, Any] = {
+                "window_start": window_start[:64],
+                "window_end": window_end[:64],
+                "finality": finality[:32],
+            }
+            for field in (
+                "revision_number",
+                "context_switch_count",
+                "evidence_count",
+            ):
+                value = item.get(field)
+                if isinstance(value, int) and value >= 0:
+                    safe_item[field] = value
+            for field in ("active_seconds", "afk_seconds"):
+                value = item.get(field)
+                if isinstance(value, (int, float)) and math.isfinite(float(value)) and value >= 0:
+                    safe_item[field] = float(value)
+            for field, maximum in (
+                ("summary_id", 128),
+                ("category_rule_version", 128),
+            ):
+                value = item.get(field)
+                if isinstance(value, str):
+                    safe_item[field] = value[:maximum]
+            safe_summary_items.append(safe_item)
+        safe["summary_items"] = safe_summary_items
+    encoded = json.dumps(
+        output,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    safe["observation_digest"] = hashlib.sha256(encoded).hexdigest()
+    return safe
+
+
+def _transient_redaction_values(output: dict[str, Any]) -> tuple[str, ...]:
+    values: set[str] = set()
+
+    sensitive_scalar_fields = frozenset(
+        {
+            "application",
+            "app_name",
+            "title",
+            "window_title",
+            "url",
+            "domain",
+            "bucket_id",
+            "event_id",
+            "evidence_key",
+            "source_id",
+            "document_name",
+        }
+    )
+
+    def visit(value: Any, *, field: str | None = None) -> None:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized and (len(normalized) >= 3 or field in sensitive_scalar_fields):
+                values.add(normalized)
+            return
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                visit(item, field=str(key))
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item, field=field)
+
+    visit(output)
+    return tuple(sorted(values, key=lambda item: (-len(item), item.casefold())))

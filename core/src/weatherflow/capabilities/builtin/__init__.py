@@ -1,5 +1,10 @@
 """First-party bounded capability executors."""
 
+from weatherflow.capabilities.builtin.activity import (
+    ActivityQueryExecutor,
+    ActivitySemanticQueries,
+    activity_tool_specs,
+)
 from weatherflow.capabilities.builtin.developer import (
     DeveloperExecutor,
     developer_tool_specs,
@@ -37,6 +42,8 @@ from weatherflow.capabilities.builtin.research import (
 )
 
 __all__ = [
+    "ActivityQueryExecutor",
+    "ActivitySemanticQueries",
     "CalendarEvent",
     "CalendarExecutor",
     "CalendarProvider",
@@ -55,6 +62,7 @@ __all__ = [
     "ResearchSource",
     "RhythmReader",
     "UnknownCapabilityPackError",
+    "activity_tool_specs",
     "builtin_tool_specs",
     "calendar_tool_specs",
     "developer_tool_specs",

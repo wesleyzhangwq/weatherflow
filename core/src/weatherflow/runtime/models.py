@@ -1,7 +1,8 @@
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from weatherflow.capabilities.models import ToolSpec
 from weatherflow.continuations.models import ProviderAssistantMessage, ProviderContinuation
@@ -106,11 +107,18 @@ class ModelRequest(BaseModel):
     agent: AgentDefinition
     messages: tuple[AgentMessage, ...]
     tools: tuple[ToolSpec, ...]
+    tool_free: bool = False
     provider_continuations: tuple[ProviderContinuation, ...] = Field(
         default=(),
         exclude=True,
         repr=False,
     )
+
+    @model_validator(mode="after")
+    def tool_free_requests_cannot_expose_tools(self) -> "ModelRequest":
+        if self.tool_free and self.tools:
+            raise ValueError("tool-free model requests cannot expose tools")
+        return self
 
 
 class CompactWorkerResult(BaseModel):
@@ -127,12 +135,26 @@ class ToolExecutionContext(BaseModel):
 
     run_id: str
     workspace_id: str
+    time_anchor: datetime | None = None
     action_id: str | None = None
     idempotency_key: str | None = None
 
 
 class ToolExecutionResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     output: dict[str, Any]
     artifact_ids: tuple[str, ...] = ()
+    checkpoint_output: dict[str, Any] | None = None
+    transient: bool = False
+    tool_free_next_turn: bool = False
+
+    @model_validator(mode="after")
+    def transient_output_requires_a_durable_projection(self) -> "ToolExecutionResult":
+        if self.transient and self.checkpoint_output is None:
+            raise ValueError("transient tool output requires checkpoint_output")
+        if not self.transient and self.checkpoint_output is not None:
+            raise ValueError("checkpoint_output is only valid for transient tool output")
+        if self.transient and not self.tool_free_next_turn:
+            raise ValueError("transient tool output requires a tool-free next turn")
+        return self

@@ -2,8 +2,9 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import (
     FastAPI,
@@ -20,21 +21,26 @@ from fastapi.responses import JSONResponse
 
 from weatherflow import __version__
 from weatherflow.activity import (
-    ActivityCollectionDisabledError,
-    ActivityHeartbeat,
-    ActivityHeartbeatOutOfOrderError,
-    ActivityInferenceJob,
-    ActivityInterval,
-    ActivityPreferences,
-    ActivityPreferencesVersionConflict,
-    ActivitySource,
-    ActivitySummary,
+    ActivityCategoryRulesChanged,
+    ActivityQueryLimitExceeded,
+    ActivitySummarySettingsVersionConflict,
+    ActivityWatchProtocolError,
+    ActivityWatchUnavailable,
+    CategoryMatcher,
+    SummaryTaskStatus,
+    SummaryTaskType,
 )
 from weatherflow.api.schemas import (
-    ActivityDeleteRequest,
-    ActivityDeleteResult,
-    ActivityExportResponse,
-    ActivityPreferencesUpdateRequest,
+    ActivityRegenerationRequest,
+    ActivityStatisticsView,
+    ActivitySummarySettingsUpdateRequest,
+    ActivitySummarySettingsView,
+    ActivitySummaryTaskView,
+    ActivitySummaryView,
+    ActivityTimelineEntryView,
+    ActivityTrendPointView,
+    ActivityWatchDashboardView,
+    ActivityWatchSourceStatusView,
     ApprovalDecisionRequest,
     ApprovalView,
     AutomationCreateRequest,
@@ -51,7 +57,9 @@ from weatherflow.api.schemas import (
     ModelConfigureRequest,
     ModelProviderList,
     OnboardingCompleteRequest,
+    OnboardingView,
     ResetConfirmRequest,
+    RhythmSignalRequest,
     RunControlCreateRequest,
     RunCreateRequest,
     SessionCreateRequest,
@@ -60,6 +68,8 @@ from weatherflow.api.schemas import (
     SkillMutationRequest,
     SystemStatus,
     VersionedRequest,
+    WatchCurrentView,
+    WatchOAuthFeedView,
     WorkspaceCreateRequest,
 )
 from weatherflow.artifacts import ArtifactManifest
@@ -108,14 +118,13 @@ from weatherflow.operations import (
     InstallationBoundaryError,
     InstallationRequestError,
     LocalMetrics,
-    OnboardingState,
     ResetCategory,
     ResetPreview,
     ResetResult,
     SecurityScan,
     SecurityScanner,
 )
-from weatherflow.rhythm import CurrentRhythm, RhythmInsights, RhythmInsightsService, RhythmSignal
+from weatherflow.rhythm import CurrentRhythm, RhythmInsights, RhythmInsightsService
 from weatherflow.runs import InvalidTransitionError, Run, RunIdempotencyConflict, RunStatus
 from weatherflow.runtime import (
     RunControl,
@@ -168,6 +177,8 @@ def create_app(
     ) -> JSONResponse:
         status_by_code = {
             ComposioErrorCode.AUTH: 401,
+            ComposioErrorCode.BROKER_AUTH: 401,
+            ComposioErrorCode.BROKER_PERMISSION: 403,
             ComposioErrorCode.RATE_LIMIT: 429,
             ComposioErrorCode.INPUT: 400,
             ComposioErrorCode.NOT_FOUND: 404,
@@ -175,11 +186,16 @@ def create_app(
             ComposioErrorCode.UPSTREAM: 502,
             ComposioErrorCode.AUTH_CONFIG_REQUIRED: 409,
         }
+        public_code = {
+            ComposioErrorCode.AUTH: "connector_provider_auth",
+            ComposioErrorCode.BROKER_AUTH: "connector_broker_auth",
+            ComposioErrorCode.BROKER_PERMISSION: "connector_broker_permission",
+        }.get(error.code, f"connector_broker_{error.code.value}")
         return JSONResponse(
             status_code=status_by_code[error.code],
             content={
                 "detail": {
-                    "code": f"connector_broker_{error.code.value}",
+                    "code": public_code,
                     "retryable": error.retryable,
                 }
             },
@@ -214,6 +230,66 @@ def create_app(
         return JSONResponse(
             status_code=status_code,
             content={"detail": {"code": code, "retryable": retryable}},
+        )
+
+    @app.exception_handler(ActivityWatchUnavailable)
+    async def activitywatch_unavailable(
+        _request: Request,
+        _error: ActivityWatchUnavailable,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": {
+                    "code": "activitywatch_unavailable",
+                    "retryable": True,
+                }
+            },
+        )
+
+    @app.exception_handler(ActivityWatchProtocolError)
+    async def activitywatch_invalid_response(
+        _request: Request,
+        _error: ActivityWatchProtocolError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": {
+                    "code": "activitywatch_invalid_response",
+                    "retryable": False,
+                }
+            },
+        )
+
+    @app.exception_handler(ActivityQueryLimitExceeded)
+    async def activity_query_limit_exceeded(
+        _request: Request,
+        _error: ActivityQueryLimitExceeded,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": {
+                    "code": "activity_query_limit_exceeded",
+                    "retryable": False,
+                }
+            },
+        )
+
+    @app.exception_handler(ActivityCategoryRulesChanged)
+    async def activity_category_rules_changed(
+        _request: Request,
+        _error: ActivityCategoryRulesChanged,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": {
+                    "code": "activity_category_rules_changed",
+                    "retryable": True,
+                }
+            },
         )
 
     @app.middleware("http")
@@ -251,7 +327,7 @@ def create_app(
         await service.start_background(
             include_connector_sync=app.state.lifespan_active,
             include_automation_scheduler=app.state.lifespan_active,
-            include_activity_inference_scheduler=app.state.lifespan_active,
+            include_activity_scheduler=app.state.lifespan_active,
         )
         return service
 
@@ -272,141 +348,256 @@ def create_app(
     async def health() -> HealthResponse:
         return HealthResponse(version=__version__)
 
-    @app.get("/v1/activity/preferences", response_model=ActivityPreferences)
-    async def activity_preferences() -> ActivityPreferences:
+    @app.get(
+        "/v1/watch/settings/summary",
+        response_model=ActivitySummarySettingsView,
+    )
+    async def watch_summary_settings() -> ActivitySummarySettingsView:
         service = await runtime()
-        return await service.activity.preferences()
-
-    @app.put("/v1/activity/preferences", response_model=ActivityPreferences)
-    @app.patch("/v1/activity/preferences", response_model=ActivityPreferences)
-    async def update_activity_preferences(
-        request: ActivityPreferencesUpdateRequest,
-    ) -> ActivityPreferences:
-        service = await runtime()
-        preferences = ActivityPreferences(
-            **request.model_dump(exclude={"expected_version"}),
-            version=request.expected_version,
+        return ActivitySummarySettingsView.model_validate(
+            _as_mapping(await service.activity.summary_settings())
         )
+
+    @app.patch(
+        "/v1/watch/settings/summary",
+        response_model=ActivitySummarySettingsView,
+    )
+    async def update_watch_summary_settings(
+        request: ActivitySummarySettingsUpdateRequest,
+    ) -> ActivitySummarySettingsView:
+        service = await runtime()
+        workspace = await selected_workspace(service, request.model_workspace_id)
+        configuration = await service.model_configurations.repository.get(workspace.id)
+        if configuration is None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "activity_summary_model_not_configured"},
+            )
         try:
-            return await service.activity.update_preferences(
-                preferences,
+            updated = await service.activity.update_summary_settings(
+                model_workspace_id=workspace.id,
+                provider=configuration.provider.value,
+                model=request.model,
+                model_configuration_version=configuration.version,
                 expected_version=request.expected_version,
             )
-        except ActivityPreferencesVersionConflict as error:
+        except ActivitySummarySettingsVersionConflict as error:
             raise HTTPException(
                 status_code=409,
-                detail={"code": "activity_preferences_version_conflict"},
+                detail={"code": "activity_summary_settings_version_conflict"},
             ) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "activity_summary_settings_invalid"},
+            ) from error
+        return ActivitySummarySettingsView.model_validate(_as_mapping(updated))
 
-    @app.post(
-        "/v1/activity/heartbeats",
-        response_model=ActivityInterval,
-        status_code=status.HTTP_201_CREATED,
-    )
-    async def record_activity_heartbeat(
-        heartbeat: ActivityHeartbeat,
-    ) -> ActivityInterval:
+    @app.get("/v1/watch/source-status", response_model=ActivityWatchSourceStatusView)
+    async def watch_source_status() -> ActivityWatchSourceStatusView:
         service = await runtime()
-        try:
-            return await service.activity.ingest(heartbeat)
-        except ActivityCollectionDisabledError as error:
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "activity_collection_disabled"},
-            ) from error
-        except ActivityHeartbeatOutOfOrderError as error:
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "activity_heartbeat_out_of_order"},
-            ) from error
+        return ActivityWatchSourceStatusView.model_validate(
+            _project_source_status(await service.activity.source_status())
+        )
 
-    @app.get("/v1/activity/events", response_model=list[ActivityInterval])
-    async def activity_events(
+    @app.get("/v1/watch/current", response_model=WatchCurrentView)
+    async def watch_current() -> WatchCurrentView:
+        service = await runtime()
+        current = await service.activity.current_state()
+        return WatchCurrentView.model_validate(
+            await _project_current_activity(service.activity, current)
+        )
+
+    @app.get("/v1/watch/oauth-feed", response_model=WatchOAuthFeedView)
+    async def watch_oauth_feed(
+        workspace_id: str | None = None,
+        limit: int = Query(default=30, ge=1, le=30),
+    ) -> WatchOAuthFeedView:
+        service = await runtime()
+        workspace = await selected_workspace(service, workspace_id)
+        feed = await service.connector_feed.get(workspace.id, limit=limit)
+        return WatchOAuthFeedView.model_validate(feed.model_dump(mode="json"))
+
+    @app.get("/v1/watch/dashboard", response_model=ActivityWatchDashboardView)
+    async def watch_dashboard(
         start: datetime,
         end: datetime,
-        source: ActivitySource | None = None,
-        app_name: str | None = None,
-        domain: str | None = None,
-        category: str | None = None,
-        limit: int = Query(default=5_000, ge=1, le=10_000),
-        offset: int = Query(default=0, ge=0),
-    ) -> list[ActivityInterval]:
+        limit: int = Query(default=500, ge=1, le=500),
+    ) -> ActivityWatchDashboardView:
+        _require_activity_window(start, end, max_days=31)
         service = await runtime()
-        return await service.activity.repository.list_events(
+        dashboard = await service.activity.dashboard_window(
             start=start,
             end=end,
-            source=source,
-            app_name=app_name,
-            domain=domain,
-            category=category,
             limit=limit,
-            offset=offset,
+        )
+        return ActivityWatchDashboardView.model_validate(
+            {
+                "statistics": await _project_activity_statistics(
+                    service.activity,
+                    dashboard.statistics,
+                ),
+                "timeline": await _project_activity_timeline(
+                    service.activity,
+                    dashboard.timeline,
+                ),
+            }
         )
 
-    @app.get("/v1/activity/summary", response_model=ActivitySummary)
-    async def activity_summary(start: datetime, end: datetime) -> ActivitySummary:
+    @app.get("/v1/watch/recent", response_model=list[ActivityTimelineEntryView])
+    async def watch_recent(
+        minutes: int = Query(default=30, ge=1, le=10_080),
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> list[ActivityTimelineEntryView]:
+        end = datetime.now(UTC)
+        start = end - timedelta(minutes=minutes)
         service = await runtime()
-        return await service.activity.summary(start=start, end=end)
-
-    @app.get("/v1/activity/export", response_model=ActivityExportResponse)
-    async def export_activity(start: datetime, end: datetime) -> ActivityExportResponse:
-        service = await runtime()
-        events = await service.activity.repository.list_events_for_inference(
-            start=start,
-            end=end,
-        )
-        return ActivityExportResponse(
-            exported_at=datetime.now(UTC),
-            preferences=await service.activity.preferences(),
-            events=tuple(events),
-        )
-
-    @app.get("/v1/activity/inference/history", response_model=list[ActivityInferenceJob])
-    async def activity_inference_history(
-        limit: int = Query(default=100, ge=1, le=1_000),
-    ) -> list[ActivityInferenceJob]:
-        service = await runtime()
-        return await service.activity_inference_repository.list_history(limit=limit)
-
-    @app.get("/v1/activity/inference-jobs", response_model=list[ActivityInferenceJob])
-    async def activity_inference_jobs(
-        limit: int = Query(default=100, ge=1, le=1_000),
-    ) -> list[ActivityInferenceJob]:
-        service = await runtime()
-        jobs = await service.activity_inference_repository.list_history(limit=limit)
+        timeline = await service.activity.timeline(start=start, end=end, limit=limit)
         return [
-            job.model_copy(update={"request_payload": None, "response_payload": None})
-            for job in jobs
+            ActivityTimelineEntryView.model_validate(item)
+            for item in await _project_activity_timeline(service.activity, timeline)
         ]
 
-    @app.get(
-        "/v1/activity/inference-jobs/{job_id}",
-        response_model=ActivityInferenceJob,
-    )
-    async def activity_inference_job(job_id: str) -> ActivityInferenceJob:
+    @app.get("/v1/watch/statistics", response_model=ActivityStatisticsView)
+    async def watch_statistics(start: datetime, end: datetime) -> ActivityStatisticsView:
+        _require_activity_window(start, end, max_days=370)
         service = await runtime()
-        job = await service.activity_inference_repository.get(job_id)
-        if job is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "activity_inference_job_not_found"},
-            )
-        return job
+        statistics = await service.activity.statistics(start=start, end=end)
+        return ActivityStatisticsView.model_validate(
+            await _project_activity_statistics(service.activity, statistics)
+        )
 
-    @app.delete("/v1/activity/events", response_model=ActivityDeleteResult)
-    async def delete_activity(
-        request: ActivityDeleteRequest,
+    @app.get("/v1/watch/applications", response_model=ActivityStatisticsView)
+    async def watch_applications(start: datetime, end: datetime) -> ActivityStatisticsView:
+        return await watch_statistics(start=start, end=end)
+
+    @app.get("/v1/watch/categories", response_model=ActivityStatisticsView)
+    async def watch_categories(start: datetime, end: datetime) -> ActivityStatisticsView:
+        return await watch_statistics(start=start, end=end)
+
+    @app.get("/v1/watch/afk", response_model=ActivityStatisticsView)
+    async def watch_afk(start: datetime, end: datetime) -> ActivityStatisticsView:
+        return await watch_statistics(start=start, end=end)
+
+    @app.get("/v1/watch/switches", response_model=ActivityStatisticsView)
+    async def watch_switches(start: datetime, end: datetime) -> ActivityStatisticsView:
+        return await watch_statistics(start=start, end=end)
+
+    @app.get("/v1/watch/timeline", response_model=list[ActivityTimelineEntryView])
+    async def watch_timeline(
         start: datetime,
         end: datetime,
-    ) -> ActivityDeleteResult:
-        if not request.confirm:
+        limit: int = Query(default=500, ge=1, le=500),
+    ) -> list[ActivityTimelineEntryView]:
+        _require_activity_window(start, end, max_days=31)
+        service = await runtime()
+        timeline = await service.activity.timeline(start=start, end=end, limit=limit)
+        return [
+            ActivityTimelineEntryView.model_validate(item)
+            for item in await _project_activity_timeline(service.activity, timeline)
+        ]
+
+    @app.get("/v1/watch/summaries", response_model=list[ActivitySummaryView])
+    async def watch_summaries(
+        kind: Literal["stage_6h", "daily_24h", "weekly", "biweekly", "monthly"] | None = None,
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> list[ActivitySummaryView]:
+        service = await runtime()
+        summaries = await service.activity.summary_history(
+            task_type=SummaryTaskType(kind) if kind is not None else None,
+            limit=limit,
+        )
+        return [
+            ActivitySummaryView.model_validate(
+                await _project_activity_summary(
+                    service.activity,
+                    item,
+                    evidence_limit=20,
+                )
+            )
+            for item in summaries
+        ]
+
+    @app.get("/v1/watch/summaries/{summary_id}", response_model=ActivitySummaryView)
+    async def watch_summary(summary_id: str) -> ActivitySummaryView:
+        service = await runtime()
+        summary = await service.activity.get_summary(summary_id)
+        if summary is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "activity_summary_not_found"},
+            )
+        return ActivitySummaryView.model_validate(
+            await _project_activity_summary(
+                service.activity,
+                summary,
+                evidence_limit=120,
+            )
+        )
+
+    @app.get("/v1/watch/tasks", response_model=list[ActivitySummaryTaskView])
+    async def watch_tasks(
+        status_filter: Literal["pending", "running", "completed", "failed", "needs_retry"]
+        | None = Query(default=None, alias="status"),
+        limit: int = Query(default=30, ge=1, le=100),
+    ) -> list[ActivitySummaryTaskView]:
+        service = await runtime()
+        tasks = await service.activity.list_tasks(
+            statuses=((SummaryTaskStatus(status_filter),) if status_filter is not None else None),
+            limit=limit,
+        )
+        return [
+            ActivitySummaryTaskView.model_validate(_project_activity_task(item)) for item in tasks
+        ]
+
+    @app.post(
+        "/v1/watch/tasks/{task_id}/regenerate",
+        response_model=ActivitySummaryTaskView,
+    )
+    async def regenerate_watch_task(
+        task_id: str,
+        request: ActivityRegenerationRequest,
+    ) -> ActivitySummaryTaskView:
+        service = await runtime()
+        try:
+            task = await service.activity.request_regeneration(
+                task_id,
+                reason=request.reason,
+            )
+        except LookupError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "activity_summary_task_not_found"},
+            ) from error
+        except ValueError as error:
             raise HTTPException(
                 status_code=409,
-                detail={"code": "confirmation_required"},
-            )
+                detail={
+                    "code": "activity_summary_regeneration_conflict",
+                    "message": str(error),
+                },
+            ) from error
+        return ActivitySummaryTaskView.model_validate(_project_activity_task(task))
+
+    @app.get("/v1/watch/trends", response_model=list[ActivityTrendPointView])
+    async def watch_trends(
+        start: datetime,
+        end: datetime,
+        granularity: Literal["week", "month"],
+    ) -> list[ActivityTrendPointView]:
+        _require_activity_window(start, end, max_days=370)
         service = await runtime()
-        deleted = await service.activity.delete_range(start=start, end=end)
-        return ActivityDeleteResult(deleted=deleted)
+        points = await service.activity.trends(
+            task_type=(
+                SummaryTaskType.WEEKLY if granularity == "week" else SummaryTaskType.MONTHLY
+            ),
+            limit=100,
+        )
+        return [
+            ActivityTrendPointView.model_validate(_project_activity_trend(item))
+            for item in points
+            if _activity_trend_overlaps(item, start=start, end=end)
+        ]
 
     @app.post("/v1/runs", response_model=Run, status_code=status.HTTP_201_CREATED)
     async def create_run(request: RunCreateRequest) -> Run:
@@ -1077,17 +1268,15 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     async def ingest_rhythm_signal(
-        signal: RhythmSignal, workspace_id: str | None = None
+        signal: RhythmSignalRequest, workspace_id: str | None = None
     ) -> CurrentRhythm:
+        if signal.kind == "activity_metadata":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "activity_metadata_ingest_forbidden"},
+            )
         service = await runtime()
         workspace = await selected_workspace(service, workspace_id)
-        if signal.kind == "activity_metadata":
-            onboarding = await service.onboarding.get(workspace.id)
-            if not onboarding.metadata_sensor_enabled:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"code": "metadata_sensor_consent_required"},
-                )
         return await service.rhythm.ingest(workspace.id, signal)
 
     @app.get("/v1/rhythm/current", response_model=CurrentRhythm)
@@ -1113,12 +1302,10 @@ def create_app(
         workspace = await selected_workspace(service, workspace_id)
         rhythm = await service.rhythm.current(workspace.id)
         recent = await service.runs.list_recent(limit=1, workspace_id=workspace.id)
-        onboarding = await service.onboarding.get(workspace.id)
         return DesktopSnapshot(
             rhythm=rhythm,
             latest_run=recent[0] if recent else None,
             workspace=workspace,
-            metadata_sensor_enabled=onboarding.metadata_sensor_enabled,
         )
 
     @app.get("/v1/system/status", response_model=SystemStatus)
@@ -1147,13 +1334,13 @@ def create_app(
             installed_packs=workspace.installed_packs,
             providers=providers,
             behavior_sensor={
-                "mode": "metadata_only",
-                "enabled": onboarding.metadata_sensor_enabled,
+                "mode": "activitywatch_read_only",
+                "enabled": True,
                 "raw_content_captured": False,
                 "fallback_to_deliberate_signals": True,
             },
             retention={
-                "raw_behavior": "72h",
+                "raw_behavior": "owned_by_activitywatch",
                 "aggregate_behavior": "90d",
                 "memory": "until_explicit_reset",
             },
@@ -1289,17 +1476,19 @@ def create_app(
         await service.connector_service.disconnect(workspace.id, connector)
         return Response(status_code=204)
 
-    @app.get("/v1/onboarding", response_model=OnboardingState)
-    async def onboarding_state(workspace_id: str | None = None) -> OnboardingState:
+    @app.get("/v1/onboarding", response_model=OnboardingView)
+    async def onboarding_state(workspace_id: str | None = None) -> OnboardingView:
         service = await runtime()
         workspace = await selected_workspace(service, workspace_id)
-        return await service.onboarding.get(workspace.id)
+        return OnboardingView.model_validate(
+            _as_mapping(await service.onboarding.get(workspace.id))
+        )
 
-    @app.post("/v1/onboarding/complete", response_model=OnboardingState)
+    @app.post("/v1/onboarding/complete", response_model=OnboardingView)
     async def complete_onboarding(
         request: OnboardingCompleteRequest,
         workspace_id: str | None = None,
-    ) -> OnboardingState:
+    ) -> OnboardingView:
         if not request.confirm_local_ownership:
             raise HTTPException(
                 status_code=409,
@@ -1307,9 +1496,13 @@ def create_app(
             )
         service = await runtime()
         workspace = await selected_workspace(service, workspace_id)
-        return await service.onboarding.complete(
-            workspace.id,
-            metadata_sensor_enabled=request.enable_metadata_sensor,
+        return OnboardingView.model_validate(
+            _as_mapping(
+                await service.onboarding.complete(
+                    workspace.id,
+                    metadata_sensor_enabled=False,
+                )
+            )
         )
 
     @app.get("/v1/diagnostics/metrics", response_model=LocalMetrics)
@@ -1404,6 +1597,338 @@ def _read_artifact(root_value: str, relative_path: str) -> bytes:
     if not path.is_relative_to(root):
         raise RuntimeError("artifact path escaped root")
     return path.read_bytes()
+
+
+def _require_activity_window(
+    start: datetime,
+    end: datetime,
+    *,
+    max_days: int,
+) -> None:
+    if (
+        start.tzinfo is None
+        or start.utcoffset() is None
+        or end.tzinfo is None
+        or end.utcoffset() is None
+        or end <= start
+        or end - start > timedelta(days=max_days)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "activity_window_invalid"},
+        )
+
+
+def _as_mapping(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="python")
+    raise TypeError(f"unsupported activity response type: {type(value).__name__}")
+
+
+def _enum_value(value):
+    return getattr(value, "value", value)
+
+
+def _project_evidence_ref(value) -> dict:
+    raw = _as_mapping(value)
+    return {
+        "activitywatch_server_id": raw.get("activitywatch_server_id"),
+        "bucket_id": raw["bucket_id"],
+        "event_id": str(raw["event_id"]),
+        "event_timestamp": raw.get("event_timestamp"),
+        "event_duration": raw.get("event_duration"),
+        "event_digest": raw.get("event_digest"),
+        "fields_used": tuple(raw.get("fields_used", ())),
+    }
+
+
+def _project_source_status(value) -> dict:
+    raw = _as_mapping(value)
+    if "reachable" in raw:
+        return raw
+    return {
+        "reachable": _enum_value(raw.get("health")) == "available",
+        "server_version": raw.get("server_version"),
+        "data_start": raw.get("data_start"),
+        "data_end": raw.get("data_end"),
+        "checked_at": raw["checked_at"],
+        "last_reconciled_at": raw.get("last_reconciled_at"),
+        "error_code": raw.get("error_code"),
+    }
+
+
+async def _activity_source_mapping(activity) -> dict:
+    return _as_mapping(await activity.source_status())
+
+
+async def _project_current_activity(activity, value) -> dict:
+    raw = _as_mapping(value)
+    source: dict | None = None
+
+    async def source_mapping() -> dict:
+        nonlocal source
+        if source is None:
+            source = await _activity_source_mapping(activity)
+        return source
+
+    observed = raw.get("observed")
+    if observed is None:
+        observed_view = None
+    else:
+        fact = _as_mapping(observed)
+        if "started_at" in fact:
+            observed_view = fact
+        else:
+            evidence_refs: tuple[dict, ...] = ()
+            fact_object = getattr(value, "observed", None)
+            if fact_object is not None and hasattr(fact_object, "evidence_ref"):
+                current_source = await source_mapping()
+                server_id = current_source.get("server_id") or "activitywatch-local"
+                fields_used = tuple(
+                    field
+                    for field in ("application", "title", "url", "domain", "afk_state")
+                    if fact.get(field) is not None
+                )
+                evidence_refs = (
+                    _project_evidence_ref(
+                        fact_object.evidence_ref(
+                            server_id=server_id,
+                            fields_used=fields_used,
+                        )
+                    ),
+                )
+            observed_view = {
+                "observed_at": raw.get("observed_at", fact["timestamp"]),
+                "started_at": fact["timestamp"],
+                "duration_seconds": fact.get("duration", 0),
+                "app_name": fact.get("application"),
+                "window_title": fact.get("title"),
+                "url": fact.get("url"),
+                "afk_state": _enum_value(raw.get("afk_state", fact.get("afk_state", "unknown"))),
+                "evidence_refs": evidence_refs,
+            }
+
+    current_source = await source_mapping()
+    observed_at = raw.get("observed_at")
+    if observed_at is None and observed_view is not None:
+        observed_at = observed_view["observed_at"]
+    if observed_at is None:
+        observed_at = current_source.get("checked_at")
+    source_health = raw.get("source_health", current_source.get("health"))
+    if source_health is None:
+        source_health = "available" if current_source.get("reachable") else "degraded"
+    afk_state = raw.get("afk_state")
+    if afk_state is None and observed_view is not None:
+        afk_state = observed_view["afk_state"]
+    return {
+        "observed": observed_view,
+        "afk_state": _enum_value(afk_state or "unknown"),
+        "observed_at": observed_at,
+        "source_health": _enum_value(source_health),
+    }
+
+
+async def _project_activity_statistics(activity, value) -> dict:
+    raw = _as_mapping(value)
+    if "app_seconds" in raw and "category_rule_version" in raw:
+        return raw
+    source = await _activity_source_mapping(activity)
+    return {
+        "window_start": raw["window_start"],
+        "window_end": raw["window_end"],
+        "active_seconds": raw.get("active_seconds", 0),
+        "afk_seconds": raw.get("afk_seconds", 0),
+        "browser_seconds": raw.get("browser_seconds", 0),
+        "app_switch_count": raw.get("app_switch_count", 0),
+        "category_switch_count": raw.get("category_switch_count", 0),
+        "app_seconds": raw.get("app_seconds", raw.get("application_seconds", {})),
+        "category_seconds": raw.get("category_seconds", {}),
+        "category_rule_version": (
+            raw.get("category_rule_version") or source.get("category_rule_version") or "unavailable"
+        ),
+        "observed_seconds": raw.get("observed_seconds", 0),
+        "unobserved_seconds": raw.get("unobserved_seconds", 0),
+        "window_observed_seconds": raw.get("window_observed_seconds", 0),
+        "afk_observed_seconds": raw.get("afk_observed_seconds", 0),
+        "web_observed_seconds": raw.get("web_observed_seconds", 0),
+        "coverage_ratio": raw.get("coverage_ratio", 0),
+        "coverage_status": _enum_value(raw.get("coverage_status", "none")),
+        "source_bucket_ids": tuple(raw.get("source_bucket_ids", ())),
+    }
+
+
+async def _project_activity_timeline(activity, value) -> list[dict]:
+    if isinstance(value, list):
+        return [_as_mapping(item) for item in value]
+    raw = _as_mapping(value)
+    facts = tuple(getattr(value, "facts", raw.get("facts", ())))
+    source: dict | None = None
+    category_matcher = None
+    client = getattr(activity, "client", None)
+    if facts and client is not None and hasattr(client, "classes"):
+        try:
+            category_matcher = CategoryMatcher(await client.classes())
+        except (ActivityWatchProtocolError, ActivityWatchUnavailable):
+            category_matcher = None
+    result: list[dict] = []
+    for item in facts:
+        fact = _as_mapping(item)
+        evidence_refs: tuple[dict, ...] = ()
+        if hasattr(item, "evidence_ref"):
+            if source is None:
+                source = await _activity_source_mapping(activity)
+            evidence_refs = (
+                _project_evidence_ref(
+                    item.evidence_ref(
+                        server_id=source.get("server_id") or "activitywatch-local",
+                        fields_used=tuple(
+                            field
+                            for field in (
+                                "application",
+                                "title",
+                                "url",
+                                "domain",
+                                "afk_state",
+                            )
+                            if fact.get(field) is not None
+                        ),
+                    )
+                ),
+            )
+        started_at = fact["timestamp"]
+        ended_at = getattr(item, "ended_at", started_at)
+        result.append(
+            {
+                "id": f"{fact['bucket_id']}:{fact['event_id']}",
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_seconds": fact.get("duration", 0),
+                "app_name": fact.get("application"),
+                "category": (
+                    category_matcher.match(item)
+                    if category_matcher is not None and hasattr(item, "kind")
+                    else fact.get("category")
+                ),
+                "afk_state": _enum_value(fact.get("afk_state", "unknown")),
+                "window_title": fact.get("title"),
+                "url": fact.get("url"),
+                "evidence_refs": evidence_refs,
+            }
+        )
+    return result
+
+
+async def _activity_task(activity, task_id: str):
+    getter = getattr(activity, "get_task", None)
+    if getter is not None:
+        return await getter(task_id)
+    repository = getattr(activity, "repository", None)
+    if repository is not None and hasattr(repository, "get_task"):
+        return await repository.get_task(task_id)
+    return None
+
+
+async def _project_activity_summary(
+    activity,
+    value,
+    *,
+    evidence_limit: int,
+) -> dict:
+    raw = _as_mapping(value)
+    if "kind" in raw and "narrative" in raw:
+        evidence = tuple(raw.get("evidence_refs", ()))
+        return {
+            **raw,
+            "evidence_refs": evidence[:evidence_limit],
+            "evidence_count": raw.get("evidence_count", len(evidence)),
+        }
+    task = await _activity_task(activity, raw["task_id"])
+    task_raw = _as_mapping(task) if task is not None else {}
+    statistics = await _project_activity_statistics(activity, raw["statistics"])
+    return {
+        "id": raw["id"],
+        "task_id": raw["task_id"],
+        "kind": _enum_value(task_raw.get("task_type", "stage_6h")),
+        "finality": _enum_value(raw["finality"]),
+        "timezone": task_raw.get("timezone", "Asia/Shanghai"),
+        "window_start": task_raw.get("window_start", statistics["window_start"]),
+        "window_end": task_raw.get("window_end", statistics["window_end"]),
+        "statistics": statistics,
+        "narrative": raw.get("narrative", raw.get("summary_text", "")),
+        "evidence_refs": tuple(
+            _project_evidence_ref(item) for item in raw.get("evidence_refs", ())[:evidence_limit]
+        ),
+        "connector_evidence_refs": tuple(
+            _as_mapping(item) for item in raw.get("connector_evidence_refs", ())[:evidence_limit]
+        ),
+        "connector_coverage": tuple(
+            _as_mapping(item) for item in raw.get("connector_coverage", ())
+        ),
+        "category_rule_version": raw["category_rule_version"],
+        "rules_stale": raw.get("rules_stale", raw.get("legacy_rules", False)),
+        "provider": raw.get("provider"),
+        "model_version": raw.get("model_version", raw.get("model")),
+        "requested_provider": raw.get("requested_provider"),
+        "requested_model": raw.get("requested_model"),
+        "fallback_reason": raw.get("fallback_reason"),
+        "summary_settings_version": raw.get("summary_settings_version", 0),
+        "prompt_version": raw["prompt_version"],
+        "completed_at": raw["completed_at"],
+        "attempt_count": task_raw.get("attempt_count"),
+        "source_watermark": raw.get("source_watermark"),
+        "evidence_count": len(raw.get("evidence_refs", ())),
+    }
+
+
+def _project_activity_task(value) -> dict:
+    raw = _as_mapping(value)
+    if "kind" in raw and "next_attempt_at" in raw:
+        return raw
+    return {
+        "id": raw["id"],
+        "kind": _enum_value(raw.get("kind", raw.get("task_type"))),
+        "window_start": raw["window_start"],
+        "window_end": raw["window_end"],
+        "status": _enum_value(raw["status"]),
+        "attempt_count": raw.get("attempt_count", 0),
+        "completed_at": raw.get("completed_at"),
+        "next_attempt_at": raw.get("next_attempt_at", raw.get("next_retry_at")),
+        "error_code": raw.get("error_code"),
+        "finality": _enum_value(raw.get("finality")),
+        "regeneration_reason": raw.get("regeneration_reason"),
+    }
+
+
+def _project_activity_trend(value) -> dict:
+    raw = _as_mapping(value)
+    if "app_switch_count" in raw and "dominant_category" in raw:
+        return raw
+    return {
+        "window_start": raw["window_start"],
+        "window_end": raw["window_end"],
+        "active_seconds": raw.get("active_seconds", 0),
+        "afk_seconds": raw.get("afk_seconds", 0),
+        "app_switch_count": raw.get(
+            "app_switch_count",
+            raw.get("context_switch_count", 0),
+        ),
+        "dominant_category": raw.get("dominant_category"),
+    }
+
+
+def _activity_trend_overlaps(value, *, start: datetime, end: datetime) -> bool:
+    raw = _as_mapping(value)
+    window_start = _activity_datetime(raw["window_start"])
+    window_end = _activity_datetime(raw["window_end"])
+    return window_start < end and window_end > start
+
+
+def _activity_datetime(value) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 def _valid_token(authorization: str | None, expected: str) -> bool:

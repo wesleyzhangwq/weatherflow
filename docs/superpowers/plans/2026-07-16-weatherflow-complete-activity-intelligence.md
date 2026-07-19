@@ -1,9 +1,22 @@
 # WeatherFlow Complete Activity Intelligence Plan
 
+> **Historical and superseded.** Do not implement this plan. It describes the
+> removed WeatherFlow-owned raw vault/watcher and ActivityWatch state-inference
+> direction. The authoritative replacement is
+> `2026-07-16-weatherflow-activitywatch-intelligence.md`, as amended on
+> 2026-07-18: ActivityWatch is read-only, recent summaries use the fixed Chinese
+> prompt, and GitHub/Gmail/Google Calendar contribute bounded evidence without
+> any state-inference surface.
+
 - **Date:** 2026-07-16
-- **Status:** Complete — implemented and verified
+- **Status:** Superseded — historical implementation record only
 - **Authority:** `weatherflow-architecture-v3.md` and the amended v3 design
 - **Reference:** ActivityWatch watcher/heartbeat/bucket architecture
+
+> Superseded on 2026-07-16 by
+> `2026-07-16-weatherflow-activitywatch-intelligence.md`. WeatherFlow no longer
+> owns a watcher, heartbeat API, Raw Activity Vault, or raw-activity deletion
+> lifecycle. Do not use this plan as a current implementation target.
 
 ## Outcome
 

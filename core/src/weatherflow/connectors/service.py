@@ -4,12 +4,14 @@ from time import monotonic
 from typing import Any, Protocol
 
 from weatherflow.connectors.composio import (
+    ComposioErrorCode,
     ComposioGatewayError,
     ComposioLink,
     ComposioRemoteAccount,
 )
 from weatherflow.connectors.models import (
     CONNECTOR_DEFINITIONS,
+    DAILY_AUTO_FETCH_INTERVAL_MINUTES,
     ConnectHandoff,
     ConnectionAttempt,
     ConnectionPhase,
@@ -81,13 +83,17 @@ class ConnectorService:
         credential_store: CredentialStore,
         gateway: ConnectorGateway,
         installation_id: str,
+        broker_lock: asyncio.Lock | None = None,
     ) -> None:
         self.repository = repository
         self.ledger = ledger
         self.credential_store = credential_store
         self.gateway = gateway
         self.installation_id = installation_id
+        self.broker_lock = broker_lock or asyncio.Lock()
         self._oauth_setup_cache: dict[ConnectorKind, tuple[float, OAuthSetup]] = {}
+        self._configuration_reconciled = False
+        self._configuration_valid = False
 
     def configured(self) -> bool:
         try:
@@ -96,17 +102,120 @@ class ConnectorService:
             return False
 
     async def configure(self) -> None:
-        api_key = self.credential_store.resolve(COMPOSIO_CREDENTIAL)
-        if api_key is None:
-            raise LookupError("Composio project key is not configured")
-        await self.gateway.validate_api_key(api_key)
-        del api_key
-        self._oauth_setup_cache.clear()
+        self._configuration_reconciled = False
+        self._configuration_valid = False
+        async with self.broker_lock:
+            api_key = self.credential_store.resolve(COMPOSIO_CREDENTIAL)
+            if api_key is None:
+                raise LookupError("Composio project key is not configured")
+            await self.gateway.validate_api_key(api_key)
+            del api_key
+            await self._reconcile_bindings()
+            self._oauth_setup_cache.clear()
+            self._configuration_reconciled = True
+            self._configuration_valid = True
         await self._event(
             "connector.configuration_changed",
             ConnectorKind.GITHUB,
             {"broker": "composio", "credential_ref": COMPOSIO_CREDENTIAL.key},
         )
+
+    async def reconcile_configuration(self) -> bool:
+        """Revalidate persisted account references after restart or key replacement."""
+        if self._configuration_reconciled:
+            return self._configuration_valid
+        try:
+            async with self.broker_lock:
+                if self._configuration_reconciled:
+                    return self._configuration_valid
+                api_key = self.credential_store.resolve(COMPOSIO_CREDENTIAL)
+                if api_key is None:
+                    self._configuration_reconciled = True
+                    return False
+                await self.gateway.validate_api_key(api_key)
+                del api_key
+                await self._reconcile_bindings()
+                self._oauth_setup_cache.clear()
+        except CredentialUnavailableError:
+            return False
+        except ComposioGatewayError as error:
+            if error.code in {
+                ComposioErrorCode.BROKER_AUTH,
+                ComposioErrorCode.BROKER_PERMISSION,
+            }:
+                await self._record_broker_failure(error.code)
+                self._configuration_reconciled = True
+            return False
+        self._configuration_reconciled = True
+        self._configuration_valid = True
+        return True
+
+    async def _record_broker_failure(self, error_code: ComposioErrorCode) -> None:
+        observed = datetime.now(UTC)
+        for binding in await self.repository.list_all_bindings():
+            await self.repository.save_binding(
+                binding.after_broker_failure(
+                    now=observed,
+                    error_code=error_code.value,
+                )
+            )
+
+    async def _reconcile_bindings(self) -> None:
+        observed = datetime.now(UTC)
+        for binding in await self.repository.list_all_bindings():
+            account = await self.repository.get_account_by_id(
+                binding.workspace_id,
+                binding.account_id,
+            )
+            if account is None:
+                continue
+            reconnect_required = False
+            try:
+                remote = await self.gateway.get_account(account.external_account_id)
+            except ComposioGatewayError as error:
+                if error.code in {
+                    ComposioErrorCode.AUTH,
+                    ComposioErrorCode.BROKER_PERMISSION,
+                    ComposioErrorCode.INPUT,
+                    ComposioErrorCode.NOT_FOUND,
+                }:
+                    reconnect_required = True
+                else:
+                    raise
+            else:
+                expected_toolkit = CONNECTOR_DEFINITIONS[binding.connector].toolkit
+                reconnect_required = (
+                    remote.id != account.external_account_id
+                    or remote.user_id != self.installation_id
+                    or remote.toolkit != expected_toolkit
+                    or not remote.active
+                )
+            if reconnect_required:
+                changed = await self.repository.require_reconnect(
+                    workspace_id=binding.workspace_id,
+                    connector=binding.connector,
+                    account_id=binding.account_id,
+                    now=observed,
+                )
+                if changed:
+                    await self._event(
+                        "connector.reconnect_required",
+                        binding.connector,
+                        {
+                            "workspace_id": binding.workspace_id,
+                            "reason": "project_changed",
+                        },
+                    )
+                continue
+            await self.gateway.ensure_action_allowlist(
+                binding.connector,
+                connected_account_id=account.external_account_id,
+                user_id=self.installation_id,
+            )
+            await self.repository.save_binding_if_current(
+                previous=binding,
+                updated=binding.after_broker_revalidated(now=observed),
+            )
 
     async def connect(self, workspace_id: str, connector: ConnectorKind) -> ConnectHandoff:
         if self.credential_store.resolve(COMPOSIO_CREDENTIAL) is None:
@@ -162,7 +271,7 @@ class ConnectorService:
             return expired
         remote = await self.gateway.get_account(attempt.external_account_id)
         expected_toolkit = CONNECTOR_DEFINITIONS[attempt.connector].toolkit
-        if remote.toolkit != expected_toolkit:
+        if remote.toolkit != expected_toolkit or remote.user_id != self.installation_id:
             remote = remote.model_copy(update={"phase": ConnectionPhase.ERROR})
         if remote.phase is ConnectionPhase.WAITING_USER:
             return attempt
@@ -254,7 +363,9 @@ class ConnectorService:
                     and binding is not None,
                     display_name=account.display_name if account else None,
                     auto_fetch_enabled=binding.auto_fetch_enabled if binding else False,
-                    interval_minutes=binding.interval_minutes if binding else 60,
+                    interval_minutes=(
+                        binding.interval_minutes if binding else DAILY_AUTO_FETCH_INTERVAL_MINUTES
+                    ),
                     last_sync_at=binding.last_sync_at if binding else None,
                     next_sync_at=binding.next_sync_at if binding else None,
                     last_error_code=binding.last_error_code if binding else None,
@@ -286,6 +397,8 @@ class ConnectorService:
             raise LookupError(f"connector binding unavailable: {connector.value}")
         if auto_fetch_enabled and not CONNECTOR_DEFINITIONS[connector].auto_fetch_supported:
             raise PermissionError(f"automatic fetch unsupported: {connector.value}")
+        if interval_minutes != DAILY_AUTO_FETCH_INTERVAL_MINUTES:
+            raise ValueError("connector automatic fetch cadence is fixed to daily")
         updated = ConnectorBinding.model_validate(
             {
                 **binding.model_dump(),

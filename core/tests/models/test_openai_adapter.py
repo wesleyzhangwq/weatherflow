@@ -8,6 +8,7 @@ from weatherflow.capabilities import ToolEffect, ToolSpec
 from weatherflow.continuations import ProviderContinuation
 from weatherflow.extensions import CredentialBroker, CredentialRef, MappingCredentialStore
 from weatherflow.models import (
+    ModelResponseFailureStage,
     OpenAIAuthenticationError,
     OpenAIResponseError,
     OpenAIResponsesAdapter,
@@ -26,9 +27,60 @@ from weatherflow.runtime import (
 SECRET = "openai-secret-never-persist"
 
 
+@pytest.mark.parametrize(
+    ("response", "expected_stage"),
+    [
+        (httpx.Response(400, json={}), ModelResponseFailureStage.HTTP_RESPONSE),
+        (httpx.Response(200, json={"output": []}), ModelResponseFailureStage.CHOICE),
+        (
+            httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "unknown",
+                            "name": "not_registered",
+                            "arguments": "{}",
+                        }
+                    ]
+                },
+            ),
+            ModelResponseFailureStage.MESSAGE,
+        ),
+        (
+            httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "   "}],
+                        }
+                    ]
+                },
+            ),
+            ModelResponseFailureStage.EMPTY_TEXT,
+        ),
+    ],
+)
+async def test_openai_response_errors_expose_only_a_bounded_failure_stage(
+    response: httpx.Response,
+    expected_stage: ModelResponseFailureStage,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return response
+
+    with pytest.raises(OpenAIResponseError) as caught:
+        await adapter(handler).complete(request())
+
+    assert caught.value.stage is expected_stage
+
+
 def request(
     *messages: AgentMessage,
     continuations: tuple[ProviderContinuation, ...] = (),
+    tool_free: bool = False,
 ) -> ModelRequest:
     return ModelRequest(
         run_id="run-openai",
@@ -37,7 +89,9 @@ def request(
             system_prompt="Stay inside the frozen WeatherFlow authority boundary.",
         ),
         messages=messages or (AgentMessage(role=MessageRole.USER, content="Read README.md"),),
-        tools=(
+        tools=()
+        if tool_free
+        else (
             ToolSpec(
                 tool_id="developer.read_file",
                 description="Read a scoped file",
@@ -54,6 +108,7 @@ def request(
             ),
         ),
         provider_continuations=continuations,
+        tool_free=tool_free,
     )
 
 
@@ -179,6 +234,62 @@ async def test_responses_text_tools_usage_and_provider_continuation_round_trip()
         content="完成",
         usage={"input_tokens": 32, "output_tokens": 4},
     )
+
+
+async def test_restricted_tool_free_turn_reconstructs_safe_function_history() -> None:
+    assistant = AgentMessage(
+        role=MessageRole.ASSISTANT,
+        content=json.dumps(
+            {
+                "kind": "tool_call",
+                "call_id": "call-activity",
+                "tool_id": "activity.query_range",
+                "arguments": {"start": "2026-07-17T00:00:00+08:00"},
+            }
+        ),
+    )
+    observation = AgentMessage(
+        role=MessageRole.TOOL,
+        name="activity.query_range",
+        tool_call_id="call-activity",
+        content='{"application_seconds":{"Codex":7200}}',
+    )
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        body = json.loads(http_request.content)
+        assert "tools" not in body
+        assert "tool_choice" not in body
+        assert body["input"][-2]["type"] == "function_call"
+        assert body["input"][-2]["call_id"] == "call-activity"
+        assert body["input"][-2]["name"].startswith("wf_activity_query_range_")
+        assert body["input"][-1] == {
+            "type": "function_call_output",
+            "call_id": "call-activity",
+            "output": '{"application_seconds":{"Codex":7200}}',
+        }
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "完成"}],
+                    }
+                ]
+            },
+        )
+
+    final = await adapter(handler).complete(
+        request(
+            AgentMessage(role=MessageRole.USER, content="总结最近活动"),
+            assistant,
+            observation,
+            tool_free=True,
+        )
+    )
+
+    assert final == FinalTurn(content="完成")
 
 
 async def test_openai_lists_models_and_classifies_http_failures_without_secret() -> None:

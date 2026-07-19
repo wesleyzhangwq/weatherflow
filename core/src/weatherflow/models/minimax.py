@@ -16,6 +16,7 @@ from weatherflow.extensions import (
     CredentialRef,
     CredentialUnavailableError,
 )
+from weatherflow.models.errors import ModelResponseFailureStage
 from weatherflow.models.pricing import (
     PRICING_CATALOG_VERSION,
     ModelTokenPrice,
@@ -51,7 +52,14 @@ class MiniMaxAuthenticationError(MiniMaxError):
 
 
 class MiniMaxResponseError(MiniMaxError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: ModelResponseFailureStage = ModelResponseFailureStage.UNKNOWN,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
 
 
 class OpenAICompatibleAdapter:
@@ -100,7 +108,7 @@ class OpenAICompatibleAdapter:
     async def complete(self, request: ModelRequest) -> ModelTurn | ModelCompletion:
         name_to_tool = {_function_name(tool.tool_id): tool for tool in request.tools}
         tools = [_tool_payload(name, tool) for name, tool in name_to_tool.items()]
-        if not request.agent.is_leaf:
+        if not request.tool_free and not request.agent.is_leaf:
             tools.append(_delegation_payload())
         payload: dict[str, Any] = {
             "model": self.model,
@@ -151,16 +159,25 @@ class OpenAICompatibleAdapter:
             try:
                 payload = response.json()
             except ValueError as error:
-                raise MiniMaxResponseError("model catalog returned invalid JSON") from error
+                raise MiniMaxResponseError(
+                    "model catalog returned invalid JSON",
+                    stage=ModelResponseFailureStage.HTTP_RESPONSE,
+                ) from error
             if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-                raise MiniMaxResponseError("model catalog returned an invalid response")
+                raise MiniMaxResponseError(
+                    "model catalog returned an invalid response",
+                    stage=ModelResponseFailureStage.HTTP_RESPONSE,
+                )
             models = tuple(
                 item["id"]
                 for item in payload["data"]
                 if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
             )
             if not models:
-                raise MiniMaxResponseError("model catalog is empty")
+                raise MiniMaxResponseError(
+                    "model catalog is empty",
+                    stage=ModelResponseFailureStage.PROVIDER_STATUS,
+                )
             return tuple(dict.fromkeys(models))
 
         try:
@@ -171,7 +188,10 @@ class OpenAICompatibleAdapter:
     async def verify(self) -> None:
         models = await self.list_models()
         if self.model not in models:
-            raise MiniMaxResponseError("configured model is not available")
+            raise MiniMaxResponseError(
+                "configured model is not available",
+                stage=ModelResponseFailureStage.PROVIDER_STATUS,
+            )
 
     async def _post(self, payload: dict[str, Any], secret: str) -> dict[str, Any]:
         try:
@@ -187,15 +207,24 @@ class OpenAICompatibleAdapter:
         try:
             value = response.json()
         except ValueError as error:
-            raise MiniMaxResponseError("model provider returned invalid JSON") from error
+            raise MiniMaxResponseError(
+                "model provider returned invalid JSON",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
+            ) from error
         if not isinstance(value, dict):
-            raise MiniMaxResponseError("model provider returned an invalid response object")
+            raise MiniMaxResponseError(
+                "model provider returned an invalid response object",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
+            )
         base_response = value.get("base_resp")
         if isinstance(base_response, dict) and base_response.get("status_code") not in {
             None,
             0,
         }:
-            raise MiniMaxResponseError("model provider returned a provider-level error")
+            raise MiniMaxResponseError(
+                "model provider returned a provider-level error",
+                stage=ModelResponseFailureStage.PROVIDER_STATUS,
+            )
         return value
 
     def _raise_for_status(self, response: httpx.Response) -> None:
@@ -207,7 +236,8 @@ class OpenAICompatibleAdapter:
             )
         if response.is_error:
             raise MiniMaxResponseError(
-                f"{self.provider} request failed with status {response.status_code}"
+                f"{self.provider} request failed with status {response.status_code}",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
             )
 
     def _messages(
@@ -254,23 +284,41 @@ class OpenAICompatibleAdapter:
                         )
                     messages.append(deepcopy(continuation.payload))
                     continue
-                if self.continuation_provider is not None and _assistant_requires_continuation(
-                    message.content
+                if (
+                    not request.tool_free
+                    and self.continuation_provider is not None
+                    and _assistant_requires_continuation(message.content)
                 ):
                     raise ProviderContinuationUnavailableError(
                         "required provider continuation history is unavailable"
                     )
-            messages.append(self._message(message, tool_to_name))
+            messages.append(
+                self._message(
+                    message,
+                    tool_to_name,
+                    allow_historical_tools=request.tool_free,
+                )
+            )
         return messages
 
     @staticmethod
-    def _message(message: AgentMessage, tool_to_name: dict[str, str]) -> dict[str, Any]:
+    def _message(
+        message: AgentMessage,
+        tool_to_name: dict[str, str],
+        *,
+        allow_historical_tools: bool = False,
+    ) -> dict[str, Any]:
         if message.role is MessageRole.ASSISTANT:
             parsed = _assistant_turn(message.content)
             if isinstance(parsed, ToolCallTurn):
                 function_name = tool_to_name.get(parsed.tool_id)
+                if function_name is None and allow_historical_tools:
+                    function_name = _function_name(parsed.tool_id)
                 if function_name is None:
-                    raise MiniMaxResponseError("tool history is outside the frozen snapshot")
+                    raise MiniMaxResponseError(
+                        "tool history is outside the frozen snapshot",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 generated_id = f"wf-{hashlib.sha256(message.content.encode()).hexdigest()[:12]}"
                 return {
                     "role": "assistant",
@@ -295,8 +343,13 @@ class OpenAICompatibleAdapter:
                 tool_calls = []
                 for index, call in enumerate(parsed.calls):
                     function_name = tool_to_name.get(call.tool_id)
+                    if function_name is None and allow_historical_tools:
+                        function_name = _function_name(call.tool_id)
                     if function_name is None:
-                        raise MiniMaxResponseError("tool history is outside the frozen snapshot")
+                        raise MiniMaxResponseError(
+                            "tool history is outside the frozen snapshot",
+                            stage=ModelResponseFailureStage.MESSAGE,
+                        )
                     fingerprint = hashlib.sha256(f"{message.content}:{index}".encode()).hexdigest()[
                         :12
                     ]
@@ -319,6 +372,8 @@ class OpenAICompatibleAdapter:
                 return {"role": "assistant", "content": None, "tool_calls": tool_calls}
         if message.role is MessageRole.TOOL:
             function_name = tool_to_name.get(message.name or "")
+            if function_name is None and allow_historical_tools and message.name:
+                function_name = _function_name(message.name)
             if function_name is None or message.tool_call_id is None:
                 return {
                     "role": "user",
@@ -339,10 +394,16 @@ class OpenAICompatibleAdapter:
     ) -> ModelTurn | ModelCompletion:
         choices = response.get("choices")
         if not isinstance(choices, list) or len(choices) != 1:
-            raise MiniMaxResponseError("model provider returned an invalid choice count")
+            raise MiniMaxResponseError(
+                "model provider returned an invalid choice count",
+                stage=ModelResponseFailureStage.CHOICE,
+            )
         message = choices[0].get("message")
         if not isinstance(message, dict):
-            raise MiniMaxResponseError("model provider returned no assistant message")
+            raise MiniMaxResponseError(
+                "model provider returned no assistant message",
+                stage=ModelResponseFailureStage.MESSAGE,
+            )
         usage = _usage(response.get("usage"), self.token_price)
         provider_message = deepcopy(message)
         provider_message.setdefault("role", "assistant")
@@ -364,19 +425,26 @@ class OpenAICompatibleAdapter:
         calls = message.get("tool_calls")
         if calls:
             if not isinstance(calls, list) or not 1 <= len(calls) <= 8:
-                raise MiniMaxResponseError("model provider returned an invalid tool call count")
+                raise MiniMaxResponseError(
+                    "model provider returned an invalid tool call count",
+                    stage=ModelResponseFailureStage.MESSAGE,
+                )
             parsed_calls: list[ToolCallTurn] = []
             delegation: DelegationTurn | None = None
             for call in calls:
                 function = call.get("function") if isinstance(call, dict) else None
                 if not isinstance(function, dict):
-                    raise MiniMaxResponseError("model provider returned an invalid tool call")
+                    raise MiniMaxResponseError(
+                        "model provider returned an invalid tool call",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 name = function.get("name")
                 arguments = _arguments(function.get("arguments"))
                 if name == DELEGATE_FUNCTION:
                     if len(calls) != 1:
                         raise MiniMaxResponseError(
-                            "delegation cannot be mixed with a tool-call batch"
+                            "delegation cannot be mixed with a tool-call batch",
+                            stage=ModelResponseFailureStage.MESSAGE,
                         )
                     try:
                         delegation = DelegationTurn(
@@ -386,12 +454,16 @@ class OpenAICompatibleAdapter:
                         )
                     except (KeyError, TypeError, ValueError) as error:
                         raise MiniMaxResponseError(
-                            "model provider returned invalid delegation"
+                            "model provider returned invalid delegation",
+                            stage=ModelResponseFailureStage.MESSAGE,
                         ) from error
                     continue
                 tool = name_to_tool.get(str(name))
                 if tool is None:
-                    raise MiniMaxResponseError("model provider returned an unknown function")
+                    raise MiniMaxResponseError(
+                        "model provider returned an unknown function",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 parsed_calls.append(
                     ToolCallTurn(
                         call_id=str(call.get("id")) if call.get("id") else None,
@@ -406,10 +478,16 @@ class OpenAICompatibleAdapter:
             return completed(ToolCallBatchTurn(calls=tuple(parsed_calls), usage=usage))
         content = message.get("content")
         if not isinstance(content, str):
-            raise MiniMaxResponseError("model provider returned neither text nor a tool call")
+            raise MiniMaxResponseError(
+                "model provider returned neither text nor a tool call",
+                stage=ModelResponseFailureStage.MESSAGE,
+            )
         cleaned = THINK_PATTERN.sub("", content).strip()
         if not cleaned:
-            raise MiniMaxResponseError("model provider returned empty final text")
+            raise MiniMaxResponseError(
+                "model provider returned empty final text",
+                stage=ModelResponseFailureStage.EMPTY_TEXT,
+            )
         return completed(FinalTurn(content=cleaned, usage=usage))
 
     def __repr__(self) -> str:
@@ -517,9 +595,15 @@ def _arguments(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(value) if isinstance(value, str) else value
     except ValueError as error:
-        raise MiniMaxResponseError("MiniMax returned malformed function arguments") from error
+        raise MiniMaxResponseError(
+            "MiniMax returned malformed function arguments",
+            stage=ModelResponseFailureStage.MESSAGE,
+        ) from error
     if not isinstance(parsed, dict):
-        raise MiniMaxResponseError("MiniMax function arguments must be an object")
+        raise MiniMaxResponseError(
+            "MiniMax function arguments must be an object",
+            stage=ModelResponseFailureStage.MESSAGE,
+        )
     return parsed
 
 

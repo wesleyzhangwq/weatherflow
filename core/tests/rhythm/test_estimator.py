@@ -3,8 +3,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from weatherflow.rhythm import (
-    ActivityMetadata,
-    AppCategory,
     CheckInSignal,
     CorrectionSignal,
     RhythmEstimator,
@@ -35,21 +33,6 @@ def test_deliberate_signals_project_stable_weather(text: str, scene: WeatherScen
     snapshot = RhythmEstimator().estimate("workspace-1", [checkin(text)], now=NOW)
 
     assert project_weather(snapshot, now=NOW).scene is scene
-
-
-def test_high_switch_metadata_projects_fragmentation() -> None:
-    signal = ActivityMetadata(
-        observed_at=NOW,
-        window_start=NOW - timedelta(minutes=10),
-        window_end=NOW,
-        active_seconds=540,
-        idle_seconds=60,
-        app_switch_count=35,
-        category_seconds={AppCategory.DEVELOPMENT: 400, AppCategory.COMMUNICATION: 140},
-    )
-    snapshot = RhythmEstimator().estimate("workspace-1", [("event-1", signal)], now=NOW)
-
-    assert project_weather(snapshot, now=NOW).scene is WeatherScene.FOG
 
 
 def test_correction_outweighs_prior_hypothesis_without_mutating_fact() -> None:

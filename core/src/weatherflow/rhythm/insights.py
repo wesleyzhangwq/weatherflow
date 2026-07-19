@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weatherflow.events import Event, EventLedger
 from weatherflow.memory import ProfileAssertionRepository, ProfileAssertionStatus
-from weatherflow.rhythm.models import ActivityMetadata, AppCategory, TaskBehaviorSignal
+from weatherflow.rhythm.models import AppCategory, TaskBehaviorSignal
 from weatherflow.rhythm.service import CurrentRhythm, RhythmService
 
 
@@ -99,22 +99,6 @@ def _behavior_insight(event: Event) -> RecentBehaviorInsight | None:
     if not isinstance(signal_payload, dict):
         return None
     try:
-        if event.type == "rhythm.signal.activity_metadata":
-            signal = ActivityMetadata.model_validate(signal_payload)
-            dominant_category = (
-                max(signal.category_seconds, key=signal.category_seconds.get)
-                if signal.category_seconds
-                else None
-            )
-            return RecentBehaviorInsight(
-                id=event.id,
-                kind="activity",
-                observed_at=signal.observed_at,
-                active_minutes=round(signal.active_seconds / 60, 1),
-                idle_minutes=round(signal.idle_seconds / 60, 1),
-                app_switch_count=signal.app_switch_count,
-                dominant_category=dominant_category,
-            )
         if event.type == "rhythm.signal.task_behavior":
             signal = TaskBehaviorSignal.model_validate(signal_payload)
             return RecentBehaviorInsight(

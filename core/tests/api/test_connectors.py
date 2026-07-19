@@ -129,6 +129,11 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
         settings = await client.post(
             "/v1/connectors/github/settings",
             params={"workspace_id": workspace_id},
+            json={"auto_fetch_enabled": False, "interval_minutes": 1440},
+        )
+        invalid_cadence = await client.post(
+            "/v1/connectors/github/settings",
+            params={"workspace_id": workspace_id},
             json={"auto_fetch_enabled": False, "interval_minutes": 120},
         )
         synced = await client.post(
@@ -164,6 +169,7 @@ async def test_connector_api_exposes_handoff_status_settings_sync_and_disconnect
     assert handoff.json()["connect_url"].startswith("https://connect.composio.dev/")
     assert refreshed.json()["phase"] == "active"
     assert settings.status_code == 204
+    assert invalid_cadence.status_code == 422
     assert synced.json()["items"] == []
     assert disconnected.status_code == 204
     assert calls[0] == ("configure", None)
@@ -180,7 +186,43 @@ async def test_disconnect_requires_explicit_confirmation(tmp_path: Path) -> None
     assert response.json()["detail"]["code"] == "explicit_confirmation_required"
 
 
-async def test_composio_failures_are_typed_and_never_expose_secret_or_upstream_body(
+async def test_broker_project_key_failures_are_typed_without_exposing_secrets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+
+    async def reject(_service: ConnectorService) -> None:
+        raise ComposioGatewayError(ComposioErrorCode.BROKER_AUTH)
+
+    monkeypatch.setattr(ConnectorService, "configure", reject)
+    transport = ASGITransport(app=create_app(container=container))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/connectors/configure")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "connector_broker_auth", "retryable": False}}
+
+
+async def test_broker_project_key_permission_failures_are_not_reported_as_invalid_keys(
+    tmp_path: Path, monkeypatch
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+
+    async def reject(_service: ConnectorService) -> None:
+        raise ComposioGatewayError(ComposioErrorCode.BROKER_PERMISSION)
+
+    monkeypatch.setattr(ConnectorService, "configure", reject)
+    transport = ASGITransport(app=create_app(container=container))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/connectors/configure")
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": {"code": "connector_broker_permission", "retryable": False}
+    }
+
+
+async def test_provider_oauth_failures_have_a_distinct_public_code(
     tmp_path: Path, monkeypatch
 ) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
@@ -194,7 +236,7 @@ async def test_composio_failures_are_typed_and_never_expose_secret_or_upstream_b
         response = await client.post("/v1/connectors/configure")
 
     assert response.status_code == 401
-    assert response.json() == {"detail": {"code": "connector_broker_auth", "retryable": False}}
+    assert response.json() == {"detail": {"code": "connector_provider_auth", "retryable": False}}
 
 
 async def test_missing_byo_auth_config_is_a_typed_conflict(tmp_path: Path, monkeypatch) -> None:

@@ -115,10 +115,13 @@ async def test_gateway_uses_connect_link_v3_and_versioned_v31_execution() -> Non
 
 def test_reviewed_actions_pin_the_live_toolkit_version_per_connector() -> None:
     assert COMPOSIO_ACTION_VERSIONS["GITHUB_GET_THE_AUTHENTICATED_USER"] == "20260713_00"
+    assert COMPOSIO_ACTION_VERSIONS["GITHUB_LIST_NOTIFICATIONS"] == "20260713_00"
+    assert "GITHUB_LIST_NOTIFICATIONS_FOR_THE_AUTHENTICATED_USER" not in (COMPOSIO_ACTION_VERSIONS)
     assert COMPOSIO_ACTION_VERSIONS["GITHUB_SEARCH_COMMITS"] == "20260713_00"
     assert COMPOSIO_ACTION_VERSIONS["GMAIL_FETCH_EMAILS"] == "20260702_01"
     assert COMPOSIO_ACTION_VERSIONS["GMAIL_SEND_EMAIL"] == "20260702_01"
     assert COMPOSIO_ACTION_VERSIONS["GOOGLECALENDAR_EVENTS_LIST"] == "20260623_00"
+    assert COMPOSIO_ACTION_VERSIONS["GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS"] == "20260623_00"
     assert COMPOSIO_ACTION_VERSIONS["GOOGLECALENDAR_CREATE_EVENT"] == "20260623_00"
 
 
@@ -231,7 +234,7 @@ async def test_gateway_closes_only_the_http_client_it_owns() -> None:
     await external.aclose()
 
 
-async def test_gateway_classifies_and_redacts_upstream_auth_errors() -> None:
+async def test_gateway_classifies_and_redacts_broker_project_key_auth_errors() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": {"message": SECRET}})
 
@@ -244,8 +247,53 @@ async def test_gateway_classifies_and_redacts_upstream_auth_errors() -> None:
     with pytest.raises(ComposioGatewayError) as raised:
         await gateway.validate()
 
-    assert raised.value.code is ComposioErrorCode.AUTH
+    assert raised.value.code is ComposioErrorCode.BROKER_AUTH
     assert SECRET not in str(raised.value)
+
+
+async def test_gateway_distinguishes_missing_project_key_permissions() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": {"message": SECRET}})
+
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ComposioGatewayError) as raised:
+        await gateway.validate_api_key(SECRET)
+
+    assert raised.value.code is ComposioErrorCode.BROKER_PERMISSION
+    assert SECRET not in str(raised.value)
+
+
+async def test_api_key_validation_probes_every_required_read_permission() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/v3/auth_configs":
+            return httpx.Response(200, json={"items": []})
+        if request.url.path == "/api/v3/connected_accounts":
+            return httpx.Response(200, json={"items": []})
+        if request.url.path == "/api/v3.1/toolkits/github":
+            return httpx.Response(200, json={"composio_managed_auth_schemes": ["OAUTH2"]})
+        raise AssertionError(request.url)
+
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    await gateway.validate_api_key(SECRET)
+
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("GET", "/api/v3/auth_configs"),
+        ("GET", "/api/v3/connected_accounts"),
+        ("GET", "/api/v3.1/toolkits/github"),
+    ]
 
 
 async def test_missing_auth_config_is_created_with_managed_auth_and_fixed_actions() -> None:
@@ -533,3 +581,96 @@ async def test_execute_tool_redacts_provider_failure_payload() -> None:
     assert raised.value.code is ComposioErrorCode.UPSTREAM
     assert provider_secret not in str(raised.value)
     assert provider_secret not in repr(raised.value)
+
+
+async def test_execute_tool_classifies_wrapped_upstream_503_as_retryable() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "successful": False,
+                "auth_refresh_required": False,
+                "mercury_last_http_status_code": 503,
+                "error": "provider detail must not escape",
+            },
+        )
+
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ComposioGatewayError) as raised:
+        await gateway.execute_tool(
+            action="GITHUB_GET_THE_AUTHENTICATED_USER",
+            version=COMPOSIO_ACTION_VERSIONS["GITHUB_GET_THE_AUTHENTICATED_USER"],
+            connected_account_id="ca_github",
+            user_id=USER_ID,
+            arguments={},
+        )
+
+    assert raised.value.code is ComposioErrorCode.UPSTREAM
+    assert raised.value.retryable is True
+    assert "provider detail" not in str(raised.value)
+
+
+async def test_execute_tool_keeps_wrapped_provider_401_as_oauth_reconnect() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "successful": False,
+                "auth_refresh_required": False,
+                "mercury_last_http_status_code": 401,
+                "error": "provider credential detail must not escape",
+            },
+        )
+
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ComposioGatewayError) as raised:
+        await gateway.execute_tool(
+            action="GITHUB_GET_THE_AUTHENTICATED_USER",
+            version=COMPOSIO_ACTION_VERSIONS["GITHUB_GET_THE_AUTHENTICATED_USER"],
+            connected_account_id="ca_github",
+            user_id=USER_ID,
+            arguments={},
+        )
+
+    assert raised.value.code is ComposioErrorCode.AUTH
+    assert "provider credential detail" not in str(raised.value)
+
+
+async def test_execute_tool_classifies_explicit_auth_refresh_as_oauth_reconnect() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "successful": False,
+                "auth_refresh_required": True,
+                "error": "provider refresh detail must not escape",
+            },
+        )
+
+    gateway = ComposioGateway(
+        broker=CredentialBroker(MappingCredentialStore({REFERENCE.key: SECRET})),
+        credential_ref=REFERENCE,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ComposioGatewayError) as raised:
+        await gateway.execute_tool(
+            action="GITHUB_GET_THE_AUTHENTICATED_USER",
+            version=COMPOSIO_ACTION_VERSIONS["GITHUB_GET_THE_AUTHENTICATED_USER"],
+            connected_account_id="ca_github",
+            user_id=USER_ID,
+            arguments={},
+        )
+
+    assert raised.value.code is ComposioErrorCode.AUTH
+    assert "provider refresh detail" not in str(raised.value)

@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Brain, CaretDown, ChatCircleDots, Check, CheckCircle, ClockCounterClockwise, Cloud, CloudSun,
-  Desktop, DotsThree, FolderOpen, GearSix, ListChecks, ListDashes, MagnifyingGlass, MicrosoftOutlookLogo,
+  Desktop, DotsThree, Eye, FolderOpen, GearSix, ListChecks, ListDashes, MagnifyingGlass, MicrosoftOutlookLogo,
   MicrosoftTeamsLogo, Moon, Paperclip, PaperPlaneRight, PencilSimple, PlugsConnected, Plus, Pulse, PushPin,
-  Robot, ShieldCheck, SlackLogo, Sun, Trash, Waves, Wrench,
+  Robot, ShieldCheck, SlackLogo, Sun, Trash, WarningCircle, Waves, Wrench,
 } from "@phosphor-icons/react";
 import {
   SiAirtable, SiAsana, SiClickup, SiConfluence, SiDiscord, SiDropbox, SiGithub, SiGitlab, SiGmail,
   SiGooglecalendar, SiGoogledrive, SiGooglesheets, SiJira, SiLinear, SiNotion, SiTrello,
 } from "@icons-pack/react-simple-icons";
-import { WeatherFlowClient } from "../bridge";
+import { WeatherFlowBridgeError, WeatherFlowClient } from "../bridge";
 import { nativeCredentials, nativeWindows, type CredentialProvider } from "../native";
 import { getThemePreference, setThemePreference, type ThemePreference } from "../theme";
 import { AutomationView, MCPServersView, SkillsView } from "./ToolViews";
-import { ScreenTimePanel } from "./ScreenTimePanel";
+import { WatchView } from "./WatchView";
 import type {
-  Approval, Artifact, ConnectionAttempt, ConnectorKind, ConnectorStatus, DesktopSnapshot,
-  LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, RhythmDimensionEstimate, RhythmDimensionName,
-  RhythmInsights, Run, Session, SystemStatus, ToolMode, Workspace,
+  ActivitySummarySettings, Approval, Artifact, ConnectionAttempt, ConnectorKind, ConnectorStatus, DesktopSnapshot,
+  LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, Run, Session, SystemStatus, ToolMode, Workspace,
 } from "../types";
 
-type ViewId = "chat" | "runs" | "rhythm" | "automations" | "skills" | "mcp" | "models" | "oauth" | "settings";
+type ViewId = "chat" | "runs" | "watch" | "automations" | "skills" | "mcp" | "models" | "oauth" | "settings";
 
 const runStatusText: Record<Run["status"], string> = {
   queued: "已排队", planning: "规划中", running: "执行中", waiting_approval: "等待批准",
@@ -36,12 +35,6 @@ function conversationTitle(intent: string): string {
   return compact.length > 24 ? `${compact.slice(0, 24)}…` : compact;
 }
 const weatherText = { clear: "晴朗 · 心流", fair: "微晴 · 稳定", fog: "薄雾 · 分散", storm: "风暴 · 过载", still: "静滞 · 受阻", night: "夜色 · 恢复", mixed: "混合 · 待确认" } as const;
-const workModeText: Record<string, string> = { normal: "常规协作", focus: "专注推进", recovery: "轻量恢复", overloaded: "减负协作" };
-const rhythmSummaryText: Record<string, string> = { "Steady rhythm": "节奏稳定" };
-const dimensionText: Record<RhythmDimensionName, string> = { energy: "能量", cognitive_load: "认知负荷", fragmentation: "注意力碎片", momentum: "推进势能", friction: "行动阻力", recovery_need: "恢复需求" };
-const categoryText: Record<string, string> = { development: "开发", communication: "沟通", research: "研究", planning: "规划", creative: "创作", other: "其他" };
-const outcomeText: Record<string, string> = { succeeded: "任务完成", failed: "任务受阻", needs_review: "任务待检查" };
-const originText: Record<string, string> = { user: "由你确认", agent: "对话中形成", derived: "行为证据推断" };
 function presetModelOptions(provider: ModelProviderPreset): ProviderModel[] {
   return provider.suggested_models.map((id) => ({
     id, selectable: true, compatibility: "agent_ready", note: null,
@@ -66,6 +59,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const selectedRunIdRef = useRef<string | null>(null);
   const refreshGeneration = useRef(0);
+  const sessionRefreshGeneration = useRef(0);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [timeline, setTimeline] = useState<LedgerEvent[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -73,7 +67,6 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
   const [providers, setProviders] = useState<ModelProviderPreset[]>([]);
   const [resetPreview, setResetPreview] = useState<ResetPreview | null>(null);
   const [operation, setOperation] = useState<string | null>(null);
-  const [rhythmInsights, setRhythmInsights] = useState<RhythmInsights | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [sending, setSending] = useState(false);
   const [toolMode, setToolMode] = useState<ToolMode>("ask");
@@ -117,10 +110,21 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
   }, [client, selectedWorkspaceId]);
 
   const refreshSessions = useCallback(async (preferredSessionId?: string | null) => {
+    const generation = sessionRefreshGeneration.current + 1;
+    sessionRefreshGeneration.current = generation;
     if (!selectedWorkspaceId || typeof (client as Partial<WeatherFlowClient>).sessions !== "function") {
-      setSessions([]); setSelectedSessionId(null); return;
+      if (generation === sessionRefreshGeneration.current) {
+        setSessions([]); setSelectedSessionId(null);
+      }
+      return;
     }
-    const next = await client.sessions(selectedWorkspaceId);
+    let next: Session[];
+    try {
+      next = await client.sessions(selectedWorkspaceId);
+    } catch {
+      return;
+    }
+    if (generation !== sessionRefreshGeneration.current) return;
     setSessions(next);
     setSelectedSessionId((current) => {
       const requested = preferredSessionId ?? current;
@@ -129,6 +133,18 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
     });
   }, [client, selectedWorkspaceId]);
 
+  useEffect(() => {
+    refreshGeneration.current += 1;
+    sessionRefreshGeneration.current += 1;
+    setRuns([]);
+    setSessions([]);
+    setSelectedSessionId(null);
+    selectedRunIdRef.current = null;
+    setSelectedRunId(null);
+    setApprovals([]);
+    setTimeline([]);
+    setArtifacts([]);
+  }, [selectedWorkspaceId]);
   useEffect(() => { void refresh(); }, [refresh, snapshot]);
   useEffect(() => { void refreshSessions(); }, [refreshSessions, snapshot]);
   useEffect(() => {
@@ -154,45 +170,47 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
       void client.modelProviders().then((items) => setProviders(items));
     }
   }, [client, providers.length]);
-  useEffect(() => {
-    if (view !== "rhythm" || typeof (client as Partial<WeatherFlowClient>).rhythmInsights !== "function") return;
-    let current = true;
-    setRhythmInsights(null);
-    void client.rhythmInsights(selectedWorkspaceId).then((insights) => {
-      if (current) setRhythmInsights(insights);
-    }).catch(() => {
-      if (current) setRhythmInsights(null);
-    });
-    return () => { current = false; };
-  }, [client, selectedWorkspaceId, snapshot?.rhythm.snapshot.id, view]);
-
   const submitChat = async (event: FormEvent) => {
     event.preventDefault();
     const intent = chatInput.trim();
-    if (!intent || !selectedWorkspaceId || sending || (sessionsEnabled && !activeSession)) return;
+    if (!intent || !selectedWorkspaceId || sending) return;
     setSending(true); setOperation(null);
     try {
-      const contextRunId = sessionsEnabled ? activeSession?.latest_run_id ?? null : run?.id;
-      const accepted = await client.createRun(intent, crypto.randomUUID(), selectedWorkspaceId, contextRunId, sessionsEnabled ? activeSession?.id : undefined, toolMode);
+      let targetSession = activeSession;
+      if (sessionsEnabled && !targetSession) {
+        const created = await client.createSession(selectedWorkspaceId);
+        targetSession = created;
+        setSessions((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setSelectedSessionId(created.id);
+      }
+      const contextRunId = sessionsEnabled ? targetSession?.latest_run_id ?? null : run?.id;
+      const accepted = await client.createRun(intent, crypto.randomUUID(), selectedWorkspaceId, contextRunId, sessionsEnabled ? targetSession?.id : undefined, toolMode);
       selectedRunIdRef.current = accepted.id;
       setSelectedRunId(accepted.id);
       setRuns((current) => [accepted, ...current.filter((item) => item.id !== accepted.id)]);
-      if (activeSession) {
-        const title = activeSession.title === "新对话" ? conversationTitle(intent) : activeSession.title;
+      if (targetSession) {
+        const session = targetSession;
+        const title = session.title === "新对话" ? conversationTitle(intent) : session.title;
         let persistedSession: Session | null = null;
-        if (activeSession.title === "新对话") {
+        if (session.title === "新对话") {
           try {
-            persistedSession = await client.updateSession(activeSession.id, selectedWorkspaceId, { title });
+            persistedSession = await client.updateSession(session.id, selectedWorkspaceId, { title });
           } catch {
             setOperation("消息已发送，但会话标题暂未保存。");
           }
         }
-        setSessions((current) => current.map((item) => item.id === activeSession.id
+        setSessions((current) => current.map((item) => item.id === session.id
           ? { ...item, ...persistedSession, latest_run_id: accepted.id, title, updated_at: accepted.updated_at }
           : item));
       }
       setChatInput("");
-      await refresh(accepted.id);
+      try {
+        await refresh(accepted.id);
+      } catch {
+        setOperation("消息已发送，但对话状态暂未刷新。任务会继续运行，请稍后再查看。");
+      }
+    } catch {
+      setOperation("消息未发送；输入内容已保留，请重试。");
     } finally { setSending(false); }
   };
   const selectRun = (runId: string) => {
@@ -257,7 +275,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
         <nav aria-label="主导航">
           <NavButton active={view === "chat"} icon={<ChatCircleDots />} label="对话" onClick={() => setView("chat")} />
           <NavButton active={view === "runs"} icon={<ListChecks />} label="任务" badge={pending.length || undefined} onClick={() => setView("runs")} />
-          <NavButton active={view === "rhythm"} icon={<CloudSun />} label="状态天气" onClick={() => setView("rhythm")} />
+          <NavButton active={view === "watch"} icon={<Eye />} label="Watch" onClick={() => setView("watch")} />
           <span className="nav-group-label">工具</span>
           <NavButton active={view === "automations"} icon={<ClockCounterClockwise />} label="自动化" onClick={() => setView("automations")} />
           <NavButton active={view === "skills"} icon={<Brain />} label="Skills" onClick={() => setView("skills")} />
@@ -276,7 +294,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
       <section className="app-workspace">
         {view === "chat" && <ChatView client={client} providers={providers} workspaceId={selectedWorkspaceId} sessions={sessions} sessionsEnabled={sessionsEnabled} activeSession={activeSession} runs={runs} run={run} pending={pending} artifacts={artifacts} chatInput={chatInput} sending={sending} toolMode={toolMode} workspaceReady={Boolean(selectedWorkspaceId)} snapshot={snapshot} system={system} onInput={setChatInput} onToolMode={setToolMode} onSubmit={submitChat} onSelectRun={selectRun} onSelectSession={selectSession} onCreateSession={createConversation} onUpdateSession={updateConversation} onDeleteSession={deleteConversation} onDecide={decide} onDownload={downloadArtifact} onModelChanged={refresh} onOpenSettings={() => setView("models")} />}
         {view === "runs" && <RunsView runs={runs} run={run} timeline={timeline} artifacts={artifacts} pending={pending} onSelect={selectRun} onDecide={decide} onDownload={downloadArtifact} />}
-        {view === "rhythm" && <RhythmView client={client} workspaceId={selectedWorkspaceId} snapshot={snapshot} insights={rhythmInsights} />}
+        {view === "watch" && <WatchView client={client} workspaceId={selectedWorkspaceId} />}
         {view === "automations" && <AutomationView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
         {view === "skills" && <SkillsView client={client} workspace={selectedWorkspace} onOperation={setOperation} />}
         {view === "mcp" && <MCPServersView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
@@ -303,7 +321,7 @@ function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, a
         .sort((left, right) => Date.parse(left.updated_at) - Date.parse(right.updated_at))
       : []
     : [...runs].reverse();
-  const chatReady = workspaceReady && (!sessionsEnabled || Boolean(activeSession));
+  const chatReady = workspaceReady;
   return <div className={`chat-layout ${sessionsEnabled ? "has-session-rail" : ""}`}>
     {sessionsEnabled && <ConversationRail sessions={sessions} activeSessionId={activeSession?.id ?? null} workspaceReady={workspaceReady} onSelect={onSelectSession} onCreate={onCreateSession} onUpdate={onUpdateSession} onDelete={onDeleteSession} />}
     <section className="conversation-pane">
@@ -318,14 +336,14 @@ function ChatView({ client, providers, workspaceId, sessions, sessionsEnabled, a
       <div className="conversation-scroll">
         {displayedRuns.length === 0 && <div className="chat-empty"><h2>说出你真正想完成的事</h2><p>WeatherFlow 会结合你的状态调整协作方式，在后台保存任务进度，只在需要决定时打断你。</p><div className="empty-promises"><span><ShieldCheck /> 关键操作先批准</span><span><CheckCircle /> 任务进度可恢复</span></div></div>}
         {displayedRuns.map((item) => <article className={`conversation-turn ${item.id === run?.id ? "selected" : ""}`} key={item.id}>
-          <button className="conversation-select" aria-label={`查看任务：${item.user_intent}`} onClick={() => onSelectRun(item.id)}>
+          <div className="conversation-select" role="button" tabIndex={0} aria-label={`查看任务：${item.user_intent}`} onClick={() => { const selection = window.getSelection(); if (selection && !selection.isCollapsed) return; onSelectRun(item.id); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectRun(item.id); } }}>
             <span className="message-label">你</span><div className="user-message">{item.user_intent}</div>
             <div className="assistant-message"><span className="message-label">WeatherFlow</span><p>{runMessage(item)}</p><small><span className={`run-dot ${item.status}`} />{runStatusText[item.status]} · {formatRelativeTime(item.updated_at)}</small></div>
-          </button>
+          </div>
         </article>)}
       </div>
       <div className="composer-shell">
-        <form className="chat-composer" onSubmit={(event) => { if (composing.current) { event.preventDefault(); return; } onSubmit(event); }}><textarea aria-label="对话输入" rows={1} value={chatInput} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !composing.current) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={!workspaceReady ? "先在左下角选择或添加项目" : sessionsEnabled && !activeSession ? "先新建一个对话…" : "给 WeatherFlow 发消息…"} /><button className="send-button" aria-label="发送" disabled={sending || !chatReady || !chatInput.trim()}><PaperPlaneRight weight="fill" /></button></form>
+        <form className="chat-composer" onSubmit={(event) => { if (composing.current) { event.preventDefault(); return; } onSubmit(event); }}><textarea aria-label="对话输入" rows={1} value={chatInput} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229 && !composing.current) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={!workspaceReady ? "先在左下角选择或添加项目" : "给 WeatherFlow 发消息…"} /><button className="send-button" aria-label="发送" disabled={sending || !chatReady || !chatInput.trim()}><PaperPlaneRight weight="fill" /></button></form>
         <footer className="composer-meta">{workspaceReady ? <div className="composer-controls"><button className="attachment-button" type="button"><Paperclip /><span>添加附件</span></button><ModelSwitcher client={client} providers={providers} workspaceId={workspaceId} system={system} disabled={sending} onChanged={onModelChanged} onOpenSettings={onOpenSettings} /><ToolModeToggle value={toolMode} disabled={sending} onChange={onToolMode} /></div> : <span>先选择或添加一个项目，才能开始任务</span>}<span>Enter 发送 · Shift + Enter 换行</span></footer>
       </div>
     </section>
@@ -503,33 +521,7 @@ function ContextContent({ pending, artifacts, onDecide, onDownload }: { pending:
 }
 
 function RunsView({ runs, run, timeline, artifacts, pending, onSelect, onDecide, onDownload }: { runs: Run[]; run: Run | null; timeline: LedgerEvent[]; artifacts: Artifact[]; pending: Approval[]; onSelect: (id: string) => void; onDecide: (approval: Approval, decision: "approve" | "deny") => void; onDownload: (artifact: Artifact) => void }) {
-  return <div className="page-view"><header className="page-header"><span>任务</span><h1>执行、批准与产出</h1><p>这里展示智能体的工作状态；你的状态天气始终独立，不会被任务成败覆盖。</p></header><div className="runs-layout"><nav className="run-list" aria-label="任务列表">{runs.length === 0 ? <div className="run-list-empty">暂无任务</div> : runs.map((item) => <button className={item.id === run?.id ? "selected" : ""} key={item.id} onClick={() => onSelect(item.id)} aria-pressed={item.id === run?.id} aria-label={`${item.user_intent}，${runStatusText[item.status]}`}><span>{item.user_intent}</span><small><i className={`run-dot ${item.status}`} />{runStatusText[item.status]} · {formatRelativeTime(item.updated_at)}</small></button>)}</nav><section className="run-detail">{run ? <><div className="run-detail-heading"><span className={`status-pill ${run.status}`}>{runStatusText[run.status]}</span><time>{formatRelativeTime(run.updated_at)}</time></div><h2>{run.user_intent}</h2><div className="run-result"><span>当前结果</span><p>{runMessage(run)}</p></div><div className="section-heading"><h3>执行记录</h3><small>{timeline.length} 个事件</small></div>{timeline.length ? <ol className="timeline">{timeline.slice(-12).reverse().map((event) => <li key={event.id}><i /><div><strong>{formatEventType(event.type)}</strong><time>{new Date(event.recorded_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div></li>)}</ol> : <div className="detail-empty">等待第一条执行记录</div>}</> : <div className="detail-empty centered">选择一个任务查看完整执行记录</div>}</section><aside className="run-context"><div className="context-heading"><Wrench /><span>任务上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside></div></div>;
-}
-
-function RhythmView({ client, workspaceId, snapshot, insights }: { client: WeatherFlowClient; workspaceId?: string | null; snapshot: DesktopSnapshot | null; insights: RhythmInsights | null }) {
-  const current = insights?.current ?? snapshot?.rhythm;
-  const scene = current?.weather.scene ?? "mixed";
-  const intensity = Math.round((current?.weather.intensity ?? 0) * 100);
-  const rawSummary = current?.snapshot.summary;
-  const summary = rawSummary ? rhythmSummaryText[rawSummary] ?? rawSummary : "当前证据不足，WeatherFlow 会保持谨慎判断。";
-  const rawWorkMode = current?.policy.work_mode;
-  const workMode = rawWorkMode ? workModeText[rawWorkMode] ?? rawWorkMode : "等待判断";
-  const dimensions = Object.entries(current?.snapshot.dimensions ?? {}) as [RhythmDimensionName, RhythmDimensionEstimate][];
-  return <div className="page-view rhythm-view"><header className="page-header"><span>状态天气</span><h1>你的节奏与长期模式</h1><p>这里集中展示 WeatherFlow 对你当前状态、近期行为和长期偏好的理解；所有内容只读、可追溯，不承担对话输入。</p></header><div className="rhythm-content">
-    <section className="status-overview"><div className="insight-section-heading"><div><span>此刻</span><h2>当前状态</h2></div><small>{current?.snapshot.observed_at ? `更新于 ${formatRelativeTime(current.snapshot.observed_at)}` : "等待状态证据"}</small></div><div className="rhythm-hero" data-scene={scene}><div className="rhythm-weather-icon"><CloudSun size={42} /></div><div className="rhythm-summary"><small>当前天气</small><h3>{weatherText[scene]}</h3><p>{summary}</p></div><dl><div><dt>协作模式</dt><dd>{workMode}</dd></div><div><dt>天气强度</dt><dd>{intensity}%</dd></div><div><dt>判断时效</dt><dd>{current ? new Date(current.snapshot.valid_until).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div></dl></div>
-      <div className="rhythm-dimensions">{dimensions.length ? dimensions.map(([name, estimate]) => <article key={name}><div><span>{dimensionText[name]}</span><strong>{Math.round(estimate.value * 100)}%</strong></div><div className="dimension-track"><i style={{ width: `${Math.round(estimate.value * 100)}%` }} /></div><small>置信度 {Math.round(estimate.confidence * 100)}%</small></article>) : <div className="rhythm-empty compact">状态维度正在积累证据，暂不展示精确数值。</div>}</div>
-    </section>
-    <ScreenTimePanel client={client} workspaceId={workspaceId} />
-    <div className="rhythm-insight-grid"><section className="insight-panel"><div className="insight-section-heading"><div><span>近期记录</span><h2>近期行为</h2></div><ClockCounterClockwise /></div>{insights?.recent_behaviors.length ? <ol className="behavior-list">{insights.recent_behaviors.map((behavior) => <li key={behavior.id}><i><Pulse /></i><div><strong>{behavior.kind === "activity" ? `${categoryText[behavior.dominant_category ?? "other"]}活动` : outcomeText[behavior.outcome ?? "needs_review"]}</strong><p>{behavior.kind === "activity" ? `活跃 ${formatMinutes(behavior.active_minutes)} · 空闲 ${formatMinutes(behavior.idle_minutes)} · 切换 ${behavior.app_switch_count ?? 0} 次` : `持续 ${formatMinutes(behavior.duration_minutes)} · ${behavior.step_count ?? 0} 个步骤`}</p><time>{formatRelativeTime(behavior.observed_at)}</time></div></li>)}</ol> : <div className="rhythm-empty"><Pulse /><strong>还没有可展示的近期行为</strong><p>这个列表只展示聚合行为；完整窗口标题与网页 URL 请查看上方屏幕时间组件。</p></div>}</section>
-      <section className="insight-panel"><div className="insight-section-heading"><div><span>当前项目 · 跨时间形成</span><h2>长期画像</h2></div><Brain /></div>{insights?.profile.length ? <div className="profile-list">{insights.profile.map((item) => <article key={item.id}><p>{item.claim}</p><footer><span>{originText[item.origin]} · {item.evidence_count} 条证据</span><strong>{Math.round(item.confidence * 100)}% 可信</strong></footer></article>)}</div> : <div className="rhythm-empty"><Brain /><strong>还没有形成长期画像</strong><p>只有经过多次、可追溯证据支持的稳定模式才会出现在这里；当前天气不会被当作长期结论。</p></div>}</section></div>
-    <p className="rhythm-privacy-note"><ShieldCheck /> 完整窗口与标签页元数据只进入可删除的 Raw Activity Vault；长期画像仍来自可追溯证据，并遵循你的外发与保留设置。</p>
-  </div></div>;
-}
-
-function formatMinutes(value: number | null) {
-  if (value === null) return "—";
-  if (value < 1) return "不足 1 分钟";
-  return `${value.toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 分钟`;
+  return <div className="page-view"><header className="page-header"><span>任务</span><h1>执行、批准与产出</h1><p>这里只展示 Agent 的任务状态；人的状态理解与任务成败保持分离。</p></header><div className="runs-layout"><nav className="run-list" aria-label="任务列表">{runs.length === 0 ? <div className="run-list-empty">暂无任务</div> : runs.map((item) => <button className={item.id === run?.id ? "selected" : ""} key={item.id} onClick={() => onSelect(item.id)} aria-pressed={item.id === run?.id} aria-label={`${item.user_intent}，${runStatusText[item.status]}`}><span>{item.user_intent}</span><small><i className={`run-dot ${item.status}`} />{runStatusText[item.status]} · {formatRelativeTime(item.updated_at)}</small></button>)}</nav><section className="run-detail">{run ? <><div className="run-detail-heading"><span className={`status-pill ${run.status}`}>{runStatusText[run.status]}</span><time>{formatRelativeTime(run.updated_at)}</time></div><h2>{run.user_intent}</h2><div className="run-result"><span>当前结果</span><p>{runMessage(run)}</p></div><div className="section-heading"><h3>执行记录</h3><small>{timeline.length} 个事件</small></div>{timeline.length ? <ol className="timeline">{timeline.slice(-12).reverse().map((event) => <li key={event.id}><i /><div><strong>{formatEventType(event.type)}</strong><time>{new Date(event.recorded_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div></li>)}</ol> : <div className="detail-empty">等待第一条执行记录</div>}</> : <div className="detail-empty centered">选择一个任务查看完整执行记录</div>}</section><aside className="run-context"><div className="context-heading"><Wrench /><span>任务上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside></div></div>;
 }
 
 function formatRelativeTime(value: string) {
@@ -597,6 +589,8 @@ const oauthCategories: { id: OAuthCategory; label: string }[] = [
   { id: "platform", label: "平台" },
 ];
 
+const composioMinimumPermissions = "最小权限：Auth configs 读写、Connected accounts 读写、Toolkits 读取、Tool execution 写入。";
+
 function normalizeOAuthCategory(category: string): Exclude<OAuthCategory, "all"> {
   if (["chat", "communication", "social"].includes(category)) return "communication";
   if (["development", "tools", "tools_automation", "automation"].includes(category)) return "development";
@@ -617,6 +611,9 @@ function supportsConversationTools(status: ConnectorStatus) {
 }
 
 function oauthState(status: ConnectorStatus): { label: string; tone: string } {
+  if (status.last_error_code === "broker_auth") return { label: "连接服务失效", tone: "error" };
+  if (status.last_error_code === "broker_permission") return { label: "连接服务权限不足", tone: "error" };
+  if (status.last_error_code === "project_changed") return { label: "项目已更换，需要重新授权", tone: "error" };
   if (status.connected) return { label: "已连接", tone: "connected" };
   if (status.phase === "waiting_user" || Boolean(status.attempt_id)) return { label: "等待授权", tone: "waiting" };
   if (!status.configured) return { label: "未配置", tone: "unconfigured" };
@@ -627,6 +624,7 @@ function oauthState(status: ConnectorStatus): { label: string; tone: string } {
 
 function ConnectionsView({ client, workspaceId, onOperation }: { client: WeatherFlowClient; workspaceId?: string | null; onOperation: (value: string) => void }) {
   const [statuses, setStatuses] = useState<ConnectorStatus[]>([]);
+  const [catalogState, setCatalogState] = useState<"loading" | "ready" | "error">("loading");
   const [apiKey, setApiKey] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<OAuthCategory>("all");
@@ -637,8 +635,22 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
   const connecting = useRef(new Set<ConnectorKind>());
   const mounted = useRef(true);
   const refresh = useCallback(async () => {
-    if (!workspaceId) return;
-    setStatuses(await client.connectors(workspaceId));
+    if (!workspaceId) {
+      if (mounted.current) {
+        setStatuses([]);
+        setCatalogState("ready");
+      }
+      return;
+    }
+    setCatalogState("loading");
+    try {
+      const nextStatuses = await client.connectors(workspaceId);
+      if (!mounted.current) return;
+      setStatuses(nextStatuses);
+      setCatalogState("ready");
+    } catch {
+      if (mounted.current) setCatalogState("error");
+    }
   }, [client, workspaceId]);
 
   useEffect(() => {
@@ -648,6 +660,9 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
   }, [refresh]);
 
   const configured = statuses.some((status) => status.configured);
+  const brokerCredentialInvalid = statuses.some((status) => status.last_error_code === "broker_auth");
+  const brokerCredentialPermissionMissing = statuses.some((status) => status.last_error_code === "broker_permission");
+  const brokerCredentialIssue = brokerCredentialInvalid || brokerCredentialPermissionMissing;
   const visibleStatuses = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("zh-CN");
     return statuses.filter((status) => {
@@ -662,14 +677,39 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
     event.preventDefault();
     if (!apiKey.trim() || busy) return;
     setBusy("configure");
+    let storedNewCredential = false;
     try {
+      const existing = await nativeCredentials.status("composio");
+      if (existing.key_present) {
+        await refresh();
+        onOperation("Composio 密钥已经存在；如需更换，请先删除底层密钥。现有密钥未被改动。");
+        return;
+      }
       await nativeCredentials.set("composio", apiKey.trim());
+      storedNewCredential = true;
       await client.configureConnectors();
       setApiKey("");
       await refresh();
       onOperation("Composio 项目密钥已验证并保存到本机钥匙串。");
-    } catch {
-      onOperation("Composio 密钥验证失败，请检查项目密钥与网络连接。");
+    } catch (error) {
+      const permissionFailure = error instanceof WeatherFlowBridgeError
+        && error.code === "connector_broker_permission";
+      if (storedNewCredential) {
+        try {
+          await nativeCredentials.delete("composio");
+        } catch {
+          onOperation(permissionFailure
+            ? `Composio 密钥权限不足，且无法自动移除刚写入的密钥；请删除底层密钥后重试。${composioMinimumPermissions}`
+            : "Composio 密钥验证失败，且无法自动移除刚写入的密钥；请删除底层密钥后重试。");
+          return;
+        }
+        try { await refresh(); } catch { /* The unconfigured form remains locally retryable. */ }
+        onOperation(permissionFailure
+          ? `Composio 密钥权限不足；新密钥已删除。${composioMinimumPermissions}`
+          : "Composio 密钥验证失败；密钥未保存，请检查项目密钥与网络连接后重试。");
+      } else {
+        onOperation("无法保存 Composio 密钥，请确认本机钥匙串可用后重试。");
+      }
     } finally { setBusy(null); }
   };
 
@@ -751,11 +791,11 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
     } finally { setBusy(null); }
   };
 
-  const updateSettings = async (status: ConnectorStatus, autoFetchEnabled: boolean, intervalMinutes = status.interval_minutes) => {
+  const updateSettings = async (status: ConnectorStatus, autoFetchEnabled: boolean) => {
     if (!workspaceId) return;
     setBusy(status.connector);
     try {
-      await client.updateConnectorSettings(status.connector, autoFetchEnabled, intervalMinutes, workspaceId);
+      await client.updateConnectorSettings(status.connector, autoFetchEnabled, 1440, workspaceId);
       await refresh();
     } finally { setBusy(null); }
   };
@@ -794,16 +834,18 @@ function ConnectionsView({ client, workspaceId, onOperation }: { client: Weather
         <small>{state.label}</small>
       </button>;
     })}</div>
-    {visibleStatuses.length === 0 && <div className="oauth-empty"><MagnifyingGlass /><strong>没有匹配的服务</strong><span>试试服务名称或切换分类。</span></div>}
+    {catalogState === "loading" && statuses.length === 0 && <div className="oauth-empty" role="status"><MagnifyingGlass /><strong>正在加载 OAuth 服务</strong><span>正在读取本机连接状态与可用服务目录。</span></div>}
+    {catalogState === "error" && <div className="oauth-empty" role="alert"><WarningCircle /><strong>OAuth 服务目录加载失败</strong><span>连接状态未被修改；请检查本机服务后重试。</span><button type="button" onClick={() => void refresh()}>重试加载 OAuth 服务</button></div>}
+    {catalogState === "ready" && visibleStatuses.length === 0 && <div className="oauth-empty"><MagnifyingGlass /><strong>没有匹配的服务</strong><span>试试服务名称或切换分类。</span></div>}
     {selectedStatus && <ConnectorDetail status={selectedStatus} configured={configured} busy={busy} handoffUrl={handoffs[selectedStatus.connector]} confirmDisconnect={confirmDisconnect === selectedStatus.connector} onConnect={connect} onReopen={(url) => nativeWindows.openConnectorUrl(url)} onSettings={updateSettings} onSync={sync} onConfirmDisconnect={() => setConfirmDisconnect(selectedStatus.connector)} onDisconnect={disconnect} />}
-    <details className="oauth-broker-settings" open={!configured || undefined}>
-      <summary><span><ShieldCheck />OAuth 连接服务</span><small>{configured ? "已安全配置" : "需要配置"}</small></summary>
-      {!configured ? <form className="connector-key-form" onSubmit={configure}><div><h2>高级配置 · Composio</h2><p>WeatherFlow 使用 scoped project API key 创建 OAuth Connect Link。密钥只保存在本机钥匙串，不进入对话或日志。</p></div><label>Composio Project API Key<input aria-label="Composio Project API Key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="cmp_…" /></label><button className="primary" disabled={!apiKey.trim() || busy === "configure"}>验证并保存连接密钥</button></form> : <div className="credential-summary"><span><ShieldCheck size={18} />OAuth 连接服务已由 WeatherFlow 安全配置</span><button type="button" onClick={() => void removeCredential()} disabled={Boolean(busy)}>删除底层密钥</button></div>}
+    <details className={`oauth-broker-settings${brokerCredentialIssue ? " invalid" : ""}`} open={!configured || brokerCredentialIssue || undefined}>
+      <summary><span>{brokerCredentialIssue ? <WarningCircle /> : <ShieldCheck />}OAuth 连接服务</span><small>{brokerCredentialInvalid ? "连接密钥失效" : brokerCredentialPermissionMissing ? "连接服务权限不足" : configured ? "已安全配置" : "需要配置"}</small></summary>
+      {!configured ? <form className="connector-key-form" onSubmit={configure}><div><h2>高级配置 · Composio</h2><p>WeatherFlow 使用 scoped project API key 创建 OAuth Connect Link。密钥只保存在本机钥匙串，不进入对话或日志。</p></div><label>Composio Project API Key<input aria-label="Composio Project API Key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="cmp_…" /></label><button className="primary" disabled={!apiKey.trim() || busy === "configure"}>验证并保存连接密钥</button></form> : <div className={`credential-summary${brokerCredentialIssue ? " invalid" : ""}`}><div className="credential-summary-copy"><span>{brokerCredentialIssue ? <WarningCircle size={18} /> : <ShieldCheck size={18} />}<span>{brokerCredentialInvalid ? "Composio 连接密钥失效，请删除后重新配置。" : brokerCredentialPermissionMissing ? "Composio 密钥权限不足，请补齐连接服务所需权限。" : "OAuth 连接服务已由 WeatherFlow 安全配置"}</span></span>{brokerCredentialPermissionMissing && <small>{composioMinimumPermissions}</small>}</div><button type="button" onClick={() => void removeCredential()} disabled={Boolean(busy)}>{brokerCredentialInvalid ? "删除失效密钥并重新配置" : brokerCredentialPermissionMissing ? "删除密钥并重新配置权限" : "删除底层密钥"}</button></div>}
     </details>
   </div>;
 }
 
-function ConnectorDetail({ status, configured, busy, handoffUrl, confirmDisconnect, onConnect, onReopen, onSettings, onSync, onConfirmDisconnect, onDisconnect }: { status: ConnectorStatus; configured: boolean; busy: ConnectorKind | "configure" | null; handoffUrl?: string; confirmDisconnect: boolean; onConnect: (connector: ConnectorKind, label: string) => Promise<void>; onReopen: (url: string) => Promise<void>; onSettings: (status: ConnectorStatus, enabled: boolean, interval?: number) => Promise<void>; onSync: (status: ConnectorStatus) => Promise<void>; onConfirmDisconnect: () => void; onDisconnect: (status: ConnectorStatus) => Promise<void> }) {
+function ConnectorDetail({ status, configured, busy, handoffUrl, confirmDisconnect, onConnect, onReopen, onSettings, onSync, onConfirmDisconnect, onDisconnect }: { status: ConnectorStatus; configured: boolean; busy: ConnectorKind | "configure" | null; handoffUrl?: string; confirmDisconnect: boolean; onConnect: (connector: ConnectorKind, label: string) => Promise<void>; onReopen: (url: string) => Promise<void>; onSettings: (status: ConnectorStatus, enabled: boolean) => Promise<void>; onSync: (status: ConnectorStatus) => Promise<void>; onConfirmDisconnect: () => void; onDisconnect: (status: ConnectorStatus) => Promise<void> }) {
   const presentation = connectorPresentation[status.connector];
   const state = oauthState(status);
   const isBusy = busy === status.connector;
@@ -813,16 +855,18 @@ function ConnectorDetail({ status, configured, busy, handoffUrl, confirmDisconne
   const conversationToolsSupported = supportsConversationTools(status);
   const availableToolIds = status.available_tool_ids;
   const canStartOAuth = configured && setup !== "unknown";
+  const projectChanged = status.last_error_code === "project_changed";
+  const showConnected = status.connected && !projectChanged;
   return <section className="oauth-detail" data-connector={status.connector} aria-label={`${status.label} 连接详情`}>
     <header><span className="oauth-detail-mark">{presentation.icon}</span><div><small>{state.label}</small><h2>{status.label}</h2><p>{presentation.note}</p></div><span className={`oauth-detail-state ${state.tone}`}>{state.label}</span></header>
-    {status.connected ? <div className="oauth-detail-body">
+    {showConnected ? <div className="oauth-detail-body">
       <div className="oauth-account"><span>当前账号</span><strong>{status.display_name || "授权账号"}</strong></div>
       {conversationToolsSupported ? <div className="oauth-capability-notice available"><Wrench /><div><strong>已接入统一工具模式</strong><p>Ask 提供全部读取工具；Bypass 提供全部已审查工具。创建、修改和删除仍会在执行前逐次向你确认。</p><details className="connector-tool-disclosure"><summary>{`已审查 ${availableToolIds.length} 个固定工具`}</summary>{availableToolIds.length > 0 && <ul>{availableToolIds.map((toolId) => <li key={toolId}><code>{toolId}</code></li>)}</ul>}</details></div></div> : <div className="oauth-capability-notice"><Wrench /><div><strong>对话工具待审阅</strong><p>连接后暂不能在对话中使用，固定工具仍在审阅中。</p></div></div>}
-      {autoFetchSupported ? <div className="oauth-fetch-settings"><label className="connector-toggle"><input type="checkbox" checked={status.auto_fetch_enabled} onChange={(event) => void onSettings(status, event.target.checked)} disabled={isBusy} /><span>自动抓取</span></label><label className="connector-interval">抓取频率<select aria-label={`${status.label} 抓取频率`} value={status.interval_minutes} onChange={(event) => void onSettings(status, status.auto_fetch_enabled, Number(event.target.value))} disabled={isBusy}><option value={15}>每 15 分钟</option><option value={60}>每小时</option><option value={240}>每 4 小时</option><option value={1440}>每天</option></select></label><small>{status.last_sync_at ? `上次抓取 ${new Date(status.last_sync_at).toLocaleString("zh-CN")}` : "尚未完成首次抓取"}</small></div> : <p className="oauth-unavailable-note">该服务暂不支持后台自动抓取。</p>}
+      {autoFetchSupported ? <div className="oauth-fetch-settings"><label className="connector-toggle"><input type="checkbox" aria-label="自动抓取" checked={status.auto_fetch_enabled} onChange={(event) => void onSettings(status, event.target.checked)} disabled={isBusy} /><span>自动抓取</span></label><span className="connector-cadence">每天自动刷新</span><small>{status.last_sync_at ? `上次抓取 ${new Date(status.last_sync_at).toLocaleString("zh-CN")}` : "尚未完成首次抓取"}</small></div> : <p className="oauth-unavailable-note">该服务暂不支持后台自动抓取。</p>}
       <div className="connector-actions">{autoFetchSupported && <button onClick={() => void onSync(status)} disabled={isBusy}>立即抓取</button>}{confirmDisconnect ? <button className="danger" onClick={() => void onDisconnect(status)} disabled={isBusy}>确认断开并删除摘要</button> : <button onClick={onConfirmDisconnect}>断开连接</button>}</div>
     </div> : <div className="oauth-connect-panel">
-      <div><strong>{setup === "bring_your_own" ? "需要先配置 OAuth 应用" : setup === "managed" ? "使用系统浏览器完成授权" : "授权方式尚未配置"}</strong><p>{!configured ? "请先在下方配置 OAuth 连接服务。" : setup === "bring_your_own" ? "这个服务需要在 Composio 项目中配置你自己的 OAuth Client；完成后再返回连接。" : setup === "managed" ? "WeatherFlow 只接收不透明的账号引用，不会接触服务商访问令牌。" : "该服务尚未确认可用的 OAuth 配置，因此保持关闭。"}</p>{!conversationToolsSupported && <p className="oauth-tool-warning">连接后暂不能在对话中使用，固定工具仍在审阅中。</p>}</div>
-      {setup !== "unknown" && <button className="connect-button" onClick={() => void onConnect(status.connector, status.label)} disabled={!canStartOAuth || isBusy || isWaiting} aria-label={`连接 ${status.label}`}>{isWaiting ? "等待浏览器授权…" : setup === "bring_your_own" ? "已配置应用，开始连接" : `连接 ${status.label}`}</button>}
+      <div><strong>{projectChanged ? "Composio 项目已更换，需要重新连接" : setup === "bring_your_own" ? "需要先配置 OAuth 应用" : setup === "managed" ? "使用系统浏览器完成授权" : "授权方式尚未配置"}</strong><p>{projectChanged ? "原连接属于之前的 Composio 项目；请在当前项目中重新完成账号授权。" : !configured ? "请先在下方配置 OAuth 连接服务。" : setup === "bring_your_own" ? "这个服务需要在 Composio 项目中配置你自己的 OAuth Client；完成后再返回连接。" : setup === "managed" ? "WeatherFlow 只接收不透明的账号引用，不会接触服务商访问令牌。" : "该服务尚未确认可用的 OAuth 配置，因此保持关闭。"}</p>{!conversationToolsSupported && <p className="oauth-tool-warning">连接后暂不能在对话中使用，固定工具仍在审阅中。</p>}</div>
+      {setup !== "unknown" && <button className="connect-button" onClick={() => void onConnect(status.connector, status.label)} disabled={!canStartOAuth || isBusy || isWaiting} aria-label={`${projectChanged ? "重新连接" : "连接"} ${status.label}`}>{isWaiting ? "等待浏览器授权…" : projectChanged ? `重新连接 ${status.label}` : setup === "bring_your_own" ? "已配置应用，开始连接" : `连接 ${status.label}`}</button>}
       {setup === "unknown" && <button className="connect-button" disabled>暂不可连接</button>}
       {handoffUrl && <button className="link-button" onClick={() => void onReopen(handoffUrl)}>重新打开授权页</button>}
     </div>}
@@ -840,6 +884,12 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
   const [editingKey, setEditingKey] = useState(false);
   const [configureError, setConfigureError] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState(false);
+  const [summarySettings, setSummarySettings] = useState<ActivitySummarySettings | null>(null);
+  const [summaryModel, setSummaryModel] = useState("");
+  const [summaryModels, setSummaryModels] = useState<ProviderModel[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summarySaving, setSummarySaving] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const preset = providers.find((item) => item.provider === selectedProvider);
   const activeForProvider = system?.model?.provider === selectedProvider;
   const credentialPresent = credentialStatus[selectedProvider]
@@ -882,6 +932,44 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
       setConfigureError("这个密钥暂时无法刷新模型目录；可以重新输入密钥后再试。");
     });
   }, [credentialPresent, loadModels, preset]);
+
+  useEffect(() => {
+    const summaryClient = client as Partial<WeatherFlowClient>;
+    if (section !== "system" || typeof summaryClient.watchSummarySettings !== "function") return;
+    let current = true;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    void client.watchSummarySettings().then(async (settings) => {
+      if (!current) return;
+      const currentProvider = system?.model?.configured ? system.model.provider : null;
+      const currentModel = system?.model?.configured ? system.model.model : null;
+      const summaryProvider = currentProvider;
+      const configuredModel = settings.provider === currentProvider
+        ? settings.model ?? currentModel
+        : currentModel;
+      setSummarySettings(settings);
+      setSummaryModel(configuredModel ?? "");
+      let models: ProviderModel[] = [];
+      const provider = providers.find((item) => item.provider === summaryProvider);
+      if (provider) models = presetModelOptions(provider);
+      if (summaryProvider && typeof summaryClient.providerModels === "function") {
+        try {
+          models = (await client.providerModels(summaryProvider)).models;
+        } catch {
+          // The saved model remains usable even when the provider catalog is temporarily unavailable.
+        }
+      }
+      if (configuredModel && !models.some((item) => item.id === configuredModel)) {
+        models = [{ id: configuredModel, selectable: true, compatibility: "agent_ready", note: "当前配置" }, ...models];
+      }
+      if (current) setSummaryModels(models);
+    }).catch(() => {
+      if (current) setSummaryError("暂时无法读取最近总结设置，请确认本机服务已恢复后重试。");
+    }).finally(() => {
+      if (current) setSummaryLoading(false);
+    });
+    return () => { current = false; };
+  }, [client, providers, section, system?.model?.configured, system?.model?.model, system?.model?.provider]);
 
   const chooseProvider = (provider: ModelProviderPreset) => {
     setSelectedProvider(provider.provider);
@@ -939,11 +1027,32 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
   };
 
   const exportDiagnostics = async () => { const result = await client.exportDiagnostics(workspaceId); onOperation(`诊断文件已保存到本机：${result.path}`); };
-  const reviewReset = async () => onResetPreview(await client.previewReset("behavior", workspaceId));
-  const reset = async () => { const result = await client.reset("behavior", workspaceId); onResetPreview(null); onOperation(`已删除 ${result.deleted_count} 条行为记录。`); };
+  const reviewReset = async () => onResetPreview(await client.previewReset("activity", workspaceId));
+  const reset = async () => { const result = await client.reset("activity", workspaceId); onResetPreview(null); onOperation(`已删除 ${result.deleted_count} 条活动总结记录。`); };
   const chooseTheme = (preference: ThemePreference) => {
     setThemePreference(preference);
     setTheme(preference);
+  };
+
+  const saveSummarySettings = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!summarySettings || !summaryModel || summarySaving) return;
+    setSummarySaving(true);
+    setSummaryError(null);
+    try {
+      const updated = await client.updateWatchSummarySettings({
+        model_workspace_id: workspaceId ?? summarySettings.model_workspace_id,
+        model: summaryModel,
+        expected_version: summarySettings.version,
+      });
+      setSummarySettings(updated);
+      setSummaryModel(updated.model ?? summaryModel);
+      onOperation("最近总结设置已保存；后续生成或重新生成会使用新配置。");
+    } catch {
+      setSummaryError("保存失败；设置可能已在别处更新，请重新打开设置后再试。");
+    } finally {
+      setSummarySaving(false);
+    }
   };
 
   if (section === "system") return <div className="page-view settings-view system-settings-view">
@@ -953,7 +1062,16 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
       ["light", "浅色", "明亮、清晰的工作区", <Sun weight="duotone" />],
       ["dark", "深色", "低光环境更舒适", <Moon weight="duotone" />],
     ] as const).map(([value, label, note, icon]) => <button key={value} type="button" role="radio" aria-label={label} aria-checked={theme === value} onClick={() => chooseTheme(value)}><i aria-hidden="true">{icon}</i><span><strong>{label}</strong><small>{note}</small></span>{theme === value && <Check weight="bold" />}</button>)}</div></section>
-    <section className="settings-section privacy-section"><div className="section-title"><h2>本机与隐私</h2></div><dl><div><dt>项目</dt><dd>{snapshot?.workspace.action_roots[0] ?? "加载中"}</dd></div><div><dt>当前模型</dt><dd>{system?.model?.configured ? `${system.model.provider} · ${system.model.model}` : "尚未配置"}</dd></div><div><dt>行为感知</dt><dd>{system?.behavior_sensor.enabled ? "已启用元数据" : "等待本机行为授权"}</dd></div><div><dt>本机桥接</dt><dd>{offline ? "正在恢复" : "已认证"}</dd></div></dl><div className="settings-actions"><button onClick={() => void exportDiagnostics()}>导出本机诊断</button>{!resetPreview ? <button onClick={() => void reviewReset()}>检查行为数据清理</button> : <button className="danger" onClick={() => void reset()}>删除 {resetPreview.count} 条行为记录</button>}</div></section>
+    <section className="settings-section summary-settings-section">
+      <div className="section-title"><h2>最近总结</h2><p>选择后续活动总结使用的模型。总结规则由 WeatherFlow 固定，所有生成内容统一使用简体中文。</p></div>
+      {summaryLoading ? <p className="summary-settings-loading">正在读取设置…</p> : summarySettings ? <form className="summary-settings-form" onSubmit={saveSummarySettings}>
+        <label>模型<select aria-label="最近总结模型" value={summaryModel} onChange={(event) => setSummaryModel(event.target.value)} disabled={summarySaving}>{summaryModels.filter((item) => item.selectable).map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
+        <p>内置规则会分别纳入 ActivityWatch 与 GitHub、Gmail、Google Calendar 的有界只读快照；外部原文始终是不可信数据。规则版本：<code>{summarySettings.prompt_version}</code></p>
+        {summaryError && <p className="form-error" role="alert">{summaryError}</p>}
+        <button type="submit" className="primary" disabled={summarySaving || !summaryModel}>{summarySaving ? "正在保存…" : "保存最近总结设置"}</button>
+      </form> : summaryError ? <p className="form-error" role="alert">{summaryError}</p> : null}
+    </section>
+    <section className="settings-section privacy-section"><div className="section-title"><h2>本机与隐私</h2></div><dl><div><dt>项目</dt><dd>{snapshot?.workspace.action_roots[0] ?? "加载中"}</dd></div><div><dt>当前模型</dt><dd>{system?.model?.configured ? `${system.model.provider} · ${system.model.model}` : "尚未配置"}</dd></div><div><dt>活动来源</dt><dd>ActivityWatch 只读 · 独立运行</dd></div><div><dt>本机桥接</dt><dd>{offline ? "正在恢复" : "已认证"}</dd></div></dl><div className="settings-actions"><button onClick={() => void exportDiagnostics()}>导出本机诊断</button>{!resetPreview ? <button onClick={() => void reviewReset()}>检查活动派生历史清理</button> : <button className="danger" onClick={() => void reset()}>删除 {resetPreview.count} 条活动总结记录</button>}</div></section>
   </div>;
 
   return <div className="page-view settings-view">

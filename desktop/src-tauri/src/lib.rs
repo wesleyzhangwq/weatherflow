@@ -1,4 +1,3 @@
-mod activity;
 mod credentials;
 mod supervisor;
 
@@ -45,6 +44,22 @@ fn surface_url(surface: &str) -> WebviewUrl {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn disable_window_restoration(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let native = window.ns_window()?;
+    let native = unsafe { &*native.cast::<objc2::runtime::AnyObject>() };
+    unsafe {
+        let _: () = objc2::msg_send![native, setRestorable: false];
+        let _: () = objc2::msg_send![native, disableSnapshotRestoration];
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn disable_window_restoration(_window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    Ok(())
+}
+
 fn show_or_create(
     app: &tauri::AppHandle,
     label: &str,
@@ -79,6 +94,7 @@ fn show_or_create(
         .resizable(policy.resizable)
         .skip_taskbar(policy.skip_taskbar)
         .build()?;
+    disable_window_restoration(&window)?;
     if surface == "cockpit" {
         let app_handle = app.clone();
         window.on_window_event(move |event| {
@@ -111,6 +127,20 @@ fn restore_companion(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("companion") {
         let _ = window.show();
     }
+}
+
+fn reset_startup_surfaces(app: &tauri::AppHandle) -> tauri::Result<()> {
+    for window in app.webview_windows().into_values() {
+        window.destroy()?;
+    }
+    show_or_create(
+        app,
+        STARTUP_SURFACE,
+        STARTUP_SURFACE,
+        STARTUP_SIZE.0,
+        STARTUP_SIZE.1,
+        true,
+    )
 }
 
 #[tauri::command]
@@ -234,7 +264,7 @@ fn credential_status(
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -260,14 +290,6 @@ pub fn run() {
                     .map_err(std::io::Error::other)?;
             app.manage(Mutex::new(credential_server));
             app.manage(Mutex::new(supervisor));
-            show_or_create(
-                app.handle(),
-                STARTUP_SURFACE,
-                STARTUP_SURFACE,
-                STARTUP_SIZE.0,
-                STARTUP_SIZE.1,
-                true,
-            )?;
             #[cfg(not(debug_assertions))]
             supervisor::monitor(app.handle().clone());
             // A previously installed WeatherFlow build may still own the shortcut.
@@ -287,11 +309,15 @@ pub fn run() {
             credential_delete,
             credential_status,
             supervisor::daemon_bridge,
-            supervisor::restart_daemon,
-            activity::sample_activity_metadata
+            supervisor::restart_daemon
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("WeatherFlow desktop shell failed");
+    app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::Ready) {
+            reset_startup_surfaces(app_handle).expect("WeatherFlow startup surface policy failed");
+        }
+    });
 }
 
 #[cfg(test)]
@@ -341,6 +367,30 @@ mod tests {
         assert_eq!(SHORTCUT_SURFACE, "capsule");
         assert_ne!(STARTUP_SURFACE, "cockpit");
         assert_ne!(SHORTCUT_SURFACE, "cockpit");
+    }
+
+    #[test]
+    fn startup_replaces_any_macos_restored_webviews_before_showing_companion() {
+        let source = include_str!("lib.rs");
+        assert!(source.matches("tauri::RunEvent::Ready").count() > 1);
+        assert!(source.matches("reset_startup_surfaces(app_handle)").count() > 1);
+        assert!(
+            source
+                .matches("for window in app.webview_windows().into_values()")
+                .count()
+                > 1
+        );
+        assert!(source.matches("window.destroy()").count() > 1);
+    }
+
+    #[test]
+    fn macos_windows_opt_out_of_automatic_state_restoration() {
+        let source = include_str!("lib.rs");
+        let info_plist = include_str!("../Info.plist");
+        assert!(source.matches("setRestorable: false").count() > 1);
+        assert!(source.matches("disableSnapshotRestoration").count() > 1);
+        assert!(info_plist.contains("<key>NSQuitAlwaysKeepsWindows</key>"));
+        assert!(info_plist.contains("<false/>"));
     }
 
     #[test]

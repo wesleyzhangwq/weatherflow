@@ -29,7 +29,7 @@ class FakeCalendarProvider:
     def __init__(self) -> None:
         self.created: list[str] = []
 
-    async def list_events(self, *, start: str, end: str, limit: int):
+    async def list_events(self, *, start: str, end: str, limit: int, context):
         return (
             CalendarEvent(
                 event_id="event-1",
@@ -46,6 +46,7 @@ class FakeCalendarProvider:
         start: str,
         end: str,
         idempotency_key: str,
+        context,
     ) -> CalendarEvent:
         self.created.append(idempotency_key)
         return CalendarEvent(

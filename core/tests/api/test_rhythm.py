@@ -65,10 +65,11 @@ async def test_rhythm_api_rejects_raw_activity_content(tmp_path: Path) -> None:
             },
         )
 
-    assert response.status_code == 422
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "activity_metadata_ingest_forbidden"
 
 
-async def test_activity_metadata_requires_explicit_workspace_consent(
+async def test_activity_metadata_ingest_is_always_forbidden(
     tmp_path: Path,
 ) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
@@ -86,34 +87,33 @@ async def test_activity_metadata_requires_explicit_workspace_consent(
     }
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        rejected = await client.post("/v1/rhythm/signals", json=payload)
-        await client.post(
+        rejected_before_onboarding = await client.post("/v1/rhythm/signals", json=payload)
+        onboarding = await client.post(
             "/v1/onboarding/complete",
             json={
                 "confirm_local_ownership": True,
-                "enable_metadata_sensor": True,
             },
         )
-        accepted = await client.post("/v1/rhythm/signals", json=payload)
+        rejected_after_onboarding = await client.post("/v1/rhythm/signals", json=payload)
 
-    assert rejected.status_code == 409
-    assert rejected.json()["detail"]["code"] == "metadata_sensor_consent_required"
-    assert accepted.status_code == 201
+    assert onboarding.status_code == 200
+    for response in (rejected_before_onboarding, rejected_after_onboarding):
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "activity_metadata_ingest_forbidden"
+    events = await container.ledger.list_stream(
+        "workspace", container.default_workspace.id, limit=1000
+    )
+    assert all(event.type != "rhythm.signal.activity_metadata" for event in events)
 
 
-async def test_rhythm_insights_are_read_only_and_privacy_safe(tmp_path: Path) -> None:
+async def test_rhythm_insights_keep_deliberate_text_private_and_show_task_behavior(
+    tmp_path: Path,
+) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
     transport = ASGITransport(app=create_app(container=container))
     now = datetime.now(UTC)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        await client.post(
-            "/v1/onboarding/complete",
-            json={
-                "confirm_local_ownership": True,
-                "enable_metadata_sensor": True,
-            },
-        )
         await client.post(
             "/v1/rhythm/signals",
             json={
@@ -122,32 +122,24 @@ async def test_rhythm_insights_are_read_only_and_privacy_safe(tmp_path: Path) ->
                 "observed_at": (now - timedelta(minutes=6)).isoformat(),
             },
         )
-        activity = await client.post(
-            "/v1/rhythm/signals",
-            json={
-                "kind": "activity_metadata",
-                "observed_at": now.isoformat(),
-                "window_start": (now - timedelta(minutes=5)).isoformat(),
-                "window_end": now.isoformat(),
-                "active_seconds": 240,
-                "idle_seconds": 60,
-                "app_switch_count": 4,
-                "category_seconds": {"development": 240},
-            },
+        task_rhythm = await container.rhythm.record_task_behavior(
+            workspace_id=container.default_workspace.id,
+            run_id="run-rhythm-insight",
+            outcome="succeeded",
+            observed_at=now,
+            duration_seconds=240,
+            step_count=4,
         )
 
-        assert activity.status_code == 201
         events = await container.ledger.list_stream(
             "workspace", container.default_workspace.id, limit=1000
         )
-        activity_event = next(
-            event for event in events if event.type == "rhythm.signal.activity_metadata"
-        )
+        task_event = next(event for event in events if event.type == "rhythm.signal.task_behavior")
         assertion = await container.memory.create_assertion(
             workspace_id=container.default_workspace.id,
             claim="长时间专注后更适合先安排短暂恢复。",
             confidence=0.82,
-            evidence_event_ids=(activity_event.id,),
+            evidence_event_ids=(task_event.id,),
             origin="derived",
         )
 
@@ -155,19 +147,19 @@ async def test_rhythm_insights_are_read_only_and_privacy_safe(tmp_path: Path) ->
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["current"]["snapshot"]["id"] == activity.json()["snapshot"]["id"]
+    assert payload["current"]["snapshot"]["id"] == task_rhythm.snapshot.id
     assert payload["recent_behaviors"] == [
         {
-            "id": activity_event.id,
-            "kind": "activity",
+            "id": task_event.id,
+            "kind": "task",
             "observed_at": now.isoformat().replace("+00:00", "Z"),
-            "active_minutes": 4,
-            "idle_minutes": 1,
-            "app_switch_count": 4,
-            "dominant_category": "development",
-            "outcome": None,
-            "duration_minutes": None,
-            "step_count": None,
+            "active_minutes": None,
+            "idle_minutes": None,
+            "app_switch_count": None,
+            "dominant_category": None,
+            "outcome": "succeeded",
+            "duration_minutes": 4,
+            "step_count": 4,
         }
     ]
     assert payload["profile"] == [

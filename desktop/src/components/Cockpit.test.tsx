@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { WeatherFlowClient } from "../bridge";
+import { WeatherFlowBridgeError, WeatherFlowClient } from "../bridge";
 import { nativeCredentials } from "../native";
 import type { DesktopSnapshot, Run } from "../types";
 import { Cockpit } from "./Cockpit";
@@ -9,23 +9,9 @@ const snapshot: DesktopSnapshot = {
   rhythm: { snapshot: { id: "s1", summary: "Steady rhythm", valid_until: "2026-07-12" }, policy: { proactivity: "silent", work_mode: "normal" }, weather: { scene: "fair", intensity: .5, transition: "steady", snapshot_id: "s1", valid_until: "2026-07-12", presentation_version: "v1" } },
   latest_run: { id: "r1", workspace_id: "w1", user_intent: "Ship release", status: "waiting_approval", result_summary: null, updated_at: "2026-07-12" },
   workspace: { id: "w1", name: "Project", action_roots: ["/tmp/project"], installed_packs: ["developer"] },
-  metadata_sensor_enabled: false,
 };
 
-const rhythmInsights = {
-  current: snapshot.rhythm,
-  recent_behaviors: [{
-    id: "behavior-1", kind: "activity" as const, observed_at: "2026-07-13T09:30:00Z",
-    active_minutes: 48, idle_minutes: 12, app_switch_count: 7,
-    dominant_category: "development", outcome: null, duration_minutes: null, step_count: null,
-  }],
-  profile: [{
-    id: "profile-1", claim: "上午更适合完成需要持续专注的工作。", confidence: 0.84,
-    origin: "derived" as const, evidence_count: 5, updated_at: "2026-07-13T09:30:00Z",
-  }],
-};
-
-it("uses status weather as a read-only state, behavior, and profile view", async () => {
+it("removes the standalone status-weather view while retaining the chat weather signal", async () => {
   const client = {
     approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
     timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
@@ -34,19 +20,12 @@ it("uses status weather as a read-only state, behavior, and profile view", async
       behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
       retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
     }),
-    rhythmInsights: vi.fn().mockResolvedValue(rhythmInsights),
   } as unknown as WeatherFlowClient;
 
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
-  fireEvent.click(screen.getByRole("button", { name: "状态天气" }));
 
-  expect(await screen.findByRole("heading", { name: "当前状态" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "近期行为" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "长期画像" })).toBeInTheDocument();
-  expect(screen.getByText("上午更适合完成需要持续专注的工作。")).toBeInTheDocument();
-  expect(screen.queryByRole("textbox", { name: "状态签到" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "主动签到" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "保存状态" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "状态天气" })).not.toBeInTheDocument();
+  expect(await screen.findByLabelText("人的状态天气")).toHaveTextContent("微晴 · 稳定");
 });
 
 it("groups user-managed agent facilities under the Tools navigation", async () => {
@@ -72,6 +51,50 @@ it("groups user-managed agent facilities under the Tools navigation", async () =
   expect(screen.queryByRole("button", { name: "连接" })).not.toBeInTheDocument();
 });
 
+it("opens the workspace-scoped Watch view as the unified state surface", async () => {
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "activitywatch_read_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    watchSourceStatus: vi.fn().mockResolvedValue({
+      reachable: true, server_version: "0.13.2", data_start: null, data_end: null,
+      checked_at: "2026-07-16T02:00:00Z", last_reconciled_at: null, error_code: null,
+    }),
+    watchCurrent: vi.fn().mockResolvedValue({ observed: null, inferred: null }),
+    watchDashboard: vi.fn().mockResolvedValue({
+      statistics: {
+        window_start: "2026-07-15T16:00:00Z", window_end: "2026-07-16T02:00:00Z",
+        active_seconds: 0, afk_seconds: 0, app_switch_count: 0, category_switch_count: 0,
+        app_seconds: {}, category_seconds: {}, category_rule_version: "aw-categories-v1",
+      },
+      timeline: [],
+    }),
+    watchStatistics: vi.fn().mockResolvedValue({
+      window_start: "2026-07-15T16:00:00Z", window_end: "2026-07-16T02:00:00Z",
+      active_seconds: 0, afk_seconds: 0, app_switch_count: 0, category_switch_count: 0,
+      app_seconds: {}, category_seconds: {}, category_rule_version: "aw-categories-v1",
+    }),
+    watchTimeline: vi.fn().mockResolvedValue([]),
+    watchSummaries: vi.fn().mockResolvedValue([]),
+    watchTasks: vi.fn().mockResolvedValue([]),
+    watchTrends: vi.fn().mockResolvedValue([]),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+
+  expect(await screen.findByRole("heading", { name: "活动与总结" })).toBeInTheDocument();
+  expect(screen.getByText("ActivityWatch 只读来源")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "状态天气" })).not.toBeInTheDocument();
+});
+
 it("shows explicit operational detail and handles approval", async () => {
   const client = {
     approvals: vi.fn().mockResolvedValue([{ id: "a1", action_id: "x1", run_id: "r1", status: "pending", version: 0 }]),
@@ -90,23 +113,23 @@ it("shows explicit operational detail and handles approval", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "批准" }));
   await waitFor(() => expect(client.decide).toHaveBeenCalledWith("a1", "approve", 0, "w1"));
   fireEvent.click(screen.getByRole("button", { name: "设置" }));
-  expect(screen.getByText("等待本机行为授权")).toBeInTheDocument();
+  expect(screen.getByText("ActivityWatch 只读 · 独立运行")).toBeInTheDocument();
 });
 
-it("requires review then a second explicit click before behavior reset", async () => {
+it("requires review then a second explicit click before derived activity reset", async () => {
   const client = {
     approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([{ ...snapshot.latest_run }]), timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
     status: vi.fn().mockResolvedValue({ local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: ["developer"], providers: {}, behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: { raw_behavior: "72h", aggregate_behavior: "90d", memory: "until_explicit_reset" } }),
     exportDiagnostics: vi.fn().mockResolvedValue({ path: "/tmp/diagnostic.json", sha256: "d", size_bytes: 10 }),
-    previewReset: vi.fn().mockResolvedValue({ category: "behavior", count: 3 }),
-    reset: vi.fn().mockResolvedValue({ category: "behavior", deleted_count: 3 }),
+    previewReset: vi.fn().mockResolvedValue({ category: "activity", count: 3 }),
+    reset: vi.fn().mockResolvedValue({ category: "activity", deleted_count: 3 }),
   } as unknown as WeatherFlowClient;
   render(<Cockpit client={client} snapshot={snapshot} offline={false} />);
   fireEvent.click(screen.getByRole("button", { name: "设置" }));
-  fireEvent.click(await screen.findByRole("button", { name: "检查行为数据清理" }));
+  fireEvent.click(await screen.findByRole("button", { name: "检查活动派生历史清理" }));
   expect(client.reset).not.toHaveBeenCalled();
-  fireEvent.click(await screen.findByRole("button", { name: "删除 3 条行为记录" }));
-  await waitFor(() => expect(client.reset).toHaveBeenCalledWith("behavior", undefined));
+  fireEvent.click(await screen.findByRole("button", { name: "删除 3 条活动总结记录" }));
+  await waitFor(() => expect(client.reset).toHaveBeenCalledWith("activity", undefined));
 });
 
 it("lets the user switch and persist the desktop theme from Settings", async () => {
@@ -130,6 +153,172 @@ it("lets the user switch and persist the desktop theme from Settings", async () 
 
   fireEvent.click(screen.getByRole("radio", { name: "浅色" }));
   expect(document.documentElement.dataset.theme).toBe("light");
+});
+
+it("lets the user choose the model while keeping the Chinese summary prompt fixed", async () => {
+  const currentSettings = {
+    model_workspace_id: "legacy-default-workspace",
+    provider: "minimax",
+    model: "MiniMax-M3",
+    model_configuration_version: 4,
+    prompt_version: "activity-summary-prompt-v3-zh-fixed:deadbeef",
+    version: 2,
+    updated_at: "2026-07-17T01:00:00Z",
+  };
+  const updateWatchSummarySettings = vi.fn().mockImplementation(async (input) => ({
+    ...currentSettings,
+    ...input,
+    version: 3,
+    prompt_version: "activity-summary-prompt-v3-zh-fixed:deadbeef",
+  }));
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "activitywatch_read_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+      model: { configured: true, provider: "minimax", model: "MiniMax-M3", base_url: "https://api.minimaxi.com/v1", credential_available: true },
+    }),
+    watchSummarySettings: vi.fn().mockResolvedValue(currentSettings),
+    updateWatchSummarySettings,
+    providerModels: vi.fn().mockResolvedValue({
+      provider: "minimax",
+      models: [
+        { id: "MiniMax-M3", selectable: true, compatibility: "agent_ready", note: null },
+        { id: "MiniMax-M3-fast", selectable: true, compatibility: "agent_ready", note: null },
+      ],
+      source: "provider",
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+  expect(await screen.findByRole("heading", { name: "最近总结" })).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByLabelText("最近总结模型")).toHaveValue("MiniMax-M3"));
+  expect(screen.queryByLabelText("最近总结提示词")).not.toBeInTheDocument();
+  expect(screen.getByText(/所有生成内容统一使用简体中文/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("最近总结模型"), { target: { value: "MiniMax-M3-fast" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存最近总结设置" }));
+
+  await waitFor(() => expect(updateWatchSummarySettings).toHaveBeenCalledWith({
+    model_workspace_id: "w1",
+    model: "MiniMax-M3-fast",
+    expected_version: 2,
+  }));
+  expect(await screen.findByRole("status")).toHaveTextContent("最近总结设置已保存");
+});
+
+it("recovers stale summary provider settings from the current provider catalog", async () => {
+  const currentSettings = {
+    model_workspace_id: "w1",
+    provider: "minimax",
+    model: "MiniMax-M3",
+    model_configuration_version: 4,
+    prompt_version: "activity-summary-prompt-v3-zh-fixed:deadbeef",
+    version: 2,
+    updated_at: "2026-07-17T01:00:00Z",
+  };
+  const providerModels = vi.fn().mockImplementation(async (provider: string) => ({
+    provider,
+    models: provider === "deepseek"
+      ? [
+          { id: "deepseek-chat", selectable: true, compatibility: "agent_ready", note: null },
+          { id: "deepseek-reasoner", selectable: true, compatibility: "agent_ready", note: null },
+        ]
+      : [
+          { id: "MiniMax-M3", selectable: true, compatibility: "agent_ready", note: null },
+        ],
+    source: "provider",
+  }));
+  const updateWatchSummarySettings = vi.fn().mockImplementation(async (input) => ({
+    ...currentSettings,
+    ...input,
+    provider: "deepseek",
+    model_configuration_version: 5,
+    version: 3,
+  }));
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "activitywatch_read_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+      model: { configured: true, provider: "deepseek", model: "deepseek-chat", base_url: "https://api.deepseek.com/v1", credential_available: true },
+    }),
+    watchSummarySettings: vi.fn().mockResolvedValue(currentSettings),
+    updateWatchSummarySettings,
+    providerModels,
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+  await waitFor(() => expect(providerModels).toHaveBeenCalledWith("deepseek"));
+  await waitFor(() => expect(screen.getByLabelText("最近总结模型")).toHaveValue("deepseek-chat"));
+  expect(screen.queryByRole("option", { name: "MiniMax-M3" })).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("最近总结模型"), { target: { value: "deepseek-reasoner" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存最近总结设置" }));
+
+  await waitFor(() => expect(updateWatchSummarySettings).toHaveBeenCalledWith({
+    model_workspace_id: "w1",
+    model: "deepseek-reasoner",
+    expected_version: 2,
+  }));
+});
+
+it("uses the configured workspace model when migrated summary settings have no model yet", async () => {
+  const currentSettings = {
+    model_workspace_id: "w1",
+    provider: null,
+    model: null,
+    model_configuration_version: null,
+    prompt_version: "activity-summary-prompt-v3-zh-fixed:deadbeef",
+    version: 0,
+    updated_at: "2026-07-17T01:00:00Z",
+  };
+  const providerModels = vi.fn().mockResolvedValue({
+    provider: "minimax",
+    models: [
+      { id: "MiniMax-M3", selectable: true, compatibility: "agent_ready", note: null },
+      { id: "MiniMax-M3-fast", selectable: true, compatibility: "agent_ready", note: null },
+    ],
+    source: "provider",
+  });
+  const updateWatchSummarySettings = vi.fn().mockImplementation(async (input) => ({
+    ...currentSettings,
+    ...input,
+    provider: "minimax",
+    model_configuration_version: 4,
+    version: 1,
+    prompt_version: "activity-summary-prompt-v3-zh-fixed:deadbeef",
+  }));
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "activitywatch_read_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+      model: { configured: true, provider: "minimax", model: "MiniMax-M3", base_url: "https://api.minimaxi.com/v1", credential_available: true },
+    }),
+    watchSummarySettings: vi.fn().mockResolvedValue(currentSettings),
+    updateWatchSummarySettings,
+    providerModels,
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+  await waitFor(() => expect(screen.getByLabelText("最近总结模型")).toHaveValue("MiniMax-M3"));
+  expect(providerModels).toHaveBeenCalledWith("minimax");
+  fireEvent.change(screen.getByLabelText("最近总结模型"), { target: { value: "MiniMax-M3-fast" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存最近总结设置" }));
+
+  await waitFor(() => expect(updateWatchSummarySettings).toHaveBeenCalledWith({
+    model_workspace_id: "w1",
+    model: "MiniMax-M3-fast",
+    expected_version: 0,
+  }));
 });
 
 describe("Cockpit lifecycle", () => {
@@ -347,6 +536,233 @@ it("configures the OAuth broker and exposes backend-approved connectors", async 
   setCredential.mockRestore();
 });
 
+it("surfaces an invalid Composio broker key and requires deletion before replacement", async () => {
+  const deleteCredential = vi.spyOn(nativeCredentials, "delete").mockResolvedValue({
+    provider: "composio",
+    key_present: false,
+  });
+  const connectors = vi.fn()
+    .mockResolvedValueOnce([
+      {
+        connector: "github", label: "GitHub", phase: "active", configured: true, connected: true,
+        auto_fetch_enabled: true, interval_minutes: 60, last_error_code: "broker_auth",
+      },
+    ])
+    .mockResolvedValue([
+      {
+        connector: "github", label: "GitHub", phase: null, configured: false, connected: false,
+        auto_fetch_enabled: false, interval_minutes: 60, last_error_code: null,
+      },
+    ]);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    connectors,
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+
+  expect(await screen.findByText("Composio 连接密钥失效，请删除后重新配置。")).toBeInTheDocument();
+  expect(screen.getByText("连接密钥失效")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "删除失效密钥并重新配置" }));
+
+  await waitFor(() => expect(deleteCredential).toHaveBeenCalledWith("composio"));
+  expect(await screen.findByLabelText("Composio Project API Key")).toBeInTheDocument();
+  expect(connectors).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole("status")).toHaveTextContent("已从 WeatherFlow 删除");
+
+  deleteCredential.mockRestore();
+});
+
+it("distinguishes insufficient Composio permissions from an invalid key", async () => {
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    connectors: vi.fn().mockResolvedValue([{
+      connector: "github", label: "GitHub", phase: "active", configured: true, connected: true,
+      auto_fetch_enabled: true, interval_minutes: 60, last_error_code: "broker_permission",
+    }]),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+
+  expect(await screen.findByText("Composio 密钥权限不足，请补齐连接服务所需权限。")).toBeInTheDocument();
+  expect(screen.getAllByText("连接服务权限不足").length).toBeGreaterThan(0);
+  expect(screen.getByText(/Auth configs 读写/)).toBeInTheDocument();
+  expect(screen.queryByText(/连接密钥失效/)).not.toBeInTheDocument();
+});
+
+it("treats accounts from a replaced Composio project as requiring fresh authorization", async () => {
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    connectors: vi.fn().mockResolvedValue([{
+      connector: "github", label: "GitHub", phase: "active", configured: true, connected: true,
+      oauth_setup: "managed", auto_fetch_enabled: false, interval_minutes: 60,
+      last_error_code: "project_changed",
+    }]),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+
+  expect(await screen.findByText("项目已更换，需要重新授权")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "查看 GitHub" }));
+  expect(screen.getByText("Composio 项目已更换，需要重新连接")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重新连接 GitHub" })).toBeEnabled();
+  expect(screen.getByText("OAuth 连接服务已由 WeatherFlow 安全配置")).toBeInTheDocument();
+  expect(screen.queryByText(/连接密钥失效/)).not.toBeInTheDocument();
+});
+
+it("removes a newly stored Composio key when first-time validation fails", async () => {
+  const credentialStatus = vi.spyOn(nativeCredentials, "status").mockResolvedValue({ provider: "composio", key_present: false });
+  const setCredential = vi.spyOn(nativeCredentials, "set").mockResolvedValue({ provider: "composio", key_present: true });
+  const deleteCredential = vi.spyOn(nativeCredentials, "delete").mockResolvedValue({ provider: "composio", key_present: false });
+  const configureConnectors = vi.fn().mockRejectedValue(new Error("invalid project key"));
+  const connectors = vi.fn().mockResolvedValue([
+    { connector: "github", label: "GitHub", phase: null, configured: false, connected: false, auto_fetch_enabled: false, interval_minutes: 60 },
+  ]);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    connectors,
+    configureConnectors,
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+
+  const input = await screen.findByLabelText("Composio Project API Key");
+  fireEvent.change(input, { target: { value: "cmp_invalid" } });
+  fireEvent.click(screen.getByRole("button", { name: "验证并保存连接密钥" }));
+
+  await waitFor(() => expect(configureConnectors).toHaveBeenCalledOnce());
+  await waitFor(() => expect(deleteCredential).toHaveBeenCalledWith("composio"));
+  expect(setCredential).toHaveBeenCalledWith("composio", "cmp_invalid");
+  expect(setCredential.mock.invocationCallOrder[0]).toBeLessThan(configureConnectors.mock.invocationCallOrder[0]);
+  expect(configureConnectors.mock.invocationCallOrder[0]).toBeLessThan(deleteCredential.mock.invocationCallOrder[0]);
+  expect(await screen.findByRole("status")).toHaveTextContent("密钥未保存");
+  expect(input).toHaveValue("cmp_invalid");
+  expect(screen.getByRole("button", { name: "验证并保存连接密钥" })).toBeEnabled();
+  expect(connectors).toHaveBeenCalledTimes(2);
+
+  setCredential.mockRestore();
+  deleteCredential.mockRestore();
+  credentialStatus.mockRestore();
+});
+
+it("removes a newly stored Composio key and explains the minimum permissions when validation is forbidden", async () => {
+  const credentialStatus = vi.spyOn(nativeCredentials, "status").mockResolvedValue({ provider: "composio", key_present: false });
+  const setCredential = vi.spyOn(nativeCredentials, "set").mockResolvedValue({ provider: "composio", key_present: true });
+  const deleteCredential = vi.spyOn(nativeCredentials, "delete").mockResolvedValue({ provider: "composio", key_present: false });
+  const configureConnectors = vi.fn().mockRejectedValue(
+    new WeatherFlowBridgeError(403, "connector_broker_permission"),
+  );
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    connectors: vi.fn().mockResolvedValue([{
+      connector: "github", label: "GitHub", phase: null, configured: false, connected: false,
+      auto_fetch_enabled: false, interval_minutes: 60, last_error_code: null,
+    }]),
+    configureConnectors,
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+  const input = await screen.findByLabelText("Composio Project API Key");
+  fireEvent.change(input, { target: { value: "cmp_scoped_without_permissions" } });
+  fireEvent.click(screen.getByRole("button", { name: "验证并保存连接密钥" }));
+
+  await waitFor(() => expect(deleteCredential).toHaveBeenCalledWith("composio"));
+  expect(setCredential.mock.invocationCallOrder[0]).toBeLessThan(configureConnectors.mock.invocationCallOrder[0]);
+  expect(configureConnectors.mock.invocationCallOrder[0]).toBeLessThan(deleteCredential.mock.invocationCallOrder[0]);
+  const operation = await screen.findByRole("status");
+  expect(operation).toHaveTextContent("Composio 密钥权限不足");
+  expect(operation).toHaveTextContent("新密钥已删除");
+  expect(operation).toHaveTextContent("Auth configs 读写");
+  expect(operation).toHaveTextContent("Connected accounts 读写");
+  expect(operation).toHaveTextContent("Toolkits 读取");
+  expect(operation).toHaveTextContent("Tool execution 写入");
+  expect(operation).not.toHaveTextContent("密钥失效");
+
+  setCredential.mockRestore();
+  deleteCredential.mockRestore();
+  credentialStatus.mockRestore();
+});
+
+it("never overwrites or deletes an existing Composio key while the catalog is still hydrating", async () => {
+  const credentialStatus = vi.spyOn(nativeCredentials, "status").mockResolvedValue({ provider: "composio", key_present: true });
+  const setCredential = vi.spyOn(nativeCredentials, "set");
+  const deleteCredential = vi.spyOn(nativeCredentials, "delete");
+  const configureConnectors = vi.fn();
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, credential_available: false },
+    }),
+    connectors: vi.fn().mockResolvedValue([
+      { connector: "github", label: "GitHub", phase: null, configured: false, connected: false, auto_fetch_enabled: false, interval_minutes: 60 },
+    ]),
+    configureConnectors,
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+  const input = await screen.findByLabelText("Composio Project API Key");
+  fireEvent.change(input, { target: { value: "cmp_replacement" } });
+  fireEvent.click(screen.getByRole("button", { name: "验证并保存连接密钥" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("现有密钥未被改动");
+  expect(setCredential).not.toHaveBeenCalled();
+  expect(configureConnectors).not.toHaveBeenCalled();
+  expect(deleteCredential).not.toHaveBeenCalled();
+
+  credentialStatus.mockRestore();
+  setCredential.mockRestore();
+  deleteCredential.mockRestore();
+});
+
 it("resumes authoritative polling for a pending connector after the view reopens", async () => {
   vi.useFakeTimers();
   const connectorAttempt = vi.fn().mockResolvedValue({
@@ -486,6 +902,47 @@ it("shows searchable pinned and recent sessions and selects each latest run", as
   expect(await screen.findByText("整理发布计划")).toBeInTheDocument();
 });
 
+it("ignores a stale session response after switching workspaces", async () => {
+  let resolveOldSessions: ((value: Array<Record<string, unknown>>) => void) | undefined;
+  const oldSessions = new Promise<Array<Record<string, unknown>>>((resolve) => {
+    resolveOldSessions = resolve;
+  });
+  const currentSession = {
+    id: "session-current", workspace_id: "w-current", title: "当前项目对话", pinned: false,
+    latest_run_id: "run-current", created_at: "2026-07-17T03:00:00Z", updated_at: "2026-07-17T03:01:00Z",
+  };
+  const currentRun = {
+    ...snapshot.latest_run!, id: "run-current", workspace_id: "w-current", session_id: currentSession.id,
+    user_intent: "当前项目提问", result_summary: "当前项目回答", status: "succeeded" as const,
+  };
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockImplementation(async (workspaceId: string) => workspaceId === "w-current" ? [currentRun] : []),
+    sessions: vi.fn().mockImplementation((workspaceId: string) => workspaceId === "w-current" ? Promise.resolve([currentSession]) : oldSessions),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockImplementation(async (workspaceId: string) => ({
+      local_only: true, telemetry_upload: false, workspace_id: workspaceId, installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    })),
+  } as unknown as WeatherFlowClient;
+
+  const { rerender } = render(<Cockpit client={client} snapshot={null} offline={false} selectedWorkspaceId="w-old" />);
+  rerender(<Cockpit client={client} snapshot={null} offline={false} selectedWorkspaceId="w-current" />);
+
+  expect(await screen.findByText("当前项目回答")).toBeInTheDocument();
+  await act(async () => {
+    resolveOldSessions?.([{
+      id: "session-old", workspace_id: "w-old", title: "旧项目对话", pinned: false,
+      latest_run_id: "run-old", created_at: "2026-07-16T03:00:00Z", updated_at: "2026-07-16T03:01:00Z",
+    }]);
+    await oldSessions;
+  });
+
+  expect(screen.getByText("当前项目回答")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "打开会话：旧项目对话" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开会话：当前项目对话" })).toHaveAttribute("aria-current", "true");
+});
+
 it("persists an automatic title after the first message in a new session", async () => {
   const session = { id: "session-new", workspace_id: "w1", title: "新对话", pinned: false, latest_run_id: null, created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T01:00:00Z" };
   const accepted = { ...snapshot.latest_run!, id: "run-new", session_id: "session-new", user_intent: "帮我复盘这周项目", status: "queued" as const };
@@ -508,6 +965,100 @@ it("persists an automatic title after the first message in a new session", async
 
   await waitFor(() => expect(updateSession).toHaveBeenCalledWith("session-new", "w1", { title: "帮我复盘这周项目" }));
   expect(await screen.findByRole("button", { name: "打开会话：帮我复盘这周项目" })).toBeInTheDocument();
+});
+
+it("creates the first conversation and sends when Enter is pressed from an empty chat", async () => {
+  const session = { id: "session-first", workspace_id: "w1", title: "新对话", pinned: false, latest_run_id: null, created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T01:00:00Z" };
+  const accepted = { ...snapshot.latest_run!, id: "run-first", session_id: session.id, user_intent: "开始第一段对话", status: "queued" as const };
+  const createSession = vi.fn().mockResolvedValue(session);
+  const createRun = vi.fn().mockResolvedValue(accepted);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]), sessions: vi.fn().mockResolvedValue([]),
+    createSession, createRun, updateSession: vi.fn().mockResolvedValue({ ...session, title: "开始第一段对话", latest_run_id: accepted.id }),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  expect(await screen.findByText("还没有对话")).toBeInTheDocument();
+
+  const input = screen.getByLabelText("对话输入");
+  fireEvent.change(input, { target: { value: "开始第一段对话" } });
+  expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+  fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+  await waitFor(() => expect(createSession).toHaveBeenCalledWith("w1"));
+  expect(createRun).toHaveBeenCalledWith(
+    "开始第一段对话", expect.any(String), "w1", null, session.id, "ask",
+  );
+});
+
+it("keeps a rejected message visible and lets the user retry it", async () => {
+  const session = { id: "session-retry", workspace_id: "w1", title: "发送恢复", pinned: false, latest_run_id: null, created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T01:00:00Z" };
+  const accepted = { ...snapshot.latest_run!, id: "run-retry", session_id: session.id, user_intent: "请继续处理", status: "queued" as const };
+  const createRun = vi.fn()
+    .mockRejectedValueOnce(new Error("internal server detail must stay hidden"))
+    .mockResolvedValueOnce(accepted);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]), sessions: vi.fn().mockResolvedValue([session]),
+    createRun, updateSession: vi.fn(),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  expect(await screen.findByRole("button", { name: "打开会话：发送恢复" })).toHaveAttribute("aria-current", "true");
+  const input = screen.getByLabelText("对话输入");
+  fireEvent.change(input, { target: { value: "请继续处理" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("消息未发送；输入内容已保留，请重试");
+  expect(screen.queryByText("internal server detail must stay hidden")).not.toBeInTheDocument();
+  expect(input).toHaveValue("请继续处理");
+  expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(createRun).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(input).toHaveValue(""));
+  expect(screen.queryByText("消息未发送；输入内容已保留，请重试")).not.toBeInTheDocument();
+});
+
+it("keeps user and assistant message text outside native buttons so it can be selected", async () => {
+  const session = { id: "session-copy", workspace_id: "w1", title: "可复制对话", pinned: false, latest_run_id: "run-copy", created_at: "2026-07-14T01:00:00Z", updated_at: "2026-07-14T02:00:00Z" };
+  const run = { ...snapshot.latest_run!, id: "run-copy", session_id: session.id, user_intent: "需要复制的提问", result_summary: "需要复制的回答", status: "succeeded" as const };
+  const runs = vi.fn().mockResolvedValue([run]);
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs, sessions: vi.fn().mockResolvedValue([session]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true }, retention: {},
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+
+  const userMessage = await screen.findByText("需要复制的提问");
+  const assistantMessage = screen.getByText("需要复制的回答");
+  const conversation = screen.getByRole("button", { name: "查看任务：需要复制的提问" });
+  expect(userMessage.closest("button")).toBeNull();
+  expect(assistantMessage.closest("button")).toBeNull();
+  expect(userMessage).toHaveClass("user-message");
+  expect(assistantMessage.closest(".assistant-message")).not.toBeNull();
+  expect(conversation.tagName).toBe("DIV");
+
+  runs.mockClear();
+  const getSelection = vi.spyOn(window, "getSelection").mockReturnValue({ isCollapsed: false } as Selection);
+  fireEvent.click(conversation);
+  getSelection.mockRestore();
+
+  expect(runs).not.toHaveBeenCalled();
 });
 
 it("creates, renames, pins, and sends from a durable session", async () => {

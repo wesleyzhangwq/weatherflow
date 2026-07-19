@@ -6,9 +6,9 @@ Installing a Pack describes what may exist; it does not grant authority.
 
 | Pack | Tools | Effect boundary |
 |---|---|---|
-| `developer` | scoped file read/write, Git status, allowlisted argv execution, GitHub release read/write | local writes and commands are sandbox decisions; GitHub writes require approval |
-| `research` | bounded source retrieval and a provenance-aware Markdown artifact | network read only; provider absence hides the tool |
-| `personal_operations` | rhythm-aware day plans, meeting prep, schedule proposals, Calendar read/write | planning outputs are local artifacts; event creation requires approval |
+| `developer` | scoped file read/write, Git status, and allowlisted argv execution | local writes and commands are sandbox decisions; connected GitHub operations use the canonical Composio tools |
+| `research` | bounded source retrieval and a provenance-aware Markdown artifact | registered only when a reviewed typed provider is injected |
+| `personal_operations` | rhythm-aware day plans, meeting prep, schedule proposals, Calendar read/write | planning outputs are local artifacts; Calendar access uses a frozen connected-account route and event creation requires approval |
 
 ## Resolution
 
@@ -18,12 +18,14 @@ tools and tools whose required scopes were not granted. The remaining canonical
 specifications are frozen into the Run capability snapshot and cannot change
 during that Run. Unknown Pack names fail before a Run is created.
 
-The default local Workspace installs only `developer` and grants
+The default local Workspace installs `developer` and `personal_operations` and grants
 `workspace:read`, `workspace:write`, and `workspace:execute`. Research,
-Calendar, and GitHub provider tools are unavailable unless a typed provider is
-explicitly supplied. Provider credentials stay inside provider implementations
-and are never returned through tool observations, events, checkpoints, or
-artifacts.
+and legacy direct GitHub provider tools are absent from the production catalog
+unless a reviewed typed provider is explicitly supplied. Calendar-backed tools
+become visible only when an active Google Calendar binding is frozen for the
+Run; their production adapter delegates to the same reviewed Composio gateway
+as the canonical connector tools. Provider credentials stay inside that gateway
+and are never returned through tool observations, events, checkpoints, or artifacts.
 
 ## Execution boundaries
 

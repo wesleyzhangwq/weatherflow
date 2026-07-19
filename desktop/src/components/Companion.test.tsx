@@ -11,7 +11,6 @@ const snapshot: DesktopSnapshot = {
   },
   latest_run: { id: "run-1", workspace_id: "w1", user_intent: "Ship", status: "waiting_approval", result_summary: null, updated_at: "2026-07-12" },
   workspace: { id: "w1", name: "Project", action_roots: ["/tmp/project"], installed_packs: ["developer"] },
-  metadata_sensor_enabled: false,
 };
 
 describe("Companion", () => {
@@ -51,12 +50,5 @@ describe("Companion", () => {
     fireEvent.click(weather);
     expect(startDrag).toHaveBeenCalledOnce();
     expect(openCapsule).not.toHaveBeenCalled();
-  });
-
-  it("surfaces an unavailable opted-in sensor without changing weather", () => {
-    const optedIn = { ...snapshot, metadata_sensor_enabled: true };
-    const { container } = render(<Companion snapshot={optedIn} sensorAvailable={false} onStartDrag={() => undefined} onOpenCapsule={() => undefined} onOpenCockpit={() => undefined} />);
-    expect(screen.getByRole("status", { name: "行为信号暂不可用" })).toBeInTheDocument();
-    expect(container.querySelector(".companion-shell")).toHaveAttribute("data-weather", "storm");
   });
 });

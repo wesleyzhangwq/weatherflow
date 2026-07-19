@@ -39,6 +39,7 @@ class CalendarProvider(Protocol):
         start: str,
         end: str,
         limit: int,
+        context: ToolExecutionContext,
     ) -> tuple[CalendarEvent, ...]: ...
 
     async def create_event(
@@ -48,6 +49,7 @@ class CalendarProvider(Protocol):
         start: str,
         end: str,
         idempotency_key: str,
+        context: ToolExecutionContext,
     ) -> CalendarEvent: ...
 
 
@@ -156,7 +158,12 @@ class CalendarExecutor:
             start = _string_argument(arguments, "start", max_chars=100)
             end = _string_argument(arguments, "end", max_chars=100)
             limit = _bounded_limit(arguments.get("limit", 20), MAX_CALENDAR_EVENTS)
-            events = await self.provider.list_events(start=start, end=end, limit=limit)
+            events = await self.provider.list_events(
+                start=start,
+                end=end,
+                limit=limit,
+                context=context,
+            )
             return ToolExecutionResult(
                 output={
                     "events": [event.model_dump(mode="json") for event in events[:limit]],
@@ -170,6 +177,7 @@ class CalendarExecutor:
                 start=_string_argument(arguments, "start", max_chars=100),
                 end=_string_argument(arguments, "end", max_chars=100),
                 idempotency_key=idempotency_key,
+                context=context,
             )
             return ToolExecutionResult(output={"event": event.model_dump(mode="json")})
         raise LookupError(tool.tool_id)

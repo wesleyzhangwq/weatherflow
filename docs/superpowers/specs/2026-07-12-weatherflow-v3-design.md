@@ -1,7 +1,7 @@
 # WeatherFlow v3 Design Specification
 
 - **Date:** 2026-07-12
-- **Last amended:** 2026-07-16 — complete activity intelligence
+- **Last amended:** 2026-07-18 — fixed Chinese summaries, three-source connector evidence, and no ActivityWatch inference
 - **Status:** Approved design
 - **Target:** macOS-first v3.0
 **Strategy:** Clean-slate rewrite; no v2 code or data compatibility
@@ -73,9 +73,10 @@ The following decisions are binding for v3.0.
 - WeatherFlow is silent by default. Human-state changes alter micro-weather but
   do not create speech bubbles, system notifications, or proactive actions.
 - Inside the explicitly opened Cockpit, conversation is the dominant workspace.
-  A persistent navigation rail leads to conversation, Runs, rhythm,
+  A persistent navigation rail leads to conversation, Runs, unified Watch,
   integrations, and settings; these are dedicated views rather than a dense
-  equal-weight dashboard card grid.
+  equal-weight dashboard card grid. Detailed human-state presentation lives in
+  Watch, not in a standalone rhythm/status-weather destination.
 
 ### 2.3 State perception and privacy
 
@@ -89,18 +90,29 @@ The following decisions are binding for v3.0.
     window title, browser URL/domain/tab title, focus transitions, audible and
     private-window state, active/idle periods, real application switches, tab
     switches, and continuity of work sessions.
-- Complete activity sensing and remote activity inference are independent
-  persisted opt-ins. Recording may remain enabled while remote inference is
-  paused. The user can inspect, export, delete, pause, and configure retention
-  for raw activity without deleting Runs, conversations, or memory.
-- Raw activity is installation-scoped and owned by a dedicated Raw Activity
-  Vault. It is not copied into the Event Ledger, Runs, checkpoints, memory,
-  Profile Assertions, artifacts, or ordinary diagnostics. Those domains may
-  retain only activity event IDs and bounded derived summaries.
-- With remote-inference consent, WeatherFlow may send complete activity
-  intervals to the selected reviewed model on the fixed `Asia/Shanghai`
-  schedule. Every request is credential-scrubbed, auditable, tool-free, and
-  treats titles, URLs, and document names as untrusted quoted data.
+- ActivityWatch is the sole raw activity fact source and always runs
+  independently of WeatherFlow. WeatherFlow does not install a second watcher,
+  does not mirror raw intervals, and never starts, stops, pauses, configures,
+  deletes from, or writes to ActivityWatch.
+- WeatherFlow reads ActivityWatch through
+  `http://127.0.0.1:5600/api/0`. A short-lived SQLite `mode=ro`,
+  `query_only` fallback is permitted only for explicit historical bulk analysis,
+  diagnosis, or an API capability gap. Runtime code cannot depend permanently
+  on ActivityWatch's internal table layout.
+- WeatherFlow's installation-scoped activity database stores only derived
+  source health, Category-rule snapshots, task ledger rows, attempts, summary
+  revisions, statistics, dependencies, ActivityWatch evidence references, and
+  bounded summary evidence references to replaceable GitHub, Gmail, and Google
+  Calendar snapshots. It stores no ActivityWatch state inference or
+  comprehensive state assessment. Raw titles, URLs, application events, and AFK
+  intervals remain only in ActivityWatch.
+- With reviewed model configuration, WeatherFlow may send bounded aggregate
+  statistics, limited credential-scrubbed ActivityWatch excerpts, independently
+  bounded read-only GitHub/Gmail/Google Calendar snapshot excerpts, and optional
+  lower-level summaries to the selected model. Every request is auditable,
+  tool-free, uses one built-in versioned Simplified-Chinese prompt, and treats
+  titles, URLs, document names, message snippets, and event descriptions as
+  untrusted quoted data.
 - v3.0 must not collect:
   - keystroke content;
   - continuous screenshots;
@@ -206,7 +218,8 @@ smaller live trajectory using the Developer Pack and MiniMax-M3:
 5. Cockpit lists recent Runs and exposes the selected Run's final result,
    summarized timeline, approvals, and authenticated Artifact content.
 6. A deliberate state check-in or correction affects the selected Workspace;
-   native activity metadata is ingested only after persisted opt-in.
+   ActivityWatch facts remain installation-scoped and enter only through the
+   read-only activity gateway.
 7. A real read-only MiniMax-M3 run inspects the authorized repository and
    completes without modifying it.
 
@@ -214,32 +227,54 @@ Calendar, GitHub, Research, MCP discovery, extension marketplace UX, release
 packaging, and advanced memory automation are not acceptance dependencies for
 this reset.
 
-### 4.2 Complete activity intelligence acceptance
+### 4.2 ActivityWatch intelligence acceptance
 
 The activity program is complete only when this second end-to-end story passes:
 
-1. The user separately enables complete macOS activity sensing, browser sensing,
-   and remote inference through persisted settings.
-2. Native and browser watchers produce exact application/window and browser-tab
-   intervals in the installation-scoped Raw Activity Vault. Heartbeats extend a
-   stable interval; a real state change closes it and creates the next interval.
-3. Cockpit presents a polished compact screen-time component and an expandable
-   activity explorer with daily timeline, trends, top applications/sites,
-   category composition, switching, focus/idle intervals, and a raw event view.
-4. Every `Asia/Shanghai` hour at 06:00, 07:00, ..., 23:00, and the following
-   00:00 boundary claims one durable idempotent inference job. There are no
-   scheduled requests between 00:00 and 06:00.
-5. A restart, sleep, or missed wall-clock hour coalesces into the next eligible
-   job instead of replaying a burst. That job covers every unsent activity event
-   since the last successful inference.
-6. Credential detection and URL sanitization run before deterministic chunking.
-   Every interval remains represented, but credential material is absent.
-7. The reviewed provider receives only delimited structured evidence and no
-   tools. Its validated result becomes a HumanStateSnapshot candidate with
-   confidence, validity, explanation, and evidence activity-event IDs.
-8. The component exposes model, send window, event/chunk counts, redactions,
-   status, evidence, and the exact credential-scrubbed payload. Collection and
-   inference can be paused independently; deletion and export remain available.
+1. ActivityWatch continues collecting while WeatherFlow is stopped. Starting or
+   stopping WeatherFlow never changes ActivityWatch process, watcher, bucket,
+   event, setting, Category, or retention state.
+2. WeatherFlow startup probes ActivityWatch, discovers buckets, current data
+   range, settings, and Category rules, then recovers interrupted derived tasks.
+   ActivityWatch unavailability degrades Watch live data without preventing the
+   Agent daemon from starting.
+3. The recovery coordinator enumerates every theoretical `Asia/Shanghai` window:
+   00:00–06:00, 06:00–12:00, 12:00–18:00, 18:00–24:00, a distinct rolling
+   24-hour window ending at 06:00, Monday weeks, anchored 14-day periods, and
+   calendar months.
+4. Every window has one deterministic task identity. Missing, failed,
+   interrupted, retryable, and non-final tasks are found independently of any
+   "last completed summary" cursor and processed chronologically.
+5. A window may produce a provisional revision after a 15-minute grace period.
+   It cannot become final before 60 minutes and a fresh query of the same raw
+   window. Late ActivityWatch data creates another revision instead of mutating
+   the previous result.
+6. Precise application time, dynamic Category time, AFK time, switches, and
+   evidence references are recalculated from ActivityWatch for every level.
+   Weekly, biweekly, and monthly summaries may consult lower-level narrative but
+   cannot derive their statistics only by adding or paraphrasing lower summaries.
+7. Category rules are normalized and versioned per revision. A rules change
+   leaves the old result reproducible and marks it for retention, regeneration,
+   or legacy-rule display according to the explicit policy.
+8. ActivityWatch produces observed facts, recomputable statistics, and Chinese
+   narrative summaries only. It produces no programming, communication,
+   meeting, focus, context-fragmentation, confidence, or other state hypothesis.
+9. The reviewed provider receives only bounded delimited evidence and no tools.
+   Prompt-injection text in titles or URLs remains data and cannot authorize or
+   trigger any action.
+10. Cockpit provides an independent Watch destination whose live facts come
+    directly from ActivityWatch and whose summaries, trends, task status, and
+    evidence-linked Chinese narrative come from WeatherFlow's derived activity
+    database. It also displays the read-only GitHub/Gmail/Google Calendar feed;
+    no comprehensive state assessment, inference history, confidence card, or
+    inference-evidence API remains. The former standalone status-weather page is
+    removed; Companion micro-weather remains independent.
+11. Users may select the existing Workspace model route used by recent
+    summaries, but cannot view, edit, or submit summary prompt text. Every
+    revision records the fixed prompt version, model-configuration version,
+    summary-settings version, and per-source ActivityWatch/connector evidence
+    refs. Missing, disabled, stale, and failed connector sources remain explicit
+    coverage states instead of being treated as no activity.
 
 ## 5. Top-level architecture
 
@@ -275,26 +310,30 @@ Rhythm Intelligence              Capability Packs
 Local Data Plane
   - Operational SQLite state
   - Append-only event/signal ledger
-  - Raw Activity Vault and inference audit
+  - Derived activity task, summary, statistics, and evidence ledger
   - Memory and derived semantic index
   - Managed artifact files
 
 Activity Intelligence
-  -> credential-scrubbed, tool-free provider request
-  -> reviewed remote model selected for activity inference
-  -> validated HumanStateSnapshot candidate
+  -> read-only ActivityWatch REST gateway
+  -> bounded read-only GitHub/Gmail/Google Calendar snapshot context
+  -> credential-scrubbed, bounded, tool-free provider request
+  -> reviewed remote model selected for Chinese narrative summarization
+  -> validated Chinese summary with source evidence refs
 ```
 
 ### 5.1 Boundary rules
 
-- Tauri does not infer human state, classify tool risk, or run agent business
-  logic. It may collect exact native activity facts after consent and transport
-  them over the authenticated bridge.
+- Tauri does not infer human state, classify tool risk, collect activity facts,
+  or run agent business logic.
 - The daemon is the only writer of WeatherFlow operational state.
-- The activity domain is the only writer of Raw Activity Vault and inference
-  audit records. The Event Ledger receives IDs and bounded summaries only.
-- Remote activity inference is a provider-neutral model call with no ToolSpecs,
+- ActivityWatch is the sole raw activity fact source. The activity domain is the
+  only writer of WeatherFlow's derived activity records, and every ActivityWatch
+  access path is read-only. The Event Ledger receives value-free lifecycle
+  projections only.
+- Activity summarization uses provider-neutral model calls with no ToolSpecs,
   delegation, Run mutation, or side-effect path. It is not a second Agent loop.
+  ActivityWatch state inference and comprehensive assessment do not exist.
 - Rhythm Intelligence is a daemon domain with explicit interfaces, not a
   special system prompt fragment.
 - Capability Packs depend on public harness contracts; the harness core does
@@ -412,6 +451,19 @@ Orchestrator and Workers use the same turn loop:
 
 The loop must support provider adapters without embedding provider-specific
 message structures into domain data.
+
+Every accepted Run uses its immutable `created_at` as the model-visible time
+anchor. The orchestrator presents that instant in both UTC and
+`Asia/Shanghai`, and relative phrases such as today, yesterday, the last two
+hours, and the past 24 hours resolve against that frozen anchor unless the user
+explicitly supplies another timezone. Resume and recovery must reuse the Run
+anchor rather than silently switching to a later wall-clock time.
+
+The same frozen anchor crosses the typed tool-execution boundary. ActivityWatch
+range tools are historical-only: their end must be at or before the Run anchor,
+and an inverted or future window returns a reviewed, value-free tool error so
+the model can correct and retry. The runtime never silently accepts or shifts a
+future window, which keeps relative-time answers reproducible after recovery.
 
 #### 6.3.1 Production model adapters
 
@@ -672,17 +724,17 @@ processes, but every descendant inherits the same OS profile and limits.
 ```text
 Raw Signals
   -> deterministic feature extraction
-  -> scheduled tool-free remote interpretation of consented raw activity
   -> evidence-aware fusion
   -> HumanStateSnapshot
   -> RhythmPolicy + WeatherPresentation
 ```
 
 Deliberate signals and Run behavior remain Event Ledger facts. Complete activity
-intervals are Raw Activity Vault facts under their own retention policy. Remote
-inference results are immutable inference-audit records; evidence references the
-vault event IDs and the sanitized request digest. HumanStateSnapshot,
-RhythmPolicy, and WeatherPresentation remain derived.
+intervals remain ActivityWatch facts under ActivityWatch's ownership and
+retention policy. ActivityWatch statistics and Chinese summary revisions remain
+Watch-only derived records and do not create a state-inference input to Rhythm.
+HumanStateSnapshot, RhythmPolicy, and WeatherPresentation remain derived from
+their non-ActivityWatch signal contracts.
 
 ### 7.2 Internal state dimensions
 
@@ -713,7 +765,6 @@ dimensions: map[dimension, DimensionEstimate]
 summary
 supporting_event_ids
 contradicting_event_ids
-activity_inference_job_id (optional)
 freshness
 valid_until
 estimator_version
@@ -722,9 +773,8 @@ estimator_version
 User correction creates a new high-weight signal and triggers recomputation. It
 does not edit the previous snapshot.
 
-An activity inference result is accepted only after its six dimensions,
-confidence, validity, evidence IDs, provider/model route, and response schema
-validate. It contributes evidence to fusion but never grants tools or authority.
+ActivityWatch summaries and statistics do not populate this snapshot and cannot
+change RhythmPolicy or WeatherPresentation.
 
 ### 7.4 RhythmPolicy
 
@@ -802,12 +852,12 @@ contain human-state-to-weather logic.
 3. **Cockpit Window**
    - normal application window with persistent left navigation;
    - conversation-first primary view;
-   - dedicated tasks, read-only status weather, approvals/artifacts,
+   - dedicated tasks, unified read-only Watch, approvals/artifacts,
      integrations, and settings views;
    - opens only through explicit user action.
 
-The Cockpit left navigation keeps conversation, Runs, and status weather as the
-primary product surfaces. A labeled Tools section contains Automations, Skills,
+The Cockpit left navigation keeps conversation, Runs, and Watch as the primary
+product surfaces. A labeled Tools section contains Automations, Skills,
 MCP Servers, LLM Models, and OAuth. Settings contains appearance, system, privacy, and
 diagnostic preferences rather than duplicating those tool configuration pages.
 
@@ -826,32 +876,44 @@ selection, OAuth filters, connector marks, status-weather icons, and activity
 charts. Third-party connector marks inherit reviewed theme colors instead of
 rendering vendor blues, while their recognizable source icons remain intact.
 
-### 8.2 Status-weather presentation
+### 8.2 Unified Watch fact and summary presentation
 
-- Status weather is a read-only personal-insight destination; it has no
-  check-in, correction, composer, or other command-entry control.
-- The current-state section shows WeatherPresentation, HumanStateSnapshot
-  summary/dimensions, confidence, freshness, collaboration mode, and validity.
-- A visually dominant screen-time component summarizes today's total screen and
-  browser time, current continuous activity, application/tab switches, and a
-  compact categorical timeline. It is a daily-use product surface, not a
-  diagnostic card.
-- Expanding the component reveals an all-day stacked timeline, screen/browser
-  trends, top applications and sites, category composition, switching density,
-  focus/idle intervals, and an inspectable raw activity timeline. Empty,
-  loading, permission-missing, paused, insufficient-data, inference-running,
-  and error states are designed and tested explicitly.
-- Raw titles and URLs are readable only inside this activity surface and the
-  explicit credential-scrubbed outbound-payload inspector. The page never shows
-  screenshot, keystroke, clipboard, form-value, cookie, or audio content.
-- The component shows the latest inference model, scheduled hour, source
-  window, event/chunk counts, redaction count, status, evidence, and result.
+- Cockpit has no standalone status-weather destination. Companion
+  WeatherPresentation remains the compact human-state signal, while RhythmPolicy
+  remains the Python-owned execution strategy. Removing the page does not merge
+  human weather with Agent Run state.
+- Watch is read-only and has no check-in, correction, composer, connector-sync,
+  state-assessment, or other command-entry control. Its live observed facts come
+  directly from ActivityWatch. It never computes, stores, or renders an
+  ActivityWatch-derived state hypothesis, confidence, or inference explanation.
+- Watch displays a read-only fused feed from replaceable GitHub, Gmail, and
+  Google Calendar auto-fetch snapshots. Rendering this feed never starts a
+  connector sync. Source health, last success, stale state, and reconnect need
+  are visible in Chinese. Generated connector synopses are Simplified Chinese;
+  any title, snippet, description, or URL retained from a source is visibly
+  quoted untrusted text and never executable or clickable.
+- Watch shows current application, title/site, AFK status, fact duration, today's
+  timeline, application and dynamic Category distribution, context switches,
+  recent six-hour/24-hour/weekly/biweekly/monthly summaries, trends, and the
+  pending/failed/retry task ledger.
+- Historical summaries and trends remain available when ActivityWatch is
+  offline. Live cards show a source-specific degraded state and the most recent
+  successful check rather than presenting cached facts as current.
+- Raw titles and URLs are readable only in bounded Watch timeline/evidence
+  views, are visibly marked as untrusted records, and never become links,
+  commands, or action triggers. The page never shows screenshot, keystroke,
+  clipboard, form-value, cookie, or audio content.
+- Summary detail exposes exact time boundaries, provisional/final state,
+  ActivityWatch evidence refs, Category-rule version, model version, prompt
+  version, attempts, and per-source connector coverage/watermarks. Narrative
+  text is Simplified Chinese; connector titles/snippets remain bounded untrusted
+  evidence, not instructions.
 - Long-term profile shows active evidence-backed Profile Assertions with
   confidence, origin, evidence count, and update time. Empty states must not
   manufacture durable claims from a single current-state snapshot.
 - Conversation and the Command Capsule remain the product's deliberate input
-  surfaces. If deliberate state correction is added there, it requires an
-  explicit typed backend contract; the status-weather page must stay read-only.
+  surfaces. Any future deliberate state correction requires an explicit typed
+  backend contract and cannot be added to Watch as an implicit command surface.
 
 ### 8.3 Run presentation states
 
@@ -872,8 +934,6 @@ Human-state weather remains visible through every Run state.
 - global shortcut;
 - companion positioning and display changes;
 - start/attach/health/restart management for the Python daemon;
-- exact macOS application/window interval adapter, including bundle identity,
-  title, focus changes, and idle state after persisted consent;
 - autostart and background-run preferences;
 - reduced-motion, particles, contrast, and always-on-top settings.
 - opening provider authorization URLs in the system browser; OAuth exchange,
@@ -882,10 +942,9 @@ Human-state weather remains visible through every Run state.
   credential-provider enum. Renderer code can set, delete, and read presence;
   it has no operation that returns secret material.
 
-The activity adapter emits exact ActivityWatch-level metadata over the
-authenticated bridge after sensing consent. It never emits pixels, keystrokes,
-clipboard/form values, cookies, request headers, or audio. Python validates and
-owns every durable interval; renderer state is never the activity truth source.
+The native bridge contains no activity watcher or sampler. ActivityWatch owns
+collection independently, and the renderer receives only bounded read models
+from the authenticated Python bridge.
 
 ### 8.5 Daemon bridge
 
@@ -947,15 +1006,21 @@ GET  /v1/approvals
 POST /v1/approvals/{approval_id}/decision
 GET  /v1/artifacts/{artifact_id}
 GET  /v1/rhythm/current
-GET  /v1/activity/preferences
-PATCH /v1/activity/preferences
-POST /v1/activity/heartbeats
-GET  /v1/activity/summary
-GET  /v1/activity/events
-GET  /v1/activity/export
-DELETE /v1/activity/events
-GET  /v1/activity/inference-jobs
-GET  /v1/activity/inference-jobs/{job_id}
+GET  /v1/watch/source-status
+GET  /v1/watch/settings/summary
+PATCH /v1/watch/settings/summary
+GET  /v1/watch/current
+GET  /v1/watch/recent
+GET  /v1/watch/timeline
+GET  /v1/watch/statistics
+GET  /v1/watch/applications
+GET  /v1/watch/categories
+GET  /v1/watch/afk
+GET  /v1/watch/switches
+GET  /v1/watch/summaries
+GET  /v1/watch/summaries/{summary_id}
+GET  /v1/watch/tasks
+GET  /v1/watch/trends
 GET  /v1/desktop/snapshot
 GET  /v1/workspaces
 POST /v1/workspaces
@@ -1001,127 +1066,224 @@ decisions fail closed. Recovery never retries an approved or executing install:
 an executing Action is moved to `NEEDS_REVIEW`, while an approved-but-not-started
 Action waits for another explicit user decision.
 
-### 8.7 Complete Activity Intelligence
+### 8.7 ActivityWatch Intelligence
 
-#### 8.7.1 Ownership and scope
+#### 8.7.1 Ownership and read-only source boundary
 
-Complete activity is installation-scoped personal telemetry. It continues to
-record when no Workspace or Cockpit window is selected and is not implicitly
-owned by the currently visible Workspace. The Raw Activity Vault, analysis
-queries, inference preferences, durable inference jobs, sanitized outbound
-chunks, and deletion/export lifecycle form one Python-owned `activity` domain.
+ActivityWatch is the sole raw activity fact source. It is installation-scoped,
+continues collecting with WeatherFlow stopped, and is not owned by the selected
+Workspace. WeatherFlow never ships a competing macOS watcher or browser
+extension and never calls ActivityWatch bucket/event/settings mutation routes.
 
-Remote inference configuration references one user-selected Workspace model
-configuration so it can reuse the reviewed provider catalog and native
-credential broker. Each claimed inference job freezes provider, model, endpoint,
-credential reference, and configuration version exactly once. The activity job
-is not a Run, owns no capability snapshot, and receives no tools.
+The primary gateway uses the fixed loopback REST root
+`http://127.0.0.1:5600/api/0` for server info, buckets, events, settings,
+Category rules, and query results. The public gateway type exposes only `GET`
+operations plus the semantically read-only `POST /query/`; it has no mutation
+methods. The configured SQLite database may be opened only for an explicit
+historical-bulk, diagnostic, or API-gap purpose with a short-lived URI
+`mode=ro` connection and `PRAGMA query_only=ON`. Schema drift fails closed, and
+no domain service receives a permanent connection or raw table interface.
 
-#### 8.7.2 Raw interval contract
+#### 8.7.2 Facts, evidence, and dynamic Category
 
-The canonical interval contains:
+Observed facts include ActivityWatch bucket/event identity, timestamp,
+duration, foreground application, window title, URL/domain, and AFK state.
+WeatherFlow normalizes them only in memory for a bounded query. It does not copy
+them into its SQLite database.
 
-```text
-activity_event_id: ULID
-source: macos_window | browser_tab | idle
-device_id
-source_instance
-source_event_id
-started_at / ended_at: UTC
-duration_seconds
-observed_at: UTC
-app_name / bundle_id (optional)
-window_title (optional)
-browser_name / url / domain / tab_title (optional)
-audible / incognito / focused (optional)
-idle_state: active | idle | unknown
-category (derived but stored beside the exact identity)
-created_at / updated_at
-```
-
-`source_event_id` makes watcher retries idempotent. A heartbeat for the same
-source instance and identical state within `pulsetime` extends the current
-interval. A different application, window, tab, URL, focus, private/audible, or
-idle state closes the previous interval at the transition timestamp and opens a
-new one. Real application changes increment application switching; browser tab
-changes increment a separate browser metric. Category changes are not a proxy
-for either count.
-
-The browser extension sends exact Tabs API metadata over the authenticated
-loopback bridge. It exposes clear permission, enabled, paused, disconnected, and
-private-window states. Private activity is recorded only when the browser grants
-the extension access and the user's browser-source preference permits it.
-
-#### 8.7.3 Retention, export, and deletion
-
-Raw intervals persist until user deletion by default. Settings may select a
-rolling 30-, 90-, 365-day, or unlimited policy. Retention expiry and explicit
-time-range deletion remove raw intervals, sanitized outbound chunks that contain
-them, and their inference evidence links in one activity-domain transaction.
-Affected current human-state projections are recomputed or expire; append-only
-audit semantics never defeat deletion. JSON export contains the exact locally
-stored intervals and preference metadata but never credentials or provider
-secrets.
-
-#### 8.7.4 Secret and untrusted-content boundary
-
-The local vault preserves the complete user-visible URL and title. Immediately
-before any remote request, a deterministic sanitizer:
-
-- removes URL userinfo and fragments;
-- redacts credential-bearing query keys, OAuth codes, signatures, tokens, and
-  secret-shaped values while preserving non-secret URL structure;
-- redacts credential-shaped text in titles and document names;
-- rejects cookies, authorization headers, form values, and unknown browser
-  payload fields at ingestion because they are outside the schema;
-- records field-level redaction metadata without recording the removed value.
-
-Sanitized events are serialized as JSON inside an explicit untrusted-data
-delimiter. System instructions state that event text is evidence, never
-instructions. Neither provider output nor text embedded in an activity event can
-select tools, change the schedule, modify preferences, or authorize an action.
-
-#### 8.7.5 Hourly inference schedule and recovery
-
-The only scheduled slots use `ZoneInfo("Asia/Shanghai")`: 06:00 through 23:00
-on a service day plus the following 00:00 slot attributed to that service day.
-There are no slots from 00:00 exclusive through 06:00 exclusive. A durable
-unique slot key and immediate transaction claim make execution idempotent.
-
-Each job freezes a high-water activity event cursor and starts after the last
-successful cursor. If the app sleeps, stops, or misses several slots, the next
-eligible slot claims one coalesced job covering every unsent event; it never
-replays one request per missed hour. No catch-up request runs during the quiet
-00:00-06:00 interval. Failed jobs keep their cursor unsent and retry only at a
-later eligible slot with bounded backoff metadata.
-
-The complete sanitized interval set is deterministically chunked at no more
-than 500 events or 128 KiB per provider request. Every event appears in exactly
-one chunk. Each chunk returns a validated evidence assessment; a final tool-free
-request fuses only those validated assessments into one candidate snapshot.
-One durable job may therefore own several bounded provider calls without
-creating a second Agent loop or dropping raw evidence.
-
-#### 8.7.6 Audited provider result
-
-The activity inference audit owns:
+An evidence reference contains:
 
 ```text
-job_id / slot_key / status / attempt
-window_start / window_end / event_cursor_start / event_cursor_end
-provider / model / configuration_version
-event_count / chunk_count / redaction_count
-sanitized chunk payloads and request digests
-provider-reported usage and cost when available
-validated candidate snapshot / error_code
-claimed_at / started_at / completed_at
+activitywatch_server_id
+bucket_id
+event_id
+event_timestamp
+event_duration
+event_digest
+fields_used
 ```
 
-Provider failures expose typed value-free errors outside the activity audit.
-Successful output must contain all six state dimensions, confidence, summary,
-validity, and evidence activity-event IDs drawn from the claimed snapshot. The
-activity service fuses the candidate with deliberate and task evidence through
-the existing Rhythm domain. It does not execute model-proposed actions.
+ActivityWatch Category is a query-time interpretation. WeatherFlow reads the
+current classes/settings, removes invalid non-rules from the query input,
+normalizes the remaining configuration deterministically, and records both the
+exact normalized JSON and SHA-256 version used by each derived revision.
+Category names never become raw event columns. A rule change cannot rewrite an
+old summary; it may mark the revision as legacy-rules, schedule a new revision,
+or retain it according to the explicit staleness policy.
+
+#### 8.7.3 Semantic query service
+
+The Agent and renderer use typed semantic operations rather than arbitrary
+database scans:
+
+```text
+current_state
+recent_activity
+query_range
+application_usage
+category_usage
+afk_status
+context_switches
+summary_history
+```
+
+Each operation fixes its query purpose, maximum time range, event count, output
+size, and returned fields. Model-visible tools never accept arbitrary
+ActivityWatch query source. Full local history may be read and aggregated by
+the gateway, but only bounded statistics and evidence excerpts cross the model
+boundary.
+
+#### 8.7.4 Fixed summary windows and hierarchy
+
+All boundaries use `ZoneInfo("Asia/Shanghai")` and half-open intervals:
+
+```text
+stage_6h: 00:00–06:00, 06:00–12:00, 12:00–18:00, 18:00–24:00
+daily_24h: previous day 06:00 through current day 06:00
+weekly: Monday 00:00 through next Monday 00:00
+biweekly: 14-day windows anchored at Monday 1970-01-05 00:00
+monthly: calendar-month start through next calendar-month start
+```
+
+The boundary policy version is stored on every task. Parent/child dependency
+rows make the hierarchy explicit. A higher-level analysis may include bounded
+lower-level narrative as supporting context, but application time, Category
+time, AFK time, switches, and source watermark are always recomputed from the
+ActivityWatch raw window.
+
+#### 8.7.5 Durable task ledger, grace, and revisions
+
+Every theoretical window has one deterministic task ID derived from type,
+timezone, boundary-policy version, start, and end. The ledger stores:
+
+```text
+task type / window / timezone / boundary version
+pending | running | completed | failed | needs_retry
+attempt count / attempt history
+not_before / next_retry_at / lease owner / lease expiry
+provisional | final
+completed_at / error code
+Category-rule version
+provider / model / configuration version
+prompt version / statistics version
+current revision / source watermark
+```
+
+A task becomes eligible for a provisional revision 15 minutes after its window
+ends. It cannot become final before 60 minutes. Finalization performs a fresh
+read of the same ActivityWatch range. If the evidence/statistics watermark
+changed, WeatherFlow appends another provisional revision and retries later;
+history is never overwritten. Repeated starts, concurrent schedulers, and
+duplicate execution requests cannot create duplicate tasks or duplicate
+revision numbers.
+
+Summary attempts are safe to retry because they are read-only with respect to
+ActivityWatch and have no external side effect. A recovered expired `running`
+lease becomes `needs_retry`, unlike an uncertain tool Action.
+If the selected model transport reports a locked, denied, or temporarily
+unavailable credential, the attempt fails and the task becomes `needs_retry`;
+WeatherFlow writes no deterministic revision for that attempt. A later
+compensation pass retries the selected model after credential access recovers.
+Installations upgraded from the earlier fallback behavior retain their existing
+immutable revisions and evidence. Upgrade reconciliation idempotently requeues
+only a completed task whose latest revision records a transient authentication
+or provider-connection fallback, allowing the recovered model result to append
+the next revision instead of deleting history.
+
+A configured model final turn that fails the fixed JSON schema, Simplified-
+Chinese, no-inference, evidence-reference, or source-echo validation is the
+permanent `activity_model_output_rejected` failure with bounded stage
+`model_output`. It creates no deterministic fallback revision and is not automatically retried; an explicit user
+regeneration may create a later attempt. Provider response-envelope failures are
+also permanent until explicit regeneration. Their attempt metadata may record
+only a bounded failure stage: `http_response`, `provider_status`, `choice`,
+`message`, `empty_text`, or `unknown`. Authentication, network, and route
+failures record no response stage. Exception messages, HTTP/provider status
+text, response bodies, ActivityWatch content, and credentials never enter this
+field or the activity ledger.
+
+#### 8.7.6 Startup recovery and reconnection
+
+Every long-lived WeatherFlow start performs this bounded sequence:
+
+1. probe ActivityWatch;
+2. discover current buckets, data range, settings, and Category version;
+3. recover expired task leases;
+4. enumerate every theoretical eligible window across the available range;
+5. idempotently insert missing tasks and dependencies;
+6. identify missing, failed, retryable, legacy-rule, and non-final work;
+7. process due tasks by window end and granularity rank, oldest first;
+8. persist attempts, revisions, evidence refs, and final task state.
+
+The planner never derives gaps from only the latest completed summary. If
+ActivityWatch is unavailable, source state becomes degraded, existing historical
+summaries remain queryable, and pending work is retained. The reconnect loop
+repeats discovery and reconciliation when ActivityWatch returns. WeatherFlow
+shutdown closes only its HTTP client and scheduler; it never signals or manages
+ActivityWatch.
+
+#### 8.7.7 Model and untrusted-content boundary
+
+Activity-summary generation owns one installation-scoped, optimistically
+versioned settings record. It selects a model from an existing Workspace model
+configuration; it does not contain user-authored guidance or prompt text. The
+record contains only the source Workspace identity, provider/model names,
+model-configuration version, settings version, and timestamps; it contains no
+API key, credential reference, or prompt field. Updating the Workspace's
+ordinary conversation model does not silently rewrite this record. An
+unconfigured selection uses the traceable local deterministic path. A configured
+selection may choose a model independently from the current Workspace conversation
+model, but its provider and model-configuration version must exactly match the
+current Workspace configuration. Resolution applies the selected model over that
+configuration's verified provider, base URL, and credential reference. Missing
+configuration or provider/version drift is the retryable typed failure
+`activity_model_route_version_mismatch` and never silently selects another route.
+A locally missing, locked, or denied Keychain credential is the
+retryable `activity_model_credential_unavailable`, while provider HTTP 401/403 is
+the distinct retryable `activity_model_provider_authentication_failed`. Neither
+condition may masquerade as a completed model summary.
+
+Every summary uses one code-owned, digest-versioned Simplified-Chinese prompt.
+The fixed envelope defines ActivityWatch and connector text as untrusted
+evidence, forbids tools and actions, constrains the JSON schema and evidence
+keys, bounds output, and requires Chinese narrative. The prompt is neither
+rendered nor accepted by Settings or HTTP input. Every generated revision
+records the effective provider/model, current model-configuration version,
+summary-settings version, and digest-derived prompt version.
+
+Immediately before a model request, a deterministic sanitizer removes URL
+userinfo/fragments, credential-bearing query keys, OAuth material, signatures,
+tokens, and secret-shaped title text. The model input contains aggregate
+statistics, at most 120 ActivityWatch evidence excerpts, bounded lower-level
+summaries, and independently bounded read-only snapshots from GitHub, Gmail,
+and Google Calendar, totalling no more than 128 KiB. Each source is explicitly
+delimited as untrusted data. Missing, disabled, stale, or failed connector
+coverage is recorded and described as coverage, never as proof that no activity
+occurred.
+
+The activity model request has no tools, delegation, Run mutation, or Action
+path. Its validated output contains Chinese summary narrative and evidence refs
+drawn only from the supplied window. It contains no state hypothesis,
+confidence, inference label, or inference explanation. Provider/model, prompt,
+statistics, Category, request digest, redaction count, per-source connector
+coverage/evidence refs, usage, and completion time are stored as derived audit
+metadata; the full raw ActivityWatch window is not.
+
+Generated connector coverage and synopsis fields are Simplified Chinese. Source
+language is preserved only when needed as a bounded, visibly quoted untrusted
+evidence excerpt; source text is never relabeled as model-authored narrative.
+
+#### 8.7.8 Observed facts and Chinese narrative
+
+Foreground application, title, URL, event time, duration, and AFK status are
+observed facts. Application time, dynamic Category time, AFK time, and context
+switch counts are recomputable statistics. Recent-summary prose is a Chinese
+narrative over this bounded evidence, not an asserted human state. API,
+semantic tools, database records, and Watch UI do not expose ActivityWatch
+state-inference, comprehensive-assessment, confidence, or inference-evidence
+types. ActivityWatch-derived data cannot contribute a state hypothesis to
+Rhythm fusion, select tools, change schedules, mutate preferences, or execute
+model-proposed actions.
 
 ## 9. Capability Plane and Trust Plane
 
@@ -1224,8 +1386,10 @@ The first production connector slice is intentionally fixed to GitHub, Gmail,
 and Google Calendar; later curated OAuth catalog entries follow the same
 identity and credential-isolation contract without inheriting capability.
 Connection requires explicit user action. Read-only automatic fetch may run
-silently only for an entry whose backend definition explicitly supports it, at
-a bounded interval chosen by the user. A connector binding owns only the active
+silently only for an entry whose backend definition explicitly supports it. The
+three production sources use one fixed daily cadence (`1440` minutes); users may
+enable or disable each source independently but cannot select a faster polling
+frequency. A connector binding owns only the active
 account identity, reviewed OAuth scopes, and background-fetch settings. It does
 not own a per-conversation tool grant. New Runs derive connector tools from the
 Run's `ask` or `bypass` mode, and only toolkits with fixed reviewed WeatherFlow
@@ -1301,8 +1465,9 @@ SQLite transaction tables own current mutable state:
 - checkpoints and cursors;
 - immutable per-Run model routes;
 - encrypted, retention-bounded provider continuations;
-- activity preferences, raw activity intervals, inference jobs, and sanitized
-  outbound chunks under the activity repository boundary;
+- ActivityWatch source state, Category-rule versions, summary tasks/attempts/
+  revisions/dependencies, statistics, and ActivityWatch plus per-source
+  connector evidence references under the activity repository boundary;
 - artifact metadata;
 - current derived snapshot cache.
 
@@ -1333,10 +1498,11 @@ User privacy deletion and retention expiration are explicit exceptions to
 append-only storage. Append-only is an audit property, not a reason to deny
 data deletion.
 
-Raw activity payloads are intentionally not Event Ledger payloads. The ledger
-may record a value-free lifecycle projection such as an inference job ID,
-status, counts, and request digest, but never an application name, title, URL,
-domain, tab title, or sanitized outbound body.
+ActivityWatch raw payloads are intentionally not WeatherFlow database or Event
+Ledger payloads. The ledger may record a value-free lifecycle projection such
+as a summary task ID, status, counts, and request digest, but never an
+application name, title, URL, domain, tab title, AFK event, or sanitized
+evidence body.
 
 ### 10.3 Memory roles
 
@@ -1370,11 +1536,13 @@ domain, tab title, or sanitized outbound body.
 
 ### 10.5 Retention defaults
 
-- Complete raw activity intervals: unlimited until user deletion by default;
-  selectable rolling policies are 30, 90, or 365 days.
-- Sanitized inference payloads and inference jobs: follow the shortest
-  retention of their referenced raw intervals and the selected inference-audit
-  policy; deletion of source activity removes the payload copy.
+- Raw activity retention belongs exclusively to ActivityWatch and is never
+  configured by WeatherFlow.
+- Derived summary tasks, revisions, statistics, Category snapshots, and
+  ActivityWatch plus per-source connector evidence refs persist until explicit
+  WeatherFlow activity-history reset.
+  If an ActivityWatch evidence event is later unavailable, the derived result is
+  retained but visibly marked as no longer fully reproducible.
 - Aggregated behavior features: 90 days.
 - User-authored conversations, task history, approved audit records, memory, and
   artifacts persist until user deletion or workspace policy expiration.
@@ -1384,6 +1552,11 @@ domain, tab title, or sanitized outbound body.
   assertions, artifacts, or an entire Workspace.
 
 ## 11. Built-in Capability Packs
+
+ActivityWatch semantic queries are a core observe-only capability available to
+every Run mode. They expose fixed-purpose current/recent/range/application/
+Category/AFK/switch/summary/evidence operations, accept no arbitrary query
+program, require no Workspace write scope, and never widen execution authority.
 
 ### 11.1 Developer Pack
 
@@ -1410,20 +1583,69 @@ domain, tab title, or sanitized outbound body.
 - schedule proposals influenced by RhythmPolicy;
 - all external mutations through approval.
 
+The pack is an authority-free default for new Workspaces and is added
+idempotently to existing Workspaces. Local day planning uses existing Workspace
+write authority. Calendar-backed tools are candidates only when an active Google
+Calendar identity is frozen for the Run; production execution delegates to the
+reviewed canonical Composio action/version boundary. Legacy GitHub-release and
+Research ToolSpecs are not registered without an explicitly wired typed provider,
+so the production catalog contains no permanently unavailable ghost tools.
+
 ### 11.4 Bounded brokered integration boundary
 
-- GitHub fetches bounded notifications and repository activity through
-  read-only account authorization.
-- Gmail fetches bounded unread-message metadata and snippets only; attachment
-  bodies and message mutations are outside the automatic-fetch path.
-- Google Calendar fetches a bounded upcoming-event window.
+- GitHub fetches unread notifications from the preceding seven days plus the
+  authenticated user's bounded recent activity through fixed, version-pinned,
+  read-only actions. It does not substitute only issues involving the user.
+- Gmail fetches unread-message metadata and bounded preview snippets from the
+  preceding thirty days. `messageText`, MIME payloads, attachment bodies, and
+  message mutations are outside the automatic-fetch path and are never stored
+  in a connector snapshot.
+- Google Calendar fetches events across all accessible calendars from 00:00
+  seven days before the current Asia/Shanghai day through 00:00 fourteen days
+  after it. The request and normalized aggregate are bounded. Normalized events
+  preserve both start and optional end timestamps so past/current/next schedule
+  context can be derived without another provider call.
 - Every fetch result retains provider source IDs and fetch timestamps and is
-  stored locally as replaceable derived context.
-- Auto-fetch is silent, read-only, interval-bounded, observable in Cockpit, and
-  independently disableable for each connector.
+  stored locally as replaceable derived context, together with aggregate raw
+  and normalized item counts only. Provider content that cannot be normalized
+  does not replace a previous successful snapshot: a non-empty raw response
+  with zero normalizable records is a degraded `invalid_response`, not a
+  confirmed empty result.
+- Auto-fetch is silent, read-only, fixed to one daily refresh, observable in
+  Cockpit, and independently disableable for each connector. Feed status exposes
+  the next scheduled refresh, stable provider strategy key, coverage offsets,
+  aggregate normalization counts, and normalization health without exposing
+  credentials or provider identities.
 - WeatherFlow's scoped Composio project key is resolved from Keychain only at
   the HTTP transport boundary. Provider credentials and refresh tokens remain
   at Composio.
+- The minimum scoped-key permissions are `Auth configs` read/write,
+  `Connected accounts` read/write, `Toolkits` read, and `Tool execution` write.
+  Every other Composio permission area remains disabled unless a separate
+  reviewed contract explicitly requires it.
+- Authentication failures preserve that boundary in durable status and Watch:
+  Composio transport 401 is `broker_auth` and means the project key is invalid;
+  Composio transport 403 is `broker_permission` and means the key authenticated
+  but lacks a required scoped permission. A wrapped provider 401/403 or
+  `auth_refresh_required` remains `auth`, and absent project OAuth application
+  setup remains `auth_config_required`. Only `auth` requests provider-account
+  reauthorization. `broker_auth`, `broker_permission`, and
+  `auth_config_required` instead direct the user to replace the project key,
+  grant the missing project-key permission, or configure the project's OAuth
+  application respectively.
+- A candidate replacement key is committed only after a read-only broker
+  validation succeeds. Successful replacement clears stale credential-scoped
+  `broker_auth` and `broker_permission` errors and immediately schedules a
+  read-only revalidation of every persisted connected-account reference before
+  automatic fetch or connector tools resume.
+- Replacement-key reconciliation reads authoritative connected-account state
+  under the new key. A reference is preserved when it remains accessible in the
+  same project and its installation user, toolkit, identity, state, and scopes
+  validate. An inaccessible or cross-project reference is marked
+  `project_changed`, removed from automatic fetch and future capability
+  resolution, and shown as requiring OAuth again. WeatherFlow does not remotely
+  revoke or delete that reference because it may still be owned by the previous
+  Composio project.
 - Managed OAuth uses Composio v3 Connect Link and authoritative connected-
   account state. Handoff creation is not connection completion.
 - Before creating an Auth Config, WeatherFlow reads the project-scoped v3.1
@@ -1494,9 +1716,9 @@ capability rather than a new core agent loop.
 | daemon crash | Tauri restarts with backoff; daemon scans non-terminal Runs |
 | Tauri crash/exit | daemon continues according to preference; reconnect by event cursor |
 | uncertain external side effect | mark `NEEDS_REVIEW`; never blindly repeat |
-| activity watcher unavailable | preserve prior intervals, show source-specific degraded state, continue with other evidence, and lower confidence |
-| hourly inference missed during sleep/restart | wait for the next eligible `Asia/Shanghai` slot and submit one coalesced idempotent job |
-| activity provider failure | retain the unsent cursor, record a value-free error, and retry only at a later eligible slot |
+| ActivityWatch unavailable | keep WeatherFlow alive, preserve derived history and pending tasks, show source-specific degraded state, and reconcile immediately after reconnect |
+| summary windows missed during sleep/restart | enumerate all theoretical windows and process each missing task chronologically; never collapse them into one cursor job |
+| activity provider failure | record a value-free attempt error and retry the same idempotent task with bounded backoff |
 | checkpoint corruption | isolate record, retain audit/artifacts, mark `NEEDS_REVIEW` |
 | event cursor expired | refetch snapshots, then resume live events |
 | capability schema drift | current Run retains frozen snapshot; new Run receives new schema |
@@ -1567,12 +1789,20 @@ and structured events.
 - macOS sandbox escape denial for filesystem, network, Keychain, host signals,
   environment inheritance, timeout, and descendant cleanup;
 - MCP discovery, disconnect, and schema drift;
+- Composio least-privilege scoped-key validation, transport 401/403 versus
+  wrapped-provider authentication classification, and replacement-key
+  reconciliation that preserves verified same-project accounts while marking
+  inaccessible or cross-project references `project_changed` without remote
+  revocation;
 - artifact atomic commit and partial failure;
-- behavior metadata ingestion and retention expiration;
-- raw activity heartbeat merge/idempotency, query, export, deletion, and
-  retention expiration;
-- credential scrubbing, deterministic inference chunking, quiet-hour schedule,
-  missed-hour coalescing, job recovery, and validated provider output;
+- ActivityWatch loopback read client, bucket/range discovery, dynamic Category
+  queries, reconnect, and short-lived query-only SQLite diagnostic fallback;
+- fixed six-hour/daily/weekly/biweekly/monthly boundaries, deterministic task
+  IDs, chronological backfill, lease recovery, provisional/final revisions, and
+  Category-rule staleness;
+- credential scrubbing, bounded three-source evidence packs, prompt-injection
+  fixtures, fixed Chinese prompt provenance, tool-free model calls, and no
+  ActivityWatch inference path;
 - HTTP/WebSocket authentication and cursor replay.
 
 ### 14.3 Agent trajectory evaluations
@@ -1601,9 +1831,11 @@ must judge policy, state transition, provenance, and recovery contracts.
 - daemon crash and recovery;
 - Tauri restart and event/snapshot recovery;
 - reduced-motion and sensor-permission fallback.
-- compact/expanded screen-time component states and inference-audit inspection;
-- screenshot-based visual QA for representative populated, empty, paused,
-  permission-missing, and error states at supported Cockpit viewports.
+- independent Watch destination, source-offline historical fallback, live facts
+  and Chinese summaries, task-ledger inspection, and evidence details;
+- screenshot-based visual QA for representative populated, empty, reconnecting,
+  backfilling, failed-task, and source-offline states at supported Cockpit
+  viewports.
 
 ### 14.5 Security and privacy checks
 
@@ -1613,8 +1845,9 @@ must judge policy, state transition, provenance, and recovery contracts.
 - credential leakage scans across logs/events/checkpoints/memory;
 - continuation AEAD tamper detection, model binding, expiry, terminal deletion,
   and absence from logs/events/checkpoints/memory/diagnostics;
-- activity schema rejection of screenshots, pixels, keystroke/clipboard/form/
-  cookie/header/audio content and raw activity absence from non-activity stores;
+- proof that WeatherFlow has no activity watcher/write API and that raw
+  ActivityWatch facts are absent from WeatherFlow SQLite, Runs, events, memory,
+  checkpoints, artifacts, and diagnostics;
 - prompt-injection fixtures in titles/URLs and credential-redaction scans across
   local logs, events, checkpoints, memory, artifacts, and outbound payloads;
 - retention expiry;
@@ -1635,11 +1868,12 @@ must judge policy, state transition, provenance, and recovery contracts.
   closed instead of returning the original Run.
 - Low-confidence or expired human state projects to `mixed` rather than a false
   precise weather state.
-- One hour of raw activity is queryable for the compact component without a
-  full-table scan; day-level charts remain responsive at one year of interval
-  history through indexed interval queries and bounded aggregation.
-- A scheduled activity inference slot is claimed once, never runs during the
-  00:00-06:00 quiet interval, and never drops an unsent event during chunking.
+- One hour of ActivityWatch data is queryable for Watch without a WeatherFlow
+  full-table scan; day-level charts remain responsive at one year of history
+  through bounded ActivityWatch queries and local aggregation.
+- Every eligible summary window has one deterministic task, provisional work
+  never becomes final before the grace boundary, and startup recovery can prove
+  that no interior missing window was skipped.
 
 ## 16. Delivery phases
 
@@ -1665,18 +1899,23 @@ must judge policy, state transition, provenance, and recovery contracts.
 
 - Tauri Companion, Capsule, and Cockpit;
 - daemon supervisor and authenticated bridge;
-- macOS activity metadata adapter;
+- ActivityWatch read gateway and derived activity contracts;
 - HumanStateSnapshot, RhythmPolicy, WeatherPresentation;
 - micro-weather and Run ring.
 
-### P2A: Complete Activity Intelligence
+### P2A: ActivityWatch Intelligence
 
-- installation-scoped Raw Activity Vault and typed activity APIs;
-- exact macOS and browser watcher contracts with persisted opt-in;
-- screen-time component, detailed visual analytics, and raw timeline;
-- deterministic credential scrubbing and audited provider-neutral inference;
-- `Asia/Shanghai` 06:00-through-24:00 durable hourly scheduler;
-- deletion, export, configurable retention, recovery, and visual/security QA.
+- strict read-only ActivityWatch REST gateway plus isolated short-lived SQLite
+  diagnostic fallback;
+- fixed-window planner, persistent task/attempt/revision ledger, chronological
+  startup compensation, and reconnect supervision;
+- semantic activity queries, dynamic Category versioning, precise statistics,
+  and ActivityWatch plus per-source connector evidence references;
+- bounded credential-scrubbed provider-neutral Chinese summarization with a
+  fixed versioned prompt and no inference;
+- independent Watch panel with live facts, derived summaries/trends, and task
+  recovery visibility;
+- provisional/final stability checks and visual/security QA.
 
 ### P3: Flagship vertical slice
 
@@ -1732,13 +1971,17 @@ execution path to bypass the Run Coordinator.
     durable Action/Approval pair; renderer confirmation flags and fabricated
     authorization ids are not accepted, and interrupted execution never retries
     automatically.
-20. Raw activity has one installation-scoped owner and is never copied into
-    Runs, the Event Ledger, memory, checkpoints, artifacts, or diagnostics.
-21. Remote activity inference is separately consented, credential-scrubbed,
-    tool-free, evidence-linked, and scheduled only at the fixed
-    `Asia/Shanghai` 06:00-through-24:00 hours.
-22. Activity-derived state can change RhythmPolicy but cannot grant authority or
-    directly execute any side effect.
+20. ActivityWatch is the sole raw activity owner. WeatherFlow is strictly
+    read-only and never mirrors its raw events into WeatherFlow storage, Runs,
+    the Event Ledger, memory, checkpoints, artifacts, or diagnostics.
+21. Activity summary tasks are installation-scoped, fixed-window, durable,
+    idempotent, enumerable, safely retryable, Category-versioned, and
+    provisional before final.
+22. Activity summary model analysis is credential-scrubbed, bounded, tool-free,
+    evidence-linked, and Chinese-only. It may summarize observed facts but may
+    not create inferred human state, labels, confidence, or assessments.
+23. ActivityWatch facts and summaries do not enter RhythmPolicy, grant
+    authority, or directly execute any side effect.
 
 ## 18. Design completion criteria
 

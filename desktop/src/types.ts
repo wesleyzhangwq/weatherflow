@@ -95,106 +95,175 @@ export interface DesktopSnapshot {
   rhythm: CurrentRhythm;
   latest_run: Run | null;
   workspace: Workspace;
-  metadata_sensor_enabled: boolean;
 }
-export interface ActivityPreferences {
-  collection_enabled: boolean;
-  macos_enabled: boolean;
-  browser_enabled: boolean;
-  incognito_enabled: boolean;
-  remote_inference_enabled: boolean;
-  model_workspace_id: string | null;
-  retention_days: 30 | 90 | 365 | null;
-  version: number;
+
+export type ActivityAfkState = "active" | "afk" | "unknown";
+export type ActivitySummaryKind = "stage_6h" | "daily_24h" | "weekly" | "biweekly" | "monthly";
+export type ActivitySummaryFinality = "provisional" | "final";
+export type ActivitySummaryTaskStatus = "pending" | "running" | "completed" | "failed" | "needs_retry";
+
+export interface ActivityEvidenceRef {
+  activitywatch_server_id?: string;
+  bucket_id: string;
+  event_id: string;
+  event_timestamp?: string;
+  event_duration?: number;
+  event_digest?: string;
+  fields_used?: string[];
 }
-export interface ActivityHeartbeat {
-  source: "macos_window" | "browser_tab" | "idle";
-  device_id: string;
-  source_instance: string;
-  source_event_id: string;
+
+export interface ActivityWatchSourceStatus {
+  reachable: boolean;
+  server_version: string | null;
+  data_start: string | null;
+  data_end: string | null;
+  checked_at: string;
+  last_reconciled_at: string | null;
+  error_code: string | null;
+}
+
+export interface ActivityObservedFact {
   observed_at: string;
-  pulsetime_seconds: number;
-  app_name?: string | null;
-  bundle_id?: string | null;
-  window_title?: string | null;
-  browser_name?: string | null;
-  browser_window_id?: string | null;
-  browser_tab_id?: string | null;
-  url?: string | null;
-  domain?: string | null;
-  tab_title?: string | null;
-  audible?: boolean | null;
-  incognito?: boolean | null;
-  focused?: boolean | null;
-  idle_state: "active" | "idle" | "unknown";
-  category?: string | null;
-}
-export interface ActivityInterval {
-  id: string;
-  source: "macos_window" | "browser_tab" | "idle";
-  device_id: string;
-  source_instance: string;
-  source_event_id: string;
   started_at: string;
-  ended_at: string;
-  observed_at: string;
   duration_seconds: number;
   app_name: string | null;
-  bundle_id: string | null;
   window_title: string | null;
-  browser_name: string | null;
-  browser_window_id: string | null;
-  browser_tab_id: string | null;
   url: string | null;
-  domain: string | null;
-  tab_title: string | null;
-  audible: boolean | null;
-  incognito: boolean | null;
-  focused: boolean | null;
-  idle_state: "active" | "idle" | "unknown";
-  category: string | null;
+  afk_state: ActivityAfkState;
+  evidence_refs: ActivityEvidenceRef[];
 }
-export interface ActivityRankItem { name: string; seconds: number }
-export interface ActivitySummary {
+
+export interface WatchCurrent {
+  observed: ActivityObservedFact | null;
+  afk_state: ActivityAfkState;
+  observed_at: string;
+  source_health: "available" | "degraded";
+}
+
+export interface ActivityStatistics {
   window_start: string;
   window_end: string;
-  screen_seconds: number;
-  browser_seconds: number;
-  idle_seconds: number;
-  current_streak_seconds: number;
+  active_seconds: number;
+  afk_seconds: number;
   app_switch_count: number;
-  tab_switch_count: number;
+  category_switch_count: number;
+  app_seconds: Record<string, number>;
   category_seconds: Record<string, number>;
-  top_apps: ActivityRankItem[];
-  top_domains: ActivityRankItem[];
+  category_rule_version: string;
+  observed_seconds: number;
+  unobserved_seconds: number;
+  window_observed_seconds: number;
+  afk_observed_seconds: number;
+  web_observed_seconds: number;
+  coverage_ratio: number;
+  coverage_status: "none" | "partial" | "complete";
+  source_bucket_ids: string[];
 }
-export interface ActivityInferenceJob {
+
+export interface ActivityTimelineEntry {
   id: string;
-  scheduled_for: string;
+  started_at: string;
+  ended_at: string;
+  duration_seconds: number;
+  app_name: string | null;
+  category: string | null;
+  afk_state: ActivityAfkState;
+  window_title?: string | null;
+  url?: string | null;
+  evidence_refs?: ActivityEvidenceRef[];
+}
+
+export interface ActivityWatchDashboard {
+  statistics: ActivityStatistics;
+  timeline: ActivityTimelineEntry[];
+}
+
+export interface ActivitySummaryRecord {
+  id: string;
+  task_id: string;
+  kind: ActivitySummaryKind;
+  finality: ActivitySummaryFinality;
+  timezone: "Asia/Shanghai";
   window_start: string;
   window_end: string;
-  workspace_id: string;
-  status: "pending" | "executing" | "completed" | "failed" | "needs_review";
+  statistics: ActivityStatistics;
+  narrative: string;
+  evidence_refs: ActivityEvidenceRef[];
+  connector_evidence_refs: Array<{
+    connector: "github" | "gmail" | "google_calendar";
+    source_id_digest: string;
+    occurred_at: string;
+    ends_at: string | null;
+    item_digest: string;
+    snapshot_fetched_at: string;
+  }>;
+  connector_coverage: Array<{
+    connector: "github" | "gmail" | "google_calendar";
+    health:
+      | "healthy"
+      | "degraded"
+      | "requires_reconnect"
+      | "disabled"
+      | "unavailable"
+      | "stale";
+    connected: boolean;
+    enabled: boolean;
+    stale: boolean;
+    snapshot_fetched_at: string | null;
+    window_item_count: number;
+    snapshot_watermark: string;
+  }>;
+  category_rule_version: string;
+  rules_stale: boolean;
+  provider?: string | null;
+  model_version: string | null;
+  requested_provider?: string | null;
+  requested_model?: string | null;
+  fallback_reason?: string | null;
+  prompt_version: string;
+  completed_at: string;
+  attempt_count?: number;
+  source_watermark?: string | null;
+}
+
+export interface ActivitySummaryTask {
+  id: string;
+  kind: ActivitySummaryKind;
+  window_start: string;
+  window_end: string;
+  status: ActivitySummaryTaskStatus;
+  attempt_count: number;
+  completed_at: string | null;
+  next_attempt_at: string | null;
+  error_code: string | null;
+  finality?: ActivitySummaryFinality | null;
+}
+
+export interface ActivitySummarySettings {
+  model_workspace_id: string;
   provider: string | null;
   model: string | null;
-  base_url: string | null;
-  configuration_version: number | null;
-  event_ids: string[];
-  event_count: number;
-  chunk_count: number;
-  redaction_count: number;
-  request_payload: string | null;
-  response_payload: string | null;
-  error_code: string | null;
-  snapshot: CurrentRhythm["snapshot"] | null;
-  created_at: string;
+  model_configuration_version: number | null;
+  prompt_version: string;
+  version: number;
   updated_at: string;
 }
-export interface ActivityExport {
-  exported_at: string;
-  preferences: ActivityPreferences;
-  events: ActivityInterval[];
+
+export interface ActivitySummarySettingsUpdate {
+  model_workspace_id: string;
+  model: string;
+  expected_version: number;
 }
+
+export interface ActivityTrendPoint {
+  window_start: string;
+  window_end: string;
+  active_seconds: number;
+  afk_seconds: number;
+  app_switch_count: number;
+  dominant_category: string | null;
+}
+
 export interface Approval {
   id: string;
   action_id: string;
@@ -222,7 +291,7 @@ export interface SystemStatus {
   workspace_id: string;
   installed_packs: string[];
   providers: Record<string, string>;
-  behavior_sensor: { mode: string; enabled?: boolean; raw_content_captured: false; fallback_to_deliberate_signals: true };
+  behavior_sensor: { mode: "activitywatch_read_only"; raw_content_captured: false; fallback_to_deliberate_signals: true };
   retention: Record<string, string>;
   model: { configured: boolean; provider: string; model: string | null; base_url: string | null; credential_available: boolean };
 }
@@ -285,8 +354,45 @@ export interface ConnectionAttempt {
   created_at: string;
   updated_at: string;
 }
-export interface ConnectorSourceItem { source_id: string; occurred_at: string; title: string; summary: string; url: string | null }
+export interface ConnectorSourceItem { source_id: string; occurred_at: string; ends_at?: string | null; title: string; summary: string; url: string | null; untrusted?: true }
 export interface ConnectorSnapshot { workspace_id: string; connector: ConnectorKind; fetched_at: string; expires_at: string; items: ConnectorSourceItem[] }
+export type WatchOAuthSourceHealth = "healthy" | "degraded" | "requires_reconnect" | "disabled" | "unavailable" | "stale";
+export type WatchOAuthRefreshCadence = "daily";
+export type WatchOAuthFetchStrategy =
+  | "github_unread_notifications_and_recent_activity"
+  | "gmail_unread_metadata_30d"
+  | "google_calendar_all_calendars_past_7d_future_14d";
+export type WatchOAuthNormalizationHealth = "unknown" | "healthy" | "partial" | "failed";
+export interface WatchOAuthFeedSource {
+  connector: "github" | "gmail" | "google_calendar";
+  label: string;
+  health: WatchOAuthSourceHealth;
+  connected: boolean;
+  enabled: boolean;
+  stale: boolean;
+  item_count: number;
+  last_sync_at: string | null;
+  next_sync_at: string | null;
+  snapshot_fetched_at: string | null;
+  refresh_cadence: WatchOAuthRefreshCadence;
+  fetch_strategy: WatchOAuthFetchStrategy;
+  coverage_past_days: number;
+  coverage_future_days: number;
+  raw_item_count: number | null;
+  normalized_item_count: number | null;
+  normalization_health: WatchOAuthNormalizationHealth;
+  last_error_code: string | null;
+}
+export interface WatchOAuthFeedItem extends ConnectorSourceItem {
+  connector: "github" | "gmail" | "google_calendar";
+  untrusted: true;
+}
+export interface WatchOAuthFeed {
+  workspace_id: string;
+  generated_at: string;
+  sources: WatchOAuthFeedSource[];
+  items: WatchOAuthFeedItem[];
+}
 
 export type AutomationStatus = "enabled" | "paused";
 export type ScheduleKind = "once" | "hourly" | "daily" | "weekdays" | "weekly";

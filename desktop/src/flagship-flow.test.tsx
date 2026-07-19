@@ -18,7 +18,6 @@ function snapshot(status?: RunStatus): DesktopSnapshot {
     },
     latest_run: status ? { id: "run-flagship", workspace_id: "w1", user_intent: "Ship with least burden", status, result_summary: status === "succeeded" ? "Release prepared" : null, updated_at: "2026-07-12" } : null,
     workspace: { id: "w1", name: "Project", action_roots: ["/tmp/project"], installed_packs: ["developer"] },
-    metadata_sensor_enabled: false,
   };
 }
 

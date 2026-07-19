@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,16 @@ COMPATIBLE_DEV_SIGNING_IDENTITIES = (
     "OpenHuman Dev Signer",
 )
 DEVELOPMENT_BUNDLE_IDENTIFIER = "ai.weatherflow.desktop.dev"
+WEATHERFLOW_BUNDLE_EXECUTABLE = re.compile(
+    r"^/(?:[^/\s]+/)*WeatherFlow(?: Dev)?\.app/Contents/MacOS/"
+    r"(?:WeatherFlow(?: Dev)?|weatherflow-desktop)(?:\s|$)"
+)
+DEVELOPMENT_SIDECAR_INPUTS = (
+    Path("core/src/weatherflow"),
+    Path("core/pyproject.toml"),
+    Path("uv.lock"),
+    Path("tools/release/build_sidecar.py"),
+)
 
 
 def available_codesigning_identities() -> set[str]:
@@ -77,27 +88,159 @@ def stop_stale_weatherflow_apps() -> None:
         capture_output=True,
         text=True,
     ).stdout.splitlines()
-    stopped = False
+    targets: set[int] = set()
     for process in processes:
         fields = process.strip().split(maxsplit=1)
         if len(fields) != 2:
             continue
         pid_value, command = fields
-        is_release = "WeatherFlow.app/Contents/MacOS/weatherflow-desktop" in command
-        is_this_debug_app = (
-            command.endswith("target/debug/weatherflow-desktop")
-            or command.endswith("target/weatherflow-dev-signed/weatherflow-desktop")
-        ) and str(root) in _process_cwd(int(pid_value))
-        if not (is_release or is_this_debug_app):
+        executable = command.split(maxsplit=1)[0] if command else ""
+        needs_cwd_check = executable.endswith(
+            "target/debug/weatherflow-desktop"
+        ) or executable.endswith("target/weatherflow-dev-signed/weatherflow-desktop")
+        if not is_stale_weatherflow_gui_process(
+            command,
+            cwd=_process_cwd(int(pid_value)) if needs_cwd_check else "",
+            root=root,
+        ):
             continue
-        try:
-            os.kill(int(pid_value), signal.SIGTERM)
-            stopped = True
-        except ProcessLookupError:
-            pass
-    if stopped:
-        time.sleep(0.5)
+        targets.add(int(pid_value))
+    _terminate_processes(targets)
+    stop_stale_development_frontend(root)
     stop_stale_development_daemon(root)
+
+
+def is_stale_weatherflow_gui_process(command: str, *, cwd: str, root: Path) -> bool:
+    """Recognize every packaged or current-worktree WeatherFlow GUI runtime."""
+    if WEATHERFLOW_BUNDLE_EXECUTABLE.search(command):
+        return True
+    executable = command.split(maxsplit=1)[0] if command else ""
+    is_current_debug_runtime = executable.endswith(
+        "target/debug/weatherflow-desktop"
+    ) or executable.endswith("target/weatherflow-dev-signed/weatherflow-desktop")
+    root_value = str(root.resolve())
+    return (
+        is_current_debug_runtime
+        and executable.startswith(f"{root_value}{os.sep}")
+        and (cwd == root_value or cwd.startswith(f"{root_value}{os.sep}"))
+    )
+
+
+def development_sidecar_stamp(root: Path) -> Path:
+    return root / "desktop/src-tauri/target/weatherflow-dev-sidecar-source.sha256"
+
+
+def development_sidecar_digest(root: Path) -> str:
+    """Fingerprint every source input embedded in the development sidecar."""
+    digest = hashlib.sha256()
+    files: list[Path] = []
+    for relative in DEVELOPMENT_SIDECAR_INPUTS:
+        candidate = root / relative
+        if candidate.is_dir():
+            files.extend(
+                path
+                for path in candidate.rglob("*")
+                if path.is_file()
+                and "__pycache__" not in path.parts
+                and path.suffix != ".pyc"
+                and path.name != ".DS_Store"
+            )
+        elif candidate.is_file():
+            files.append(candidate)
+    for path in sorted(files):
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def development_sidecar_rebuild_required(root: Path) -> bool:
+    binary = root / "desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin"
+    stamp = development_sidecar_stamp(root)
+    if not binary.is_file() or not stamp.is_file():
+        return True
+    return stamp.read_text().strip() != development_sidecar_digest(root)
+
+
+def ensure_current_development_sidecar(root: Path) -> None:
+    if not development_sidecar_rebuild_required(root):
+        print("[weatherflow-dev] Python sidecar matches current Core sources")
+        return
+    expected_digest = development_sidecar_digest(root)
+    print("[weatherflow-dev] Core sources changed; rebuilding Python sidecar")
+    subprocess.run(
+        [
+            "uv",
+            "run",
+            "--package",
+            "weatherflow-core",
+            "--extra",
+            "release",
+            "python",
+            "tools/release/build_sidecar.py",
+        ],
+        cwd=root,
+        check=True,
+    )
+    if development_sidecar_digest(root) != expected_digest:
+        raise SystemExit(
+            "Core sources changed during the development sidecar build; retry"
+        )
+    stamp = development_sidecar_stamp(root)
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(f"{expected_digest}\n")
+
+
+def is_stale_development_frontend_process(
+    command: str,
+    *,
+    cwd: str,
+    root: Path,
+) -> bool:
+    """Recognize a Vite listener owned by this checkout or one of its worktrees."""
+    root_value = str(root)
+    if cwd != root_value and not cwd.startswith(f"{root_value}{os.sep}"):
+        return False
+    return any(
+        marker in command
+        for marker in (
+            "/vite/bin/vite.js",
+            "/.bin/vite",
+        )
+    )
+
+
+def stop_stale_development_frontend(root: Path) -> None:
+    """Free the dedicated Vite port without touching unrelated local servers."""
+    listeners = subprocess.run(
+        ["lsof", "-tiTCP:1421", "-sTCP:LISTEN"],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    targets: set[int] = set()
+    for pid_value in listeners:
+        if not pid_value.isdigit():
+            continue
+        pid = int(pid_value)
+        command = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if not is_stale_development_frontend_process(
+            command,
+            cwd=_process_cwd(pid),
+            root=root,
+        ):
+            continue
+        targets.add(pid)
+        parent = _parent_pid(pid)
+        if parent is not None and _process_cwd(parent).startswith(str(root)):
+            targets.add(parent)
+    _terminate_processes(targets)
 
 
 def stop_stale_development_daemon(root: Path) -> None:
@@ -185,6 +328,7 @@ def _process_cwd(pid: int) -> str:
 def main() -> None:
     root = Path(__file__).parents[2].resolve()
     stop_stale_weatherflow_apps()
+    ensure_current_development_sidecar(root)
     cargo = subprocess.run(
         ["rustup", "which", "cargo"],
         check=True,
@@ -233,6 +377,7 @@ def main() -> None:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+        stop_stale_development_frontend(root)
         stop_stale_development_daemon(root)
     raise SystemExit(return_code)
 

@@ -53,19 +53,6 @@ class CorrectionSignal(BaseModel):
     observed_at: datetime
 
 
-class ActivityMetadata(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["activity_metadata"] = "activity_metadata"
-    observed_at: datetime
-    window_start: datetime
-    window_end: datetime
-    active_seconds: int = Field(ge=0)
-    idle_seconds: int = Field(ge=0)
-    app_switch_count: int = Field(ge=0)
-    category_seconds: dict[AppCategory, int]
-
-
 class TaskBehaviorSignal(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -78,7 +65,7 @@ class TaskBehaviorSignal(BaseModel):
 
 
 RhythmSignal = Annotated[
-    CheckInSignal | CorrectionSignal | ActivityMetadata | TaskBehaviorSignal,
+    CheckInSignal | CorrectionSignal | TaskBehaviorSignal,
     Field(discriminator="kind"),
 ]
 

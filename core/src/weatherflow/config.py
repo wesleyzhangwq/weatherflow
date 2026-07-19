@@ -5,6 +5,14 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BUNDLED_SKILL_CATALOG_ROOT = Path(__file__).resolve().parent / "resources" / "wesley-skills"
+DEFAULT_ACTIVITYWATCH_DATABASE_PATH = (
+    Path.home()
+    / "Library"
+    / "Application Support"
+    / "activitywatch"
+    / "aw-server-rust"
+    / "sqlite.db"
+)
 
 
 class Settings(BaseSettings):
@@ -22,6 +30,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     bridge_token: str | None = None
     skill_catalog_root: Path = BUNDLED_SKILL_CATALOG_ROOT
+    activitywatch_api_url: str = "http://127.0.0.1:5600/api/0"
+    activitywatch_database_path: Path = DEFAULT_ACTIVITYWATCH_DATABASE_PATH
 
     @field_validator("host")
     @classmethod
@@ -37,10 +47,18 @@ class Settings(BaseSettings):
             raise ValueError("daemon host must be a loopback address")
         return normalized
 
-    @field_validator("data_dir")
+    @field_validator("data_dir", "activitywatch_database_path")
     @classmethod
     def expand_data_directory(cls, value: Path) -> Path:
         return value.expanduser()
+
+    @field_validator("activitywatch_api_url")
+    @classmethod
+    def activitywatch_api_is_plain_loopback_http(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        if normalized != "http://127.0.0.1:5600/api/0":
+            raise ValueError("ActivityWatch API URL must be exactly http://127.0.0.1:5600/api/0")
+        return normalized
 
     @field_validator("bridge_token")
     @classmethod

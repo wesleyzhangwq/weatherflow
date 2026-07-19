@@ -32,7 +32,7 @@ class FakeCalendarProvider:
         self.created: list[str] = []
         self.listed: list[tuple[str, str, int]] = []
 
-    async def list_events(self, *, start: str, end: str, limit: int):
+    async def list_events(self, *, start: str, end: str, limit: int, context):
         self.listed.append((start, end, limit))
         return (
             CalendarEvent(

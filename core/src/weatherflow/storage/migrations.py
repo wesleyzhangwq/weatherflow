@@ -858,4 +858,780 @@ MIGRATIONS = (
             ON activity_events(source_instance, source_event_id);
         """,
     ),
+    Migration(
+        version=27,
+        sql="""
+        DROP TABLE activity_inference_jobs;
+        DROP TABLE activity_heartbeat_receipts;
+        DROP TABLE activity_events;
+        DROP TABLE activity_preferences;
+
+        CREATE TABLE activity_source_state (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            health TEXT NOT NULL CHECK(health IN ('available', 'degraded')),
+            config TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE activity_category_rule_versions (
+            id TEXT PRIMARY KEY CHECK(length(id) = 64),
+            canonical_json TEXT NOT NULL,
+            rule_count INTEGER NOT NULL CHECK(rule_count >= 0),
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE activity_summary_tasks (
+            id TEXT PRIMARY KEY,
+            task_type TEXT NOT NULL CHECK(task_type IN (
+                'stage_6h', 'daily_24h', 'weekly', 'biweekly', 'monthly'
+            )),
+            window_start TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            timezone TEXT NOT NULL CHECK(timezone = 'Asia/Shanghai'),
+            boundary_policy_version TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN (
+                'pending', 'running', 'completed', 'failed', 'needs_retry'
+            )),
+            finality TEXT CHECK(finality IS NULL OR finality IN ('provisional', 'final')),
+            attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0),
+            not_before TEXT NOT NULL,
+            next_retry_at TEXT,
+            lease_owner TEXT,
+            lease_expires_at TEXT,
+            current_revision INTEGER NOT NULL CHECK(current_revision >= 0),
+            category_rule_version TEXT
+                REFERENCES activity_category_rule_versions(id),
+            source_watermark TEXT,
+            config TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(
+                task_type,
+                timezone,
+                boundary_policy_version,
+                window_start,
+                window_end
+            ),
+            CHECK(window_end > window_start)
+        );
+
+        CREATE INDEX idx_activity_summary_tasks_due
+            ON activity_summary_tasks(
+                status,
+                not_before,
+                next_retry_at,
+                window_end
+            );
+
+        CREATE TABLE activity_summary_attempts (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL
+                REFERENCES activity_summary_tasks(id) ON DELETE CASCADE,
+            attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),
+            status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+            config TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            UNIQUE(task_id, attempt_number)
+        );
+
+        CREATE INDEX idx_activity_summary_attempts_task
+            ON activity_summary_attempts(task_id, attempt_number);
+
+        CREATE TABLE activity_summary_revisions (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL
+                REFERENCES activity_summary_tasks(id) ON DELETE CASCADE,
+            revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
+            finality TEXT NOT NULL CHECK(finality IN ('provisional', 'final')),
+            source_watermark TEXT NOT NULL,
+            category_rule_version TEXT NOT NULL
+                REFERENCES activity_category_rule_versions(id),
+            revision_key TEXT NOT NULL UNIQUE,
+            config TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            UNIQUE(task_id, revision_number)
+        );
+
+        CREATE INDEX idx_activity_summary_revisions_task
+            ON activity_summary_revisions(task_id, revision_number DESC);
+
+        CREATE TABLE activity_summary_dependencies (
+            parent_task_id TEXT NOT NULL
+                REFERENCES activity_summary_tasks(id) ON DELETE CASCADE,
+            child_task_id TEXT NOT NULL
+                REFERENCES activity_summary_tasks(id) ON DELETE CASCADE,
+            PRIMARY KEY(parent_task_id, child_task_id),
+            CHECK(parent_task_id != child_task_id)
+        );
+
+        CREATE INDEX idx_activity_summary_dependencies_child
+            ON activity_summary_dependencies(child_task_id, parent_task_id);
+
+        CREATE TABLE activity_statistics (
+            revision_id TEXT PRIMARY KEY
+                REFERENCES activity_summary_revisions(id) ON DELETE CASCADE,
+            config TEXT NOT NULL
+        );
+
+        CREATE TABLE activity_state_inferences (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL
+                REFERENCES activity_summary_tasks(id) ON DELETE CASCADE,
+            revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
+            label TEXT NOT NULL CHECK(label IN (
+                'programming',
+                'communication',
+                'meeting',
+                'focus',
+                'context_fragmentation'
+            )),
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            valid_from TEXT NOT NULL,
+            valid_until TEXT NOT NULL,
+            config TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK(valid_until > valid_from)
+        );
+
+        CREATE INDEX idx_activity_state_inferences_task
+            ON activity_state_inferences(task_id, revision_number, created_at, id);
+        CREATE INDEX idx_activity_state_inferences_validity
+            ON activity_state_inferences(valid_until, created_at, id);
+
+        CREATE TABLE activity_evidence_refs (
+            owner_type TEXT NOT NULL CHECK(owner_type IN ('revision', 'inference')),
+            owner_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            bucket_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            event_timestamp TEXT NOT NULL,
+            event_digest TEXT NOT NULL CHECK(length(event_digest) = 64),
+            config TEXT NOT NULL,
+            PRIMARY KEY(owner_type, owner_id, ordinal)
+        );
+
+        CREATE INDEX idx_activity_evidence_refs_event
+            ON activity_evidence_refs(bucket_id, event_id);
+        """,
+    ),
+    Migration(
+        version=28,
+        sql="""
+        CREATE TABLE activity_live_inferences (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL CHECK(label IN (
+                'programming',
+                'communication',
+                'meeting',
+                'focus',
+                'context_fragmentation'
+            )),
+            confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+            valid_from TEXT NOT NULL,
+            valid_until TEXT NOT NULL,
+            source_watermark TEXT NOT NULL CHECK(length(source_watermark) = 64),
+            config TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK(valid_until > valid_from)
+        );
+
+        CREATE INDEX idx_activity_live_inferences_current
+            ON activity_live_inferences(valid_until DESC, created_at DESC, id DESC);
+
+        CREATE TABLE activity_live_evidence_refs (
+            inference_id TEXT NOT NULL
+                REFERENCES activity_live_inferences(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            bucket_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            event_timestamp TEXT NOT NULL,
+            event_digest TEXT NOT NULL CHECK(length(event_digest) = 64),
+            config TEXT NOT NULL,
+            PRIMARY KEY(inference_id, ordinal)
+        );
+
+        CREATE INDEX idx_activity_live_evidence_refs_event
+            ON activity_live_evidence_refs(bucket_id, event_id);
+        """,
+    ),
+    Migration(
+        version=29,
+        sql="""
+        CREATE TEMP TABLE migration29_legacy_activity_events AS
+        SELECT
+            id,
+            CASE
+                WHEN stream_kind = 'workspace' THEN stream_id
+                ELSE correlation_id
+            END AS workspace_id
+        FROM events
+        WHERE type = 'rhythm.signal.activity_metadata';
+
+        CREATE TEMP TABLE migration29_affected_rhythm_events AS
+        SELECT
+            event.id AS event_id,
+            event.stream_id AS snapshot_id,
+            event.correlation_id AS workspace_id
+        FROM events AS event
+        WHERE (
+            event.type = 'rhythm.snapshot_derived'
+            AND EXISTS (
+                SELECT 1
+                FROM json_each(event.payload, '$.supporting_event_ids') AS reference
+                JOIN migration29_legacy_activity_events AS legacy
+                    ON legacy.id = reference.value
+            )
+        ) OR (
+            event.type = 'rhythm.snapshot_remote_inference'
+            AND EXISTS (
+                SELECT 1
+                FROM json_each(event.payload, '$.evidence_event_ids') AS reference
+                JOIN migration29_legacy_activity_events AS legacy
+                    ON legacy.id = reference.value
+            )
+        );
+
+        CREATE TEMP TABLE migration29_affected_snapshot_ids AS
+        SELECT DISTINCT snapshot_id
+        FROM migration29_affected_rhythm_events
+        WHERE snapshot_id IS NOT NULL
+        UNION
+        SELECT DISTINCT json_extract(snapshot, '$.id')
+        FROM rhythm_snapshots
+        WHERE workspace_id IN (
+            SELECT DISTINCT workspace_id
+            FROM migration29_legacy_activity_events
+        );
+
+        CREATE TEMP TABLE migration29_affected_episodes AS
+        SELECT memory.id
+        FROM episodic_memories AS memory
+        WHERE EXISTS (
+            SELECT 1
+            FROM json_each(memory.source_event_ids) AS reference
+            JOIN migration29_legacy_activity_events AS legacy
+                ON legacy.id = reference.value
+        );
+
+        CREATE TEMP TABLE migration29_affected_profiles AS
+        SELECT assertion.id
+        FROM profile_assertions AS assertion
+        WHERE EXISTS (
+            SELECT 1
+            FROM json_each(assertion.evidence_event_ids) AS reference
+            JOIN migration29_legacy_activity_events AS legacy
+                ON legacy.id = reference.value
+        );
+
+        UPDATE runs
+        SET rhythm_snapshot_id = NULL
+        WHERE rhythm_snapshot_id IN (
+            SELECT snapshot_id
+            FROM migration29_affected_snapshot_ids
+        );
+
+        DELETE FROM memory_search_index
+        WHERE (
+            entry_kind = 'episode'
+            AND entry_id IN (
+                SELECT id FROM migration29_affected_episodes
+            )
+        ) OR (
+            entry_kind = 'profile_assertion'
+            AND entry_id IN (
+                SELECT id FROM migration29_affected_profiles
+            )
+        );
+
+        DELETE FROM events
+        WHERE (
+            stream_kind = 'episodic_memory'
+            AND stream_id IN (
+                SELECT id FROM migration29_affected_episodes
+            )
+        ) OR (
+            stream_kind = 'profile_assertion'
+            AND stream_id IN (
+                SELECT id FROM migration29_affected_profiles
+            )
+        );
+
+        DELETE FROM episodic_memories
+        WHERE id IN (
+            SELECT id FROM migration29_affected_episodes
+        );
+
+        DELETE FROM profile_assertions
+        WHERE id IN (
+            SELECT id FROM migration29_affected_profiles
+        );
+
+        DELETE FROM events
+        WHERE id IN (
+            SELECT event_id
+            FROM migration29_affected_rhythm_events
+        );
+
+        DELETE FROM rhythm_snapshots
+        WHERE workspace_id IN (
+            SELECT DISTINCT workspace_id
+            FROM migration29_legacy_activity_events
+        );
+
+        DELETE FROM events
+        WHERE id IN (
+            SELECT id
+            FROM migration29_legacy_activity_events
+        );
+
+        DROP TABLE migration29_affected_profiles;
+        DROP TABLE migration29_affected_episodes;
+        DROP TABLE migration29_affected_snapshot_ids;
+        DROP TABLE migration29_affected_rhythm_events;
+        DROP TABLE migration29_legacy_activity_events;
+        """,
+    ),
+    Migration(
+        version=30,
+        sql="""
+        CREATE TABLE IF NOT EXISTS privacy_compaction_requests (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        INSERT INTO privacy_compaction_requests(id)
+        VALUES (1)
+        ON CONFLICT(id) DO UPDATE SET requested_at = CURRENT_TIMESTAMP;
+        """,
+    ),
+    Migration(
+        version=31,
+        sql="""
+        -- Migration 23 was amended during development after some local databases
+        -- had already recorded it as applied. Repair those installed rows with a
+        -- new immutable migration so strict ConnectorBinding validation cannot
+        -- take down Run submission or the OAuth catalog.
+        UPDATE connector_bindings
+        SET config = json_remove(
+            config,
+            '$.conversation_access',
+            '$.conversation_tool_ids',
+            '$.conversation_grant_revision'
+        )
+        WHERE json_type(config, '$.conversation_access') IS NOT NULL
+           OR json_type(config, '$.conversation_tool_ids') IS NOT NULL
+           OR json_type(config, '$.conversation_grant_revision') IS NOT NULL;
+        """,
+    ),
+    Migration(
+        version=32,
+        sql="""
+        CREATE TABLE activity_summary_settings (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            version INTEGER NOT NULL CHECK(version >= 0),
+            config TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
+    Migration(
+        version=33,
+        sql="""
+        -- Application and domain labels are ActivityWatch-owned raw facts. Older
+        -- summary revisions embedded those query-time labels in both statistics
+        -- maps and, potentially, their generated narrative. Keep only label-free
+        -- totals, Category-derived statistics, and evidence references durably.
+        UPDATE activity_summary_revisions
+        SET config = json_set(
+            json_remove(
+                config,
+                '$.statistics.application_seconds',
+                '$.statistics.domain_seconds'
+            ),
+            '$.summary_text',
+            printf(
+                'Historical activity summary retained after privacy cleanup. '
+                || 'Active seconds: %g; AFK seconds: %g; context switches: %d. '
+                || 'Application and domain labels were removed.',
+                COALESCE(json_extract(config, '$.statistics.active_seconds'), 0),
+                COALESCE(json_extract(config, '$.statistics.afk_seconds'), 0),
+                COALESCE(json_extract(config, '$.statistics.context_switch_count'), 0)
+            )
+        )
+        WHERE EXISTS (
+                SELECT 1
+                FROM json_each(
+                    activity_summary_revisions.config,
+                    '$.statistics.application_seconds'
+                )
+            )
+           OR EXISTS (
+                SELECT 1
+                FROM json_each(
+                    activity_summary_revisions.config,
+                    '$.statistics.domain_seconds'
+                )
+            );
+
+        UPDATE activity_summary_revisions
+        SET config = json_remove(
+            config,
+            '$.statistics.application_seconds',
+            '$.statistics.domain_seconds'
+        )
+        WHERE json_type(config, '$.statistics.application_seconds') IS NOT NULL
+           OR json_type(config, '$.statistics.domain_seconds') IS NOT NULL;
+
+        UPDATE activity_statistics
+        SET config = json_remove(
+            config,
+            '$.application_seconds',
+            '$.domain_seconds'
+        )
+        WHERE json_type(config, '$.application_seconds') IS NOT NULL
+           OR json_type(config, '$.domain_seconds') IS NOT NULL;
+
+        -- Reclaim pages and truncate the WAL after initialize() commits this
+        -- privacy migration so removed labels do not linger in SQLite free space.
+        INSERT INTO privacy_compaction_requests(id)
+        VALUES (1)
+        ON CONFLICT(id) DO UPDATE SET requested_at = CURRENT_TIMESTAMP;
+        """,
+    ),
+    Migration(
+        version=34,
+        sql="""
+        CREATE TABLE activity_live_state_assessments (
+            id TEXT PRIMARY KEY CHECK(length(id) = 64),
+            workspace_id TEXT NOT NULL
+                REFERENCES workspaces(id) ON DELETE CASCADE,
+            status TEXT NOT NULL CHECK(status IN ('available', 'degraded')),
+            source_watermark TEXT NOT NULL CHECK(length(source_watermark) = 64),
+            config TEXT NOT NULL,
+            assessed_at TEXT NOT NULL,
+            UNIQUE(workspace_id, source_watermark)
+        );
+
+        CREATE INDEX idx_activity_live_state_assessments_workspace
+            ON activity_live_state_assessments(workspace_id, assessed_at DESC, id DESC);
+        """,
+    ),
+    Migration(
+        version=35,
+        sql="""
+        -- ActivityWatch state inference and comprehensive live assessments are
+        -- no longer WeatherFlow-owned data. Preserve only evidence references
+        -- attached to durable summary revisions.
+        CREATE TABLE activity_evidence_refs_v35 (
+            owner_type TEXT NOT NULL CHECK(owner_type = 'revision'),
+            owner_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            bucket_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            event_timestamp TEXT NOT NULL,
+            event_digest TEXT NOT NULL CHECK(length(event_digest) = 64),
+            config TEXT NOT NULL,
+            PRIMARY KEY(owner_type, owner_id, ordinal)
+        );
+
+        INSERT INTO activity_evidence_refs_v35(
+            owner_type, owner_id, ordinal, bucket_id, event_id,
+            event_timestamp, event_digest, config
+        )
+        SELECT
+            owner_type, owner_id, ordinal, bucket_id, event_id,
+            event_timestamp, event_digest, config
+        FROM activity_evidence_refs
+        WHERE owner_type = 'revision';
+
+        DROP TABLE activity_evidence_refs;
+        ALTER TABLE activity_evidence_refs_v35 RENAME TO activity_evidence_refs;
+        CREATE INDEX idx_activity_evidence_refs_event
+            ON activity_evidence_refs(bucket_id, event_id);
+
+        DROP TABLE activity_live_state_assessments;
+        DROP TABLE activity_live_evidence_refs;
+        DROP TABLE activity_live_inferences;
+        DROP TABLE activity_state_inferences;
+
+        UPDATE activity_source_state
+        SET config = json_remove(config, '$.last_live_inference_checked_at')
+        WHERE json_type(config, '$.last_live_inference_checked_at') IS NOT NULL;
+
+        -- Reclaim pages and truncate the WAL so removed inference narratives
+        -- and evidence cannot remain recoverable in SQLite free space.
+        INSERT INTO privacy_compaction_requests(id)
+        VALUES (1)
+        ON CONFLICT(id) DO UPDATE SET requested_at = CURRENT_TIMESTAMP;
+        """,
+    ),
+    Migration(
+        version=36,
+        sql="""
+        -- Summary prose is now governed by one code-owned, versioned Chinese
+        -- contract. Remove every persisted user-authored prompt while retaining
+        -- the immutable prompt version on historical revisions.
+        UPDATE activity_summary_settings
+        SET version = version + 1,
+            config = json_set(
+                json_remove(config, '$.prompt'),
+                '$.prompt_version',
+                'activity-summary-prompt-v3-zh-fixed:872e7d7b47088207',
+                '$.version',
+                version + 1,
+                '$.updated_at',
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+
+        -- Re-run every task whose current revision used an older prompt. The
+        -- old revision remains immutable; recovery appends a new Chinese one.
+        UPDATE activity_summary_tasks
+        SET status = 'needs_retry',
+            next_retry_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            config = json_set(
+                config,
+                '$.status', 'needs_retry',
+                '$.next_retry_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                '$.completed_at', NULL,
+                '$.error_code', NULL,
+                '$.regeneration_reason', 'fixed_chinese_prompt_v3',
+                '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+        WHERE status = 'completed'
+          AND COALESCE(json_extract(config, '$.prompt_version'), '')
+              <> 'activity-summary-prompt-v3-zh-fixed:872e7d7b47088207';
+
+        INSERT INTO privacy_compaction_requests(id)
+        VALUES (1)
+        ON CONFLICT(id) DO UPDATE SET requested_at = CURRENT_TIMESTAMP;
+        """,
+    ),
+    Migration(
+        version=37,
+        sql="""
+        -- The production connector schedule is one fixed daily cadence. A
+        -- parser/strategy upgrade must not leave an old false-empty snapshot
+        -- visible until a future legacy deadline, so enabled sources become due
+        -- once immediately. Every subsequent attempt schedules the following
+        -- run 1440 minutes later through the domain model.
+        UPDATE connector_bindings
+        SET config = json_set(
+                config,
+                '$.interval_minutes', 1440,
+                '$.fetch_contract_version',
+                'connector-fetch-v2-daily-source-specific'
+            )
+        WHERE connector IN ('github', 'gmail', 'google_calendar')
+          AND (
+              COALESCE(json_extract(config, '$.interval_minutes'), 0) <> 1440
+              OR COALESCE(json_extract(config, '$.fetch_contract_version'), '')
+                  <> 'connector-fetch-v2-daily-source-specific'
+          );
+
+        UPDATE connector_bindings
+        SET next_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            version = version + 1,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            config = json_set(
+                config,
+                '$.interval_minutes', 1440,
+                '$.fetch_contract_version',
+                'connector-fetch-v2-daily-source-specific',
+                '$.next_sync_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                '$.version', version + 1,
+                '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+        WHERE connector IN ('github', 'gmail', 'google_calendar')
+          AND enabled = 1
+          AND auto_fetch_enabled = 1;
+        """,
+    ),
+    Migration(
+        version=38,
+        sql="""
+        -- The fixed Chinese summary contract now prioritizes bounded temporal
+        -- sequences and evidence traceability instead of metric-list prose.
+        UPDATE activity_summary_settings
+        SET version = version + 1,
+            config = json_set(
+                config,
+                '$.prompt_version',
+                'activity-summary-prompt-v4-context-sequence-zh-fixed:ff78a64bf2e4177e',
+                '$.version',
+                version + 1,
+                '$.updated_at',
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+
+        -- Preserve old revisions and let startup recovery append one revision
+        -- under the new prompt. Do not infer gaps from a last-run timestamp.
+        UPDATE activity_summary_tasks
+        SET status = 'needs_retry',
+            next_retry_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            config = json_set(
+                config,
+                '$.status', 'needs_retry',
+                '$.next_retry_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                '$.completed_at', NULL,
+                '$.error_code', NULL,
+                '$.regeneration_reason', 'context_sequence_prompt_v4',
+                '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+        WHERE status = 'completed'
+          AND COALESCE(json_extract(config, '$.prompt_version'), '')
+              <> 'activity-summary-prompt-v4-context-sequence-zh-fixed:ff78a64bf2e4177e';
+        """,
+    ),
+    Migration(
+        version=39,
+        sql="""
+        -- Repair installations that recorded the development form of migration
+        -- 37 before the source-specific parser/strategy version was added. New
+        -- databases already carry this marker and this migration is a no-op.
+        UPDATE connector_bindings
+        SET next_sync_at = CASE
+                WHEN enabled = 1 AND auto_fetch_enabled = 1
+                THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                ELSE next_sync_at
+            END,
+            version = version + 1,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            config = json_set(
+                config,
+                '$.interval_minutes', 1440,
+                '$.fetch_contract_version',
+                'connector-fetch-v2-daily-source-specific',
+                '$.next_sync_at', CASE
+                    WHEN enabled = 1 AND auto_fetch_enabled = 1
+                    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    ELSE next_sync_at
+                END,
+                '$.version', version + 1,
+                '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+        WHERE connector IN ('github', 'gmail', 'google_calendar')
+          AND COALESCE(json_extract(config, '$.fetch_contract_version'), '')
+              <> 'connector-fetch-v2-daily-source-specific';
+        """,
+    ),
+    Migration(
+        version=40,
+        sql="""
+        -- Tighten the context-sequence prompt so raw application names and
+        -- source-text fragments cannot be retained in durable summary prose.
+        UPDATE activity_summary_settings
+        SET version = version + 1,
+            config = json_set(
+                config,
+                '$.prompt_version',
+                'activity-summary-prompt-v5-privacy-context-sequence-zh-fixed:791413eefa7f8a0c',
+                '$.version',
+                version + 1,
+                '$.updated_at',
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+
+        UPDATE activity_summary_tasks
+        SET status = 'needs_retry',
+            next_retry_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            config = json_set(
+                config,
+                '$.status', 'needs_retry',
+                '$.next_retry_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                '$.completed_at', NULL,
+                '$.error_code', NULL,
+                '$.regeneration_reason', 'privacy_context_sequence_prompt_v5',
+                '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+        WHERE status = 'completed'
+          AND COALESCE(json_extract(config, '$.prompt_version'), '')
+              <> 'activity-summary-prompt-v5-privacy-context-sequence-zh-fixed:791413eefa7f8a0c';
+
+        UPDATE activity_summary_tasks
+        SET config = json_set(
+                config,
+                '$.regeneration_reason', 'privacy_context_sequence_prompt_v5'
+            )
+        WHERE status = 'needs_retry'
+          AND json_extract(config, '$.regeneration_reason') IN (
+              'fixed_chinese_prompt_v3',
+              'context_sequence_prompt_v4'
+          );
+        """,
+    ),
+    Migration(
+        version=41,
+        sql="""
+        -- Old prompt revisions may contain an application alias, source-text
+        -- fragment, or forbidden human-state claim. Privacy deletion outranks
+        -- immutable revision retention: keep statistics and digest provenance,
+        -- but remove unsafe prose until recovery appends a v5 revision.
+        UPDATE activity_summary_revisions
+        SET config = json_set(
+                config,
+                '$.summary_text',
+                '该历史总结使用旧版隐私合同生成，正文已移除；' ||
+                '统计与证据引用可从 ActivityWatch 重新计算。'
+            )
+        WHERE COALESCE(json_extract(config, '$.prompt_version'), '')
+              <> 'activity-summary-prompt-v5-privacy-context-sequence-zh-fixed:791413eefa7f8a0c'
+          AND COALESCE(json_extract(config, '$.summary_text'), '')
+              <> ('该历史总结使用旧版隐私合同生成，正文已移除；' ||
+                  '统计与证据引用可从 ActivityWatch 重新计算。');
+
+        INSERT INTO privacy_compaction_requests(id)
+        VALUES (1)
+        ON CONFLICT(id) DO UPDATE SET requested_at = CURRENT_TIMESTAMP;
+        """,
+    ),
+    Migration(
+        version=42,
+        sql="""
+        -- Builds before v42 could complete a configured remote-model summary
+        -- with deterministic prose when Keychain or provider connectivity was
+        -- temporarily unavailable. Preserve every immutable revision and its
+        -- evidence, but put only tasks whose latest revision has a transient
+        -- transport fallback back into the idempotent compensation ledger.
+        UPDATE activity_summary_tasks
+        SET status = 'needs_retry',
+            next_retry_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            config = json_set(
+                config,
+                '$.status', 'needs_retry',
+                '$.next_retry_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                '$.completed_at', NULL,
+                '$.error_code', NULL,
+                '$.regeneration_reason',
+                'transient_model_fallback_recovery_v1',
+                '$.updated_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+        WHERE status = 'completed'
+          AND EXISTS (
+              SELECT 1
+              FROM activity_summary_revisions AS revision
+              WHERE revision.task_id = activity_summary_tasks.id
+                AND revision.revision_number = (
+                    SELECT MAX(latest.revision_number)
+                    FROM activity_summary_revisions AS latest
+                    WHERE latest.task_id = activity_summary_tasks.id
+                )
+                AND COALESCE(
+                    json_extract(revision.config, '$.fallback_reason'),
+                    ''
+                ) IN (
+                    'activity_model_authentication_failed',
+                    'activity_model_temporarily_unavailable',
+                    'activity_model_connection_failed'
+                )
+          );
+        """,
+    ),
 )

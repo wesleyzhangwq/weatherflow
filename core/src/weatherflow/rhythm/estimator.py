@@ -2,7 +2,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from weatherflow.rhythm.models import (
-    ActivityMetadata,
     CheckInSignal,
     CorrectionSignal,
     DimensionEstimate,
@@ -45,10 +44,7 @@ class RhythmEstimator:
         for event_id, signal in facts:
             supporting.append(event_id)
             observed_times.append(signal.observed_at)
-            if isinstance(signal, ActivityMetadata):
-                self._apply_activity(values, signal)
-                confidence = max(confidence, 0.60)
-            elif isinstance(signal, CorrectionSignal):
+            if isinstance(signal, CorrectionSignal):
                 contradicting.extend(item for item in supporting[:-1])
                 self._apply_text(values, signal.text, correction=True)
                 confidence = 0.95
@@ -92,22 +88,6 @@ class RhythmEstimator:
             valid_until=latest + timedelta(minutes=30),
             freshness=freshness,
         )
-
-    @staticmethod
-    def _apply_activity(values: dict[DimensionName, float], signal: ActivityMetadata) -> None:
-        total = max(signal.active_seconds + signal.idle_seconds, 1)
-        active_ratio = signal.active_seconds / total
-        idle_ratio = signal.idle_seconds / total
-        minutes = max((signal.window_end - signal.window_start).total_seconds() / 60, 1)
-        switch_pressure = min(1.0, signal.app_switch_count / (minutes * 2))
-        communication = signal.category_seconds.get("communication", 0) / total
-        development = signal.category_seconds.get("development", 0) / total
-        values[DimensionName.ENERGY] = 0.35 + active_ratio * 0.40 - idle_ratio * 0.10
-        values[DimensionName.COGNITIVE_LOAD] = 0.35 + communication * 0.35 + switch_pressure * 0.25
-        values[DimensionName.FRAGMENTATION] = 0.20 + switch_pressure * 0.75
-        values[DimensionName.MOMENTUM] = 0.35 + development * 0.45 - idle_ratio * 0.15
-        values[DimensionName.FRICTION] = 0.25 + switch_pressure * 0.20
-        values[DimensionName.RECOVERY_NEED] = 0.30 + active_ratio * 0.30
 
     @staticmethod
     def _apply_text(values: dict[DimensionName, float], text: str, *, correction: bool) -> None:

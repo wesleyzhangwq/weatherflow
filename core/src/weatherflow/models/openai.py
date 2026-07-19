@@ -16,6 +16,7 @@ from weatherflow.extensions import (
     CredentialRef,
     CredentialUnavailableError,
 )
+from weatherflow.models.errors import ModelResponseFailureStage
 from weatherflow.runtime import (
     DelegationTurn,
     FinalTurn,
@@ -44,7 +45,14 @@ class OpenAIAuthenticationError(OpenAIError):
 
 
 class OpenAIResponseError(OpenAIError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: ModelResponseFailureStage = ModelResponseFailureStage.UNKNOWN,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
 
 
 class OpenAIResponsesAdapter:
@@ -85,7 +93,7 @@ class OpenAIResponsesAdapter:
     async def complete(self, request: ModelRequest) -> ModelTurn | ModelCompletion:
         name_to_tool = {_function_name(tool.tool_id): tool for tool in request.tools}
         tools = [_tool_payload(name, tool) for name, tool in name_to_tool.items()]
-        if not request.agent.is_leaf:
+        if not request.tool_free and not request.agent.is_leaf:
             tools.append(_delegation_payload())
         payload: dict[str, Any] = {
             "model": self.model,
@@ -118,14 +126,20 @@ class OpenAIResponsesAdapter:
             response = await self._get("models", secret, query=query)
             data = response.get("data")
             if not isinstance(data, list):
-                raise OpenAIResponseError("OpenAI model catalog returned an invalid response")
+                raise OpenAIResponseError(
+                    "OpenAI model catalog returned an invalid response",
+                    stage=ModelResponseFailureStage.HTTP_RESPONSE,
+                )
             models = tuple(
                 item["id"]
                 for item in data
                 if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
             )
             if not models:
-                raise OpenAIResponseError("OpenAI model catalog is empty")
+                raise OpenAIResponseError(
+                    "OpenAI model catalog is empty",
+                    stage=ModelResponseFailureStage.PROVIDER_STATUS,
+                )
             return tuple(dict.fromkeys(models))
 
         try:
@@ -135,7 +149,10 @@ class OpenAIResponsesAdapter:
 
     async def verify(self) -> None:
         if self.model not in await self.list_models():
-            raise OpenAIResponseError("configured OpenAI model is not available")
+            raise OpenAIResponseError(
+                "configured OpenAI model is not available",
+                stage=ModelResponseFailureStage.PROVIDER_STATUS,
+            )
 
     async def _post(
         self,
@@ -181,13 +198,22 @@ class OpenAIResponsesAdapter:
                 f"OpenAI request failed with retryable status {response.status_code}"
             )
         if response.is_error:
-            raise OpenAIResponseError(f"OpenAI request failed with status {response.status_code}")
+            raise OpenAIResponseError(
+                f"OpenAI request failed with status {response.status_code}",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
+            )
         try:
             value = response.json()
         except ValueError as error:
-            raise OpenAIResponseError("OpenAI returned invalid JSON") from error
+            raise OpenAIResponseError(
+                "OpenAI returned invalid JSON",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
+            ) from error
         if not isinstance(value, dict):
-            raise OpenAIResponseError("OpenAI returned an invalid response object")
+            raise OpenAIResponseError(
+                "OpenAI returned an invalid response object",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
+            )
         return value
 
     def _instructions(self, request: ModelRequest) -> str:
@@ -240,7 +266,35 @@ class OpenAIResponsesAdapter:
                         )
                     items.extend(deepcopy(output))
                     continue
-                if _structured_turn(message.content) is not None:
+                structured = _structured_turn(message.content)
+                if request.tool_free and isinstance(
+                    structured,
+                    ToolCallTurn | ToolCallBatchTurn,
+                ):
+                    calls = (
+                        structured.calls
+                        if isinstance(structured, ToolCallBatchTurn)
+                        else (structured,)
+                    )
+                    for index, call in enumerate(calls):
+                        generated_id = hashlib.sha256(
+                            f"{message.content}:{index}".encode()
+                        ).hexdigest()[:12]
+                        items.append(
+                            {
+                                "type": "function_call",
+                                "call_id": call.call_id or f"wf-{generated_id}",
+                                "name": _function_name(call.tool_id),
+                                "arguments": json.dumps(
+                                    call.arguments,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ),
+                            }
+                        )
+                    continue
+                if structured is not None:
                     raise ProviderContinuationUnavailableError(
                         "required OpenAI provider continuation history is unavailable"
                     )
@@ -248,7 +302,10 @@ class OpenAIResponsesAdapter:
                 continue
             if message.role is MessageRole.TOOL:
                 if message.tool_call_id is None:
-                    raise OpenAIResponseError("tool history is missing its provider call id")
+                    raise OpenAIResponseError(
+                        "tool history is missing its provider call id",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 items.append(
                     {
                         "type": "function_call_output",
@@ -267,7 +324,10 @@ class OpenAIResponsesAdapter:
     ) -> ModelTurn | ModelCompletion:
         output = response.get("output")
         if not isinstance(output, list) or not output:
-            raise OpenAIResponseError("OpenAI returned no response output")
+            raise OpenAIResponseError(
+                "OpenAI returned no response output",
+                stage=ModelResponseFailureStage.CHOICE,
+            )
         usage = _usage(response.get("usage"))
         calls = [
             item
@@ -276,7 +336,10 @@ class OpenAIResponsesAdapter:
         ]
         if calls:
             if not 1 <= len(calls) <= 8:
-                raise OpenAIResponseError("OpenAI returned an invalid tool call count")
+                raise OpenAIResponseError(
+                    "OpenAI returned an invalid tool call count",
+                    stage=ModelResponseFailureStage.MESSAGE,
+                )
             parsed_calls: list[ToolCallTurn] = []
             delegation: DelegationTurn | None = None
             for call in calls:
@@ -284,7 +347,10 @@ class OpenAIResponsesAdapter:
                 arguments = _arguments(call.get("arguments"))
                 if name == DELEGATE_FUNCTION:
                     if len(calls) != 1:
-                        raise OpenAIResponseError("delegation cannot be mixed with tool calls")
+                        raise OpenAIResponseError(
+                            "delegation cannot be mixed with tool calls",
+                            stage=ModelResponseFailureStage.MESSAGE,
+                        )
                     try:
                         delegation = DelegationTurn(
                             agent_id=arguments["agent_id"],
@@ -292,11 +358,17 @@ class OpenAIResponsesAdapter:
                             usage=usage,
                         )
                     except (KeyError, TypeError, ValueError) as error:
-                        raise OpenAIResponseError("OpenAI returned invalid delegation") from error
+                        raise OpenAIResponseError(
+                            "OpenAI returned invalid delegation",
+                            stage=ModelResponseFailureStage.MESSAGE,
+                        ) from error
                     continue
                 tool = name_to_tool.get(str(name))
                 if tool is None:
-                    raise OpenAIResponseError("OpenAI returned an unknown function")
+                    raise OpenAIResponseError(
+                        "OpenAI returned an unknown function",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 parsed_calls.append(
                     ToolCallTurn(
                         call_id=str(call.get("call_id")) if call.get("call_id") else None,
@@ -321,7 +393,10 @@ class OpenAIResponsesAdapter:
             )
         text = _output_text(output)
         if not text:
-            raise OpenAIResponseError("OpenAI returned neither text nor a tool call")
+            raise OpenAIResponseError(
+                "OpenAI returned neither text nor a tool call",
+                stage=ModelResponseFailureStage.EMPTY_TEXT,
+            )
         return FinalTurn(content=text, usage=usage)
 
     def __repr__(self) -> str:
@@ -390,9 +465,15 @@ def _arguments(value: Any) -> dict[str, Any]:
     try:
         arguments = json.loads(value) if isinstance(value, str) else value
     except ValueError as error:
-        raise OpenAIResponseError("OpenAI returned malformed function arguments") from error
+        raise OpenAIResponseError(
+            "OpenAI returned malformed function arguments",
+            stage=ModelResponseFailureStage.MESSAGE,
+        ) from error
     if not isinstance(arguments, dict):
-        raise OpenAIResponseError("OpenAI function arguments must be an object")
+        raise OpenAIResponseError(
+            "OpenAI function arguments must be an object",
+            stage=ModelResponseFailureStage.MESSAGE,
+        )
     return arguments
 
 

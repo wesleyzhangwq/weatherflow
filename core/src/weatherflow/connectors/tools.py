@@ -5,7 +5,10 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from weatherflow.capabilities import ToolEffect, ToolSpec
-from weatherflow.connectors.composio import COMPOSIO_ACTION_VERSIONS
+from weatherflow.connectors.composio import (
+    COMPOSIO_ACTION_VERSIONS,
+    ComposioGatewayError,
+)
 from weatherflow.connectors.models import ConnectionPhase, ConnectorKind
 from weatherflow.connectors.repository import ConnectorRepository
 from weatherflow.runtime import PublicToolError, ToolExecutionContext, ToolExecutionResult
@@ -852,13 +855,17 @@ class ComposioToolExecutor:
         remote_arguments = {**definition.defaults, **arguments}
         if definition.action == "GMAIL_FETCH_EMAILS":
             remote_arguments["include_payload"] = False
-        result = await self.gateway.execute_tool(
-            action=definition.action,
-            version=tool.source_version,
-            connected_account_id=account.external_account_id,
-            user_id=self.user_id,
-            arguments=remote_arguments,
-        )
+        try:
+            result = await self.gateway.execute_tool(
+                action=definition.action,
+                version=tool.source_version,
+                connected_account_id=account.external_account_id,
+                user_id=self.user_id,
+                arguments=remote_arguments,
+            )
+        except ComposioGatewayError as error:
+            retry_class = "retryable" if error.retryable else "permanent"
+            raise PublicToolError(f"connector_{error.code.value}_{retry_class}") from None
         return ToolExecutionResult(output=_bounded_result(definition, result))
 
 

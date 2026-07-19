@@ -21,6 +21,7 @@ from weatherflow.models.configuration import (
     normalize_model_base_url,
     provider_presets,
 )
+from weatherflow.models.errors import ModelResponseFailureStage
 from weatherflow.models.minimax import (
     MiniMaxAdapter,
     MiniMaxAuthenticationError,
@@ -55,6 +56,7 @@ __all__ = [
     "AnthropicResponseError",
     "AnthropicRetryableError",
     "ModelConfiguration",
+    "ModelResponseFailureStage",
     "ModelConfigurationRepository",
     "ModelConfigurationService",
     "ModelProvider",

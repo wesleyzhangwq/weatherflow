@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from weatherflow.bootstrap import RuntimeContainer
+from weatherflow.capabilities.builtin import activity_tool_specs
 from weatherflow.config import Settings
 from weatherflow.events import Actor, Event
 from weatherflow.runtime import FinalTurn
@@ -47,7 +48,10 @@ async def test_relevant_memory_is_context_only_and_cannot_widen_authority(
     assert episode.summary in prompt
     snapshot = await container.snapshots.get_by_run_id(run.id)
     assert snapshot is not None
-    assert {tool.tool_id for tool in snapshot.tools} == {"developer.read_file"}
+    assert {tool.tool_id for tool in snapshot.tools} == {
+        "developer.read_file",
+        *(tool.tool_id for tool in activity_tool_specs()),
+    }
     checkpoint = await container.checkpoints.get(run.id)
     assert checkpoint is not None
     assert checkpoint.state["memory_context"][0]["source_event_ids"] == [source.id]

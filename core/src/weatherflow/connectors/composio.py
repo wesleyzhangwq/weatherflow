@@ -18,6 +18,7 @@ from weatherflow.extensions import CredentialBroker, CredentialRef
 COMPOSIO_ACTION_VERSIONS = MappingProxyType(
     {
         "GITHUB_GET_THE_AUTHENTICATED_USER": "20260713_00",
+        "GITHUB_LIST_NOTIFICATIONS": "20260713_00",
         "GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER": "20260713_00",
         "GITHUB_SEARCH_COMMITS": "20260713_00",
         "GITHUB_LIST_COMMITS": "20260713_00",
@@ -30,6 +31,7 @@ COMPOSIO_ACTION_VERSIONS = MappingProxyType(
         "GMAIL_CREATE_EMAIL_DRAFT": "20260702_01",
         "GMAIL_SEND_EMAIL": "20260702_01",
         "GOOGLECALENDAR_EVENTS_LIST": "20260623_00",
+        "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS": "20260623_00",
         "GOOGLECALENDAR_FIND_FREE_SLOTS": "20260623_00",
         "GOOGLECALENDAR_CREATE_EVENT": "20260623_00",
         "GOOGLECALENDAR_PATCH_EVENT": "20260623_00",
@@ -40,15 +42,18 @@ COMPOSIO_ACTION_VERSIONS = MappingProxyType(
 _PINNED_READ_ACTION_VERSIONS = MappingProxyType(
     {
         "GITHUB_GET_THE_AUTHENTICATED_USER": "20260713_00",
-        "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS": "20260713_00",
+        "GITHUB_LIST_NOTIFICATIONS": "20260713_00",
+        "GITHUB_SEARCH_COMMITS": "20260713_00",
         "GMAIL_FETCH_EMAILS": "20260702_01",
-        "GOOGLECALENDAR_EVENTS_LIST": "20260623_00",
+        "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS": "20260623_00",
     }
 )
 
 
 class ComposioErrorCode(StrEnum):
     AUTH = "auth"
+    BROKER_AUTH = "broker_auth"
+    BROKER_PERMISSION = "broker_permission"
     RATE_LIMIT = "rate_limit"
     INPUT = "input"
     NOT_FOUND = "not_found"
@@ -78,6 +83,7 @@ class ComposioRemoteAccount(BaseModel):
     id: str
     phase: ConnectionPhase
     toolkit: str
+    user_id: str
     display_name: str | None = None
 
     @property
@@ -105,14 +111,7 @@ class ComposioGateway:
             await self.client.aclose()
 
     async def validate(self) -> None:
-        await self._with_key(
-            lambda key: self._request(
-                key,
-                "GET",
-                "/api/v3/auth_configs",
-                params={"limit": "1"},
-            )
-        )
+        await self._with_key(self.validate_api_key)
 
     async def validate_api_key(self, api_key: str) -> None:
         await self._request(
@@ -120,6 +119,17 @@ class ComposioGateway:
             "GET",
             "/api/v3/auth_configs",
             params={"limit": "1"},
+        )
+        await self._request(
+            api_key,
+            "GET",
+            "/api/v3/connected_accounts",
+            params={"limit": "1"},
+        )
+        await self._request(
+            api_key,
+            "GET",
+            "/api/v3.1/toolkits/github",
         )
 
     async def oauth_setup(self, connector: ConnectorKind) -> OAuthSetup:
@@ -216,6 +226,7 @@ class ComposioGateway:
             id=_required_string(payload, "id"),
             phase=_normalize_phase(str(payload.get("status", ""))),
             toolkit=toolkit,
+            user_id=_required_string(payload, "user_id"),
             display_name=display_name,
         )
 
@@ -340,7 +351,7 @@ class ComposioGateway:
             )
         )
         if payload.get("successful") is not True:
-            raise ComposioGatewayError(ComposioErrorCode.UPSTREAM)
+            raise _execution_error(payload)
         return payload.get("data", {})
 
     async def revoke(self, account_id: str) -> None:
@@ -374,8 +385,15 @@ class ComposioGateway:
             )
         except httpx.HTTPError:
             raise ComposioGatewayError(ComposioErrorCode.TRANSPORT, retryable=True) from None
+        if response.status_code == 403:
+            raise ComposioGatewayError(ComposioErrorCode.BROKER_PERMISSION)
         if not response.is_success:
-            raise _status_error(response.status_code)
+            # This HTTP response came from Composio itself. A 401/403 here
+            # rejects the project API key, not the provider OAuth account.
+            raise _status_error(
+                response.status_code,
+                auth_code=ComposioErrorCode.BROKER_AUTH,
+            )
         try:
             payload = response.json()
         except ValueError:
@@ -472,9 +490,13 @@ def _safe_action(value: str) -> None:
         raise ComposioGatewayError(ComposioErrorCode.INPUT)
 
 
-def _status_error(status: int) -> ComposioGatewayError:
+def _status_error(
+    status: int,
+    *,
+    auth_code: ComposioErrorCode,
+) -> ComposioGatewayError:
     if status in {401, 403}:
-        return ComposioGatewayError(ComposioErrorCode.AUTH)
+        return ComposioGatewayError(auth_code)
     if status == 404:
         return ComposioGatewayError(ComposioErrorCode.NOT_FOUND)
     if status == 429:
@@ -482,3 +504,14 @@ def _status_error(status: int) -> ComposioGatewayError:
     if status in {400, 409, 422}:
         return ComposioGatewayError(ComposioErrorCode.INPUT)
     return ComposioGatewayError(ComposioErrorCode.UPSTREAM, retryable=status >= 500)
+
+
+def _execution_error(payload: dict[str, Any]) -> ComposioGatewayError:
+    if payload.get("auth_refresh_required") is True:
+        return ComposioGatewayError(ComposioErrorCode.AUTH)
+    upstream_status = payload.get("mercury_last_http_status_code")
+    if isinstance(upstream_status, int) and not isinstance(upstream_status, bool):
+        # Wrapped execution status belongs to GitHub/Gmail/Calendar, so an
+        # upstream 401/403 means that provider account needs OAuth recovery.
+        return _status_error(upstream_status, auth_code=ComposioErrorCode.AUTH)
+    return ComposioGatewayError(ComposioErrorCode.UPSTREAM)

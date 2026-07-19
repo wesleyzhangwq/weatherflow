@@ -12,6 +12,7 @@ from weatherflow.models import (
     MiniMaxAuthenticationError,
     MiniMaxResponseError,
     MiniMaxRetryableError,
+    ModelResponseFailureStage,
     OpenAICompatibleAdapter,
 )
 from weatherflow.runtime import (
@@ -29,10 +30,43 @@ from weatherflow.runtime import (
 SECRET = "minimax-secret-never-persist"
 
 
+@pytest.mark.parametrize(
+    ("response", "expected_stage"),
+    [
+        (httpx.Response(400, json={}), ModelResponseFailureStage.HTTP_RESPONSE),
+        (
+            httpx.Response(200, json={"base_resp": {"status_code": 1001}}),
+            ModelResponseFailureStage.PROVIDER_STATUS,
+        ),
+        (httpx.Response(200, json={"choices": []}), ModelResponseFailureStage.CHOICE),
+        (
+            httpx.Response(200, json={"choices": [{}]}),
+            ModelResponseFailureStage.MESSAGE,
+        ),
+        (
+            httpx.Response(200, json={"choices": [{"message": {"content": ""}}]}),
+            ModelResponseFailureStage.EMPTY_TEXT,
+        ),
+    ],
+)
+async def test_minimax_response_errors_expose_only_a_bounded_failure_stage(
+    response: httpx.Response,
+    expected_stage: ModelResponseFailureStage,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return response
+
+    with pytest.raises(MiniMaxResponseError) as caught:
+        await adapter(handler).complete(request())
+
+    assert caught.value.stage is expected_stage
+
+
 def request(
     *messages: AgentMessage,
     leaf: bool = False,
     continuations: tuple[ProviderContinuation, ...] = (),
+    tool_free: bool = False,
 ) -> ModelRequest:
     return ModelRequest(
         run_id="run-1",
@@ -43,7 +77,9 @@ def request(
         ),
         messages=messages
         or (AgentMessage(role=MessageRole.USER, content="Read the release notes"),),
-        tools=(
+        tools=()
+        if tool_free
+        else (
             ToolSpec(
                 tool_id="developer.read_file",
                 description="Read a scoped file",
@@ -59,6 +95,7 @@ def request(
             ),
         ),
         provider_continuations=continuations,
+        tool_free=tool_free,
     )
 
 
@@ -372,6 +409,55 @@ async def test_tool_history_is_reconstructed_for_the_next_model_call() -> None:
     )
 
     assert turn == FinalTurn(content="Summarized")
+
+
+async def test_restricted_tool_free_turn_replays_history_without_exposing_tools() -> None:
+    assistant_turn = AgentMessage(
+        role=MessageRole.ASSISTANT,
+        content=json.dumps(
+            {
+                "kind": "tool_call",
+                "call_id": "call-activity",
+                "tool_id": "activity.query_range",
+                "arguments": {"start": "2026-07-17T00:00:00+08:00"},
+            }
+        ),
+    )
+    observation = AgentMessage(
+        role=MessageRole.TOOL,
+        name="activity.query_range",
+        tool_call_id="call-activity",
+        content='{"application_seconds":{"Codex":7200}}',
+    )
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        body = json.loads(http_request.content)
+        assert "tools" not in body
+        assert "tool_choice" not in body
+        assert body["messages"][-2]["role"] == "assistant"
+        function_name = body["messages"][-2]["tool_calls"][0]["function"]["name"]
+        assert function_name.startswith("wf_activity_query_range_")
+        assert body["messages"][-1] == {
+            "role": "tool",
+            "name": function_name,
+            "tool_call_id": "call-activity",
+            "content": '{"application_seconds":{"Codex":7200}}',
+        }
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "完成"}}]},
+        )
+
+    turn = await adapter(handler).complete(
+        request(
+            AgentMessage(role=MessageRole.USER, content="总结最近活动"),
+            assistant_turn,
+            observation,
+            tool_free=True,
+        )
+    )
+
+    assert turn == FinalTurn(content="完成")
 
 
 async def test_m2_preserves_and_replays_the_complete_provider_assistant_message() -> None:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from weatherflow.activity.models import ActivityHeartbeat, ActivityInterval
+from weatherflow.activity.models import ObservedActivityFact
 
 
 @dataclass(frozen=True)
@@ -24,8 +24,10 @@ class ActivitySanitizer:
             "apikey",
             "auth",
             "authorization",
+            "awsaccesskeyid",
             "client_secret",
             "code",
+            "cookie",
             "credential",
             "id_token",
             "key",
@@ -33,15 +35,14 @@ class ActivitySanitizer:
             "password",
             "refresh_token",
             "secret",
-            "signature",
             "sig",
+            "signature",
             "token",
             "x-amz-credential",
             "x-amz-security-token",
             "x-amz-signature",
             "x-goog-credential",
             "x-goog-signature",
-            "awsaccesskeyid",
         }
     )
     _SECRET_PATTERNS = (
@@ -53,13 +54,14 @@ class ActivitySanitizer:
         re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}\b"),
         re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE),
         re.compile(
-            r"\b(?:api[_ -]?key|access[_ -]?token|secret|password)\s*[:=]\s*[^\s&]+",
+            r"\b(?:api[_ -]?key|access[_ -]?token|secret|password|cookie)"
+            r"\s*[:=]\s*[^\s&]+",
             re.IGNORECASE,
         ),
     )
 
-    def sanitize(self, interval: ActivityInterval) -> SanitizedActivity:
-        event = interval.model_dump(mode="json")
+    def sanitize(self, fact: ObservedActivityFact) -> SanitizedActivity:
+        event = fact.model_dump(mode="json")
         redaction_count = 0
         for key, value in tuple(event.items()):
             if not isinstance(value, str):
@@ -69,47 +71,43 @@ class ActivitySanitizer:
             else:
                 event[key], count = self._sanitize_text(value)
             redaction_count += count
-        serialized = json.dumps(event, ensure_ascii=False, sort_keys=True)
+        serialized = json.dumps(
+            event,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         return SanitizedActivity(
             event=event,
             redaction_count=redaction_count,
             serialized=serialized,
         )
 
-    def sanitize_heartbeat(
-        self,
-        heartbeat: ActivityHeartbeat,
-    ) -> tuple[ActivityHeartbeat, int]:
-        payload = heartbeat.model_dump(mode="python")
-        redaction_count = 0
-        for key, value in tuple(payload.items()):
-            if not isinstance(value, str):
-                continue
-            if key == "url":
-                payload[key], count = self._sanitize_url(value, drop_fragment=False)
-            else:
-                payload[key], count = self._sanitize_text(value)
-            redaction_count += count
-        return ActivityHeartbeat.model_validate(payload), redaction_count
-
-    def serialize_untrusted(self, intervals: list[ActivityInterval]) -> str:
-        events = [self.sanitize(interval).event for interval in intervals]
-        serialized = json.dumps(events, ensure_ascii=False, sort_keys=True)
+    def serialize_untrusted(self, facts: list[ObservedActivityFact]) -> str:
+        events = [self.sanitize(fact).event for fact in facts]
+        serialized = json.dumps(
+            events,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         return f"<untrusted_activity_data>\n{serialized}\n</untrusted_activity_data>"
 
-    def _sanitize_url(
-        self,
-        value: str,
-        *,
-        drop_fragment: bool = True,
-    ) -> tuple[str, int]:
-        parsed = urlsplit(value)
+    def sanitize_text(self, value: str) -> tuple[str, int]:
+        return self._sanitize_text(value)
+
+    def _sanitize_url(self, value: str) -> tuple[str, int]:
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname or ""
+            port = parsed.port
+        except ValueError:
+            return self._sanitize_text(value)
         count = 0
-        hostname = parsed.hostname or ""
         if parsed.username is not None or parsed.password is not None:
             count += 1
-        if parsed.port is not None:
-            hostname = f"{hostname}:{parsed.port}"
+        if port is not None:
+            hostname = f"{hostname}:{port}"
 
         query: list[tuple[str, str]] = []
         for key, query_value in parse_qsl(parsed.query, keep_blank_values=True):
@@ -120,13 +118,8 @@ class ActivitySanitizer:
                 sanitized, replacements = self._sanitize_text(query_value)
                 query.append((key, sanitized))
                 count += replacements
-        fragment = ""
         if parsed.fragment:
-            if drop_fragment:
-                count += 1
-            else:
-                fragment, fragment_count = self._sanitize_fragment(parsed.fragment)
-                count += fragment_count
+            count += 1
         path, path_count = self._sanitize_text(parsed.path)
         count += path_count
         return (
@@ -136,26 +129,11 @@ class ActivitySanitizer:
                     hostname,
                     path,
                     urlencode(query, doseq=True),
-                    fragment,
+                    "",
                 )
             ),
             count,
         )
-
-    def _sanitize_fragment(self, fragment: str) -> tuple[str, int]:
-        if "=" not in fragment and "&" not in fragment:
-            return self._sanitize_text(fragment)
-        values: list[tuple[str, str]] = []
-        count = 0
-        for key, value in parse_qsl(fragment, keep_blank_values=True):
-            if self._sensitive_query_key(key):
-                values.append((key, "[REDACTED]"))
-                count += 1
-            else:
-                sanitized, replacements = self._sanitize_text(value)
-                values.append((key, sanitized))
-                count += replacements
-        return urlencode(values, doseq=True), count
 
     @classmethod
     def _sensitive_query_key(cls, key: str) -> bool:

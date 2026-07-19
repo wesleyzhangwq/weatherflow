@@ -112,34 +112,15 @@ def test_desktop_palette_is_warm_neutral_and_connector_marks_are_theme_owned() -
     assert cockpit.count("data-connector={status.connector}") >= 2
 
 
-def test_native_activity_response_is_limited_to_approved_vault_metadata() -> None:
-    rust = (ROOT / "desktop/src-tauri/src/activity.rs").read_text()
-    interface = (
-        (ROOT / "desktop/src/activity.ts")
-        .read_text()
-        .split("export class ActivityAccumulator", maxsplit=1)[0]
-    )
+def test_native_shell_has_no_weatherflow_activity_watcher() -> None:
+    rust = (ROOT / "desktop/src-tauri/src/lib.rs").read_text()
+    cargo = (ROOT / "desktop/src-tauri/Cargo.toml").read_text()
 
-    assert "pub struct ActivitySample" in rust
-    assert "idle_seconds" in rust and "category" in rust
-    for required in ("app_name", "bundle_id", "window_title", "focused", "idle_state"):
-        assert required in interface
-    for forbidden in (
-        "keystrokes",
-        "keyboard_content",
-        "clipboard",
-        "screenshot",
-        "screen_pixels",
-        "audio_content",
-        "microphone",
-        "cookie",
-        "authorization",
-        "api_key",
-        "oauth_code",
-        "form_value",
-        "page_content",
-    ):
-        assert forbidden not in interface
+    assert not (ROOT / "desktop/src-tauri/src/activity.rs").exists()
+    assert not (ROOT / "desktop/browser-extension").exists()
+    assert "sample_activity_metadata" not in rust
+    assert "mod activity;" not in rust
+    assert "objc2-app-kit" not in cargo
 
 
 def test_daemon_supervisor_uses_ephemeral_port_and_memory_token() -> None:

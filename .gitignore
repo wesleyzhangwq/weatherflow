@@ -43,3 +43,4 @@ target/
 release/pyinstaller/
 release/macos/*.app/
 release/macos/*.dmg
+release/.weatherflow-release.lock

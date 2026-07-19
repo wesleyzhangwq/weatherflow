@@ -45,6 +45,7 @@ class TurnCommitter:
     ) -> RunCheckpoint:
         turn = completion.turn
         state = dict(checkpoint.state)
+        state.pop("tool_free_next_turn", None)
         state["pending_turn"] = turn.model_dump(mode="json")
         prior_usage = state.get("runtime_usage", {})
         input_tokens = int(prior_usage.get("input_tokens", 0)) + turn.usage.input_tokens
@@ -132,6 +133,7 @@ class TurnCommitter:
         *,
         clear_pending: bool = True,
         batch_next_index: int = 1,
+        tool_free_next_turn: bool = False,
     ) -> RunCheckpoint:
         observation = BoundedObservation.from_output(output)
         state = dict(checkpoint.state)
@@ -140,6 +142,8 @@ class TurnCommitter:
             state.pop("batch_next_index", None)
         else:
             state["batch_next_index"] = batch_next_index
+        if tool_free_next_turn:
+            state["tool_free_next_turn"] = True
         desired = checkpoint.model_copy(
             update={
                 "transcript": (
@@ -185,6 +189,80 @@ class TurnCommitter:
             )
         return saved
 
+    async def record_transient_observation(
+        self,
+        checkpoint: RunCheckpoint,
+        turn: ToolCallTurn,
+        checkpoint_output: dict[str, object],
+        *,
+        observation_key: str,
+    ) -> RunCheckpoint:
+        """Persist only a replay receipt for one non-durable observation.
+
+        The full observation is handed to the next model request in memory by
+        ``SharedTurnLoop``. Keeping the pending read-only tool turn means a
+        restart safely re-runs the query instead of recovering raw source data
+        from a checkpoint.
+        """
+
+        receipt = BoundedObservation.from_output(
+            {
+                **checkpoint_output,
+                "transient_observation": True,
+                "raw_activity_omitted": True,
+                "observation_key": observation_key,
+            }
+        )
+        state = dict(checkpoint.state)
+        state.pop("batch_next_index", None)
+        transcript = tuple(
+            message
+            for message in checkpoint.transcript
+            if not _is_transient_receipt(message, observation_key=observation_key)
+        )
+        desired = checkpoint.model_copy(
+            update={
+                "transcript": (
+                    *transcript,
+                    AgentMessage(
+                        role=MessageRole.TOOL,
+                        name=turn.tool_id,
+                        tool_call_id=turn.call_id,
+                        content=json.dumps(
+                            receipt.output,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                ),
+                "state": state,
+                "pending_action_id": None,
+            }
+        )
+        async with self.database.transaction() as connection:
+            saved = await self.checkpoints.save_in(
+                connection,
+                desired,
+                expected_version=checkpoint.version,
+            )
+            await self.ledger.append_in(
+                connection,
+                Event.new(
+                    type="tool.executed",
+                    actor=Actor.SYSTEM,
+                    stream_kind="run",
+                    stream_id=checkpoint.run_id,
+                    correlation_id=checkpoint.run_id,
+                    payload={
+                        "target": turn.tool_id,
+                        "truncated": receipt.truncated,
+                        "transient": True,
+                    },
+                ),
+            )
+        return saved
+
 
 def turn_message(turn: ModelTurn) -> AgentMessage:
     if isinstance(turn, FinalTurn):
@@ -197,3 +275,17 @@ def turn_message(turn: ModelTurn) -> AgentMessage:
             separators=(",", ":"),
         )
     return AgentMessage(role=MessageRole.ASSISTANT, content=content)
+
+
+def _is_transient_receipt(message: AgentMessage, *, observation_key: str) -> bool:
+    if message.role is not MessageRole.TOOL:
+        return False
+    try:
+        payload = json.loads(message.content)
+    except (TypeError, ValueError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("transient_observation") is True
+        and payload.get("observation_key") == observation_key
+    )

@@ -183,7 +183,12 @@ class PersonalOperationsExecutor:
         end = _string(arguments.get("end"), "end", 100)
         event_id = _string(arguments.get("event_id"), "event_id", 500)
         objectives = _string_list(arguments.get("objectives", []), "objectives", MAX_OBJECTIVES)
-        events = await calendar.list_events(start=start, end=end, limit=50)
+        events = await calendar.list_events(
+            start=start,
+            end=end,
+            limit=50,
+            context=context,
+        )
         event = next((item for item in events if item.event_id == event_id), None)
         if event is None:
             raise LookupError(f"calendar event not found: {event_id}")
@@ -238,7 +243,12 @@ class PersonalOperationsExecutor:
         start = _string(arguments.get("start"), "start", 100)
         end = _string(arguments.get("end"), "end", 100)
         tasks = _string_list(arguments.get("tasks"), "tasks", MAX_TASKS)
-        events = await calendar.list_events(start=start, end=end, limit=50)
+        events = await calendar.list_events(
+            start=start,
+            end=end,
+            limit=50,
+            context=context,
+        )
         limit = 2 if current.policy.scope_pressure == "reduce" else 4
         selected, deferred = tasks[:limit], tasks[limit:]
         content = (

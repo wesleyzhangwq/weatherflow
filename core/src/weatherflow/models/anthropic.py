@@ -16,6 +16,7 @@ from weatherflow.extensions import (
     CredentialRef,
     CredentialUnavailableError,
 )
+from weatherflow.models.errors import ModelResponseFailureStage
 from weatherflow.runtime import (
     DelegationTurn,
     FinalTurn,
@@ -45,7 +46,14 @@ class AnthropicAuthenticationError(AnthropicError):
 
 
 class AnthropicResponseError(AnthropicError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: ModelResponseFailureStage = ModelResponseFailureStage.UNKNOWN,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
 
 
 class AnthropicMessagesAdapter:
@@ -86,7 +94,7 @@ class AnthropicMessagesAdapter:
     async def complete(self, request: ModelRequest) -> ModelTurn | ModelCompletion:
         name_to_tool = {_function_name(tool.tool_id): tool for tool in request.tools}
         tools = [_tool_payload(name, tool) for name, tool in name_to_tool.items()]
-        if not request.agent.is_leaf:
+        if not request.tool_free and not request.agent.is_leaf:
             tools.append(_delegation_payload())
         payload: dict[str, Any] = {
             "model": self.model,
@@ -118,14 +126,20 @@ class AnthropicMessagesAdapter:
             response = await self._get("models", secret, query=params)
             data = response.get("data")
             if not isinstance(data, list):
-                raise AnthropicResponseError("Anthropic model catalog returned an invalid response")
+                raise AnthropicResponseError(
+                    "Anthropic model catalog returned an invalid response",
+                    stage=ModelResponseFailureStage.HTTP_RESPONSE,
+                )
             models = tuple(
                 item["id"]
                 for item in data
                 if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
             )
             if not models:
-                raise AnthropicResponseError("Anthropic model catalog is empty")
+                raise AnthropicResponseError(
+                    "Anthropic model catalog is empty",
+                    stage=ModelResponseFailureStage.PROVIDER_STATUS,
+                )
             return tuple(dict.fromkeys(models))
 
         try:
@@ -135,7 +149,10 @@ class AnthropicMessagesAdapter:
 
     async def verify(self) -> None:
         if self.model not in await self.list_models():
-            raise AnthropicResponseError("configured Anthropic model is not available")
+            raise AnthropicResponseError(
+                "configured Anthropic model is not available",
+                stage=ModelResponseFailureStage.PROVIDER_STATUS,
+            )
 
     async def _post(
         self,
@@ -191,14 +208,21 @@ class AnthropicMessagesAdapter:
             )
         if response.is_error:
             raise AnthropicResponseError(
-                f"Anthropic request failed with status {response.status_code}"
+                f"Anthropic request failed with status {response.status_code}",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
             )
         try:
             value = response.json()
         except ValueError as error:
-            raise AnthropicResponseError("Anthropic returned invalid JSON") from error
+            raise AnthropicResponseError(
+                "Anthropic returned invalid JSON",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
+            ) from error
         if not isinstance(value, dict):
-            raise AnthropicResponseError("Anthropic returned an invalid response object")
+            raise AnthropicResponseError(
+                "Anthropic returned an invalid response object",
+                stage=ModelResponseFailureStage.HTTP_RESPONSE,
+            )
         return value
 
     def _system(self, request: ModelRequest) -> str:
@@ -246,7 +270,32 @@ class AnthropicMessagesAdapter:
                         )
                     messages.append(deepcopy(continuation.payload))
                     continue
-                if _structured_turn(message.content) is not None:
+                structured = _structured_turn(message.content)
+                if request.tool_free and isinstance(
+                    structured,
+                    ToolCallTurn | ToolCallBatchTurn,
+                ):
+                    calls = (
+                        structured.calls
+                        if isinstance(structured, ToolCallBatchTurn)
+                        else (structured,)
+                    )
+                    content = []
+                    for index, call in enumerate(calls):
+                        generated_id = hashlib.sha256(
+                            f"{message.content}:{index}".encode()
+                        ).hexdigest()[:12]
+                        content.append(
+                            {
+                                "type": "tool_use",
+                                "id": call.call_id or f"wf-{generated_id}",
+                                "name": _function_name(call.tool_id),
+                                "input": call.arguments,
+                            }
+                        )
+                    messages.append({"role": "assistant", "content": content})
+                    continue
+                if structured is not None:
                     raise ProviderContinuationUnavailableError(
                         "required Anthropic provider continuation history is unavailable"
                     )
@@ -254,7 +303,10 @@ class AnthropicMessagesAdapter:
                 continue
             if message.role is MessageRole.TOOL:
                 if message.tool_call_id is None:
-                    raise AnthropicResponseError("tool history is missing its provider call id")
+                    raise AnthropicResponseError(
+                        "tool history is missing its provider call id",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 result = {
                     "type": "tool_result",
                     "tool_use_id": message.tool_call_id,
@@ -284,24 +336,36 @@ class AnthropicMessagesAdapter:
     ) -> ModelTurn | ModelCompletion:
         content = response.get("content")
         if not isinstance(content, list) or not content:
-            raise AnthropicResponseError("Anthropic returned no response content")
+            raise AnthropicResponseError(
+                "Anthropic returned no response content",
+                stage=ModelResponseFailureStage.CHOICE,
+            )
         usage = _usage(response.get("usage"))
         calls = [
             item for item in content if isinstance(item, dict) and item.get("type") == "tool_use"
         ]
         if calls:
             if response.get("stop_reason") != "tool_use" or not 1 <= len(calls) <= 8:
-                raise AnthropicResponseError("Anthropic returned an invalid tool-use response")
+                raise AnthropicResponseError(
+                    "Anthropic returned an invalid tool-use response",
+                    stage=ModelResponseFailureStage.MESSAGE,
+                )
             parsed_calls: list[ToolCallTurn] = []
             delegation: DelegationTurn | None = None
             for call in calls:
                 name = call.get("name")
                 arguments = call.get("input")
                 if not isinstance(arguments, dict):
-                    raise AnthropicResponseError("Anthropic tool input must be an object")
+                    raise AnthropicResponseError(
+                        "Anthropic tool input must be an object",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 if name == DELEGATE_FUNCTION:
                     if len(calls) != 1:
-                        raise AnthropicResponseError("delegation cannot be mixed with tool calls")
+                        raise AnthropicResponseError(
+                            "delegation cannot be mixed with tool calls",
+                            stage=ModelResponseFailureStage.MESSAGE,
+                        )
                     try:
                         delegation = DelegationTurn(
                             agent_id=arguments["agent_id"],
@@ -310,12 +374,16 @@ class AnthropicMessagesAdapter:
                         )
                     except (KeyError, TypeError, ValueError) as error:
                         raise AnthropicResponseError(
-                            "Anthropic returned invalid delegation"
+                            "Anthropic returned invalid delegation",
+                            stage=ModelResponseFailureStage.MESSAGE,
                         ) from error
                     continue
                 tool = name_to_tool.get(str(name))
                 if tool is None:
-                    raise AnthropicResponseError("Anthropic returned an unknown function")
+                    raise AnthropicResponseError(
+                        "Anthropic returned an unknown function",
+                        stage=ModelResponseFailureStage.MESSAGE,
+                    )
                 parsed_calls.append(
                     ToolCallTurn(
                         call_id=str(call.get("id")) if call.get("id") else None,
@@ -346,7 +414,10 @@ class AnthropicMessagesAdapter:
             and isinstance(item.get("text"), str)
         ).strip()
         if not text:
-            raise AnthropicResponseError("Anthropic returned neither text nor a tool call")
+            raise AnthropicResponseError(
+                "Anthropic returned neither text nor a tool call",
+                stage=ModelResponseFailureStage.EMPTY_TEXT,
+            )
         return FinalTurn(content=text, usage=usage)
 
     def __repr__(self) -> str:

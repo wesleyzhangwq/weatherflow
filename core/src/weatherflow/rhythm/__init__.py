@@ -8,7 +8,6 @@ from weatherflow.rhythm.insights import (
     RhythmInsightsService,
 )
 from weatherflow.rhythm.models import (
-    ActivityMetadata,
     AppCategory,
     CheckInSignal,
     CorrectionSignal,
@@ -29,7 +28,6 @@ from weatherflow.rhythm.repository import RhythmSnapshotRepository
 from weatherflow.rhythm.service import CurrentRhythm, RhythmService
 
 __all__ = [
-    "ActivityMetadata",
     "AppCategory",
     "CheckInSignal",
     "CorrectionSignal",

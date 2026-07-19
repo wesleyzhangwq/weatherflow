@@ -3,6 +3,7 @@ import { WeatherFlowClient } from "./bridge";
 import type { Workspace } from "./types";
 
 const SELECTED_WORKSPACE_KEY = "weatherflow.selectedWorkspaceId";
+const WORKSPACE_RETRY_MS = 500;
 
 export function useWorkspaces(client: WeatherFlowClient) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -34,7 +35,26 @@ export function useWorkspaces(client: WeatherFlowClient) {
     return workspace;
   }, [client, refresh, select]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    let active = true;
+    let retryTimer: number | null = null;
+    const load = async () => {
+      try {
+        await refresh();
+      } catch {
+        if (!active || retryTimer !== null) return;
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          void load();
+        }, WORKSPACE_RETRY_MS);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [refresh]);
 
   return { workspaces, selectedId, select, authorize, refresh };
 }

@@ -35,8 +35,10 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 - External writes, installs, and destructive actions require approval.
 - Unknown or out-of-scope actions fail closed.
 - Credentials never enter prompts, logs, events, memory, or artifacts.
-- Full activity metadata may enter only the dedicated Raw Activity Vault and
-  audited activity-inference snapshots after persisted opt-in. Window titles,
+- ActivityWatch is the sole raw activity fact source and remains independently
+  running. WeatherFlow may read it only through the loopback REST API or an
+  explicit short-lived read-only SQLite diagnostic fallback. It never writes,
+  deletes, pauses, configures, or mirrors ActivityWatch raw data. Window titles,
   URLs, and document names remain untrusted data, never instructions.
 - Broker-managed provider tokens never enter WeatherFlow; only opaque account
   references and a Keychain-backed broker credential may cross the connector boundary.
@@ -49,7 +51,7 @@ Tauri Shell -> Python Harness Daemon -> Rhythm + Capability Packs -> Local Data
 ```text
 core/
   src/weatherflow/
-    activity/        raw activity vault, analysis, redaction, and inference scheduling
+    activity/        ActivityWatch read gateway, semantic queries, summaries, and recovery
     api/             HTTP adapter
     artifacts/       content-addressed blobs and immutable provenance
     capabilities/    ToolSpec catalog, Pack executors, immutable Run snapshots
@@ -66,7 +68,7 @@ core/
   tests/             unit, contract, and integration tests
 desktop/
   src/               Companion, Capsule, Cockpit, typed bridge, metadata aggregation
-  src-tauri/         thin window shell, sidecar supervisor, native metadata sampling
+  src-tauri/         thin window shell and sidecar supervisor
 docs/superpowers/    approved specifications and implementation plans
 weatherflow-architecture-v3.md
 ```
@@ -99,14 +101,31 @@ Run the narrow test while developing and `make check` before committing.
 - SharedTurnLoop is the sole model loop; checkpoint every turn before dispatch.
 - Never retry a recovered EXECUTING side effect; route Action and Run to NEEDS_REVIEW.
 - Keep state-to-weather projection in Python; desktop consumes presentation tokens only.
-- Ambient activity never captures screenshots, keystroke content, clipboard, or
-  audio content. ActivityWatch-level application, window-title, and browser-tab
-  metadata is owned only by `weatherflow.activity`, may cross the native bridge
-  only after persisted opt-in, and must not be copied into Runs, the Event
-  Ledger, memory, checkpoints, artifacts, or ordinary diagnostics.
-- Remote activity inference runs only through the audited provider-neutral
-  inference boundary on the fixed `Asia/Shanghai` 06:00-through-24:00 hourly
-  schedule. Credential detection/redaction precedes every model request.
+- ActivityWatch application, title, URL, event, and AFK records must not be
+  copied into WeatherFlow SQLite, Runs, the Event Ledger, memory, checkpoints,
+  artifacts, or ordinary diagnostics. The derived activity database stores only
+  task/revision/statistics metadata, ActivityWatch evidence refs, and bounded
+  summary evidence refs to replaceable GitHub, Gmail, and Google Calendar
+  snapshots. It stores no ActivityWatch state inference or comprehensive state
+  assessment records.
+- Activity summary windows use fixed `Asia/Shanghai` boundaries: 00–06, 06–12,
+  12–18, 18–24, a distinct 24-hour window ending at 06:00, Monday weeks,
+  anchored biweeks, and calendar months. Startup recovery enumerates theoretical
+  windows; it never infers gaps from only the last completed task.
+- A summary may be provisional after 15 minutes and final only after at least
+  60 minutes plus a fresh raw-window check. Category rules are query-time
+  derivations whose normalized snapshot/version is recorded per revision.
+- Credential detection/redaction and explicit untrusted-data delimiters precede
+  every tool-free activity model request. Recent summaries use one built-in,
+  code-owned, versioned Simplified-Chinese prompt; users may select the model
+  but cannot view, submit, persist, or edit the prompt. A summary request
+  independently reads bounded snapshots from GitHub, Gmail, and Google Calendar
+  together (never a GitHub-only substitute), records per-source summary evidence
+  refs and explicit missing/stale coverage, and returns Chinese narrative only.
+  Any generated synopsis of auto-fetched connector content is also Chinese; only
+  visibly quoted raw untrusted evidence may retain its source language.
+  ActivityWatch state inference, comprehensive state assessment, and inference
+  APIs are forbidden.
 - When `WF_BRIDGE_TOKEN` is set, every HTTP/WebSocket bridge request must authenticate.
 - Desktop event reconnects use Event Ledger cursors; invalid cursors refresh snapshots.
 - Persist side-effect Actions before Approval; never treat approval as execution.

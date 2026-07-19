@@ -1,6 +1,7 @@
-.PHONY: install lint format-check test eval security-check desktop-check rust-check check sidecar-check release-check dev clean
+.PHONY: install lint format-check test eval security-check desktop-check rust-check check sidecar-check release-app run-release release-check dev clean
 
 PY := uv run --package weatherflow-core --extra dev
+RELEASE_APP := $(abspath release/macos/WeatherFlow.app)
 
 install:
 	uv sync --all-packages --all-extras
@@ -35,6 +36,16 @@ check: lint format-check test eval security-check desktop-check rust-check
 sidecar-check:
 	python3 tools/release/test_sidecar.py desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin
 	python3 tools/release/test_desktop_sidecar.py desktop/src-tauri/binaries/weatherflow-core-aarch64-apple-darwin
+
+release-app:
+	python3 tools/release/release_macos.py
+
+run-release: release-app
+	test -d "$(RELEASE_APP)"
+	test -f "$(RELEASE_APP)/Contents/Info.plist"
+	test -d "$(RELEASE_APP)/Contents/MacOS"
+	codesign --verify --deep --strict --verbose=2 "$(RELEASE_APP)"
+	python3 tools/release/run_release.py
 
 release-check: check sidecar-check
 	cd release/macos && shasum -a 256 -c CHECKSUMS.sha256

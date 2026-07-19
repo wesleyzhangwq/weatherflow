@@ -13,8 +13,9 @@ directory containing `manifest.json` and only the files named by that manifest.
 - Workspace configuration stores the active immutable extension reference.
 - Installing a Pack or Skill never grants scopes. Pack scopes and Skill tool
   IDs are descriptive requests only; Workspace policy remains authoritative.
-- A model-driven `extensions.install` call has the `install` effect and cannot
-  execute without an approved Action context.
+- A model-driven `extensions.install` call reuses the Workspace's explicit
+  `workspace:write` grant, has the `install` effect, and cannot execute without
+  a separate approved Action context. Installation never grants package scopes.
 - Agent Definitions and Skill text are loaded and frozen into the new parent
   Run checkpoint. Existing Runs never hot-switch prompts or definitions.
 - Skills may guide decomposition but cannot add tools, scopes, or authority.

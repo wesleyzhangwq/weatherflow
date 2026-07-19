@@ -361,6 +361,84 @@ class ConnectorRepository:
                 ),
             )
 
+    async def commit_sync_if_current(
+        self,
+        *,
+        previous: ConnectorBinding,
+        updated: ConnectorBinding,
+        snapshot: ConnectorSnapshot | None,
+    ) -> bool:
+        if (
+            updated.workspace_id != previous.workspace_id
+            or updated.connector is not previous.connector
+            or updated.account_id != previous.account_id
+            or updated.created_at != previous.created_at
+            or updated.version != previous.version + 1
+        ):
+            raise ValueError("connector sync update changed immutable binding identity")
+        if snapshot is not None and (
+            snapshot.workspace_id != previous.workspace_id
+            or snapshot.connector is not previous.connector
+        ):
+            raise ValueError("connector snapshot does not match binding identity")
+
+        async with self.database.transaction() as connection:
+            cursor = await connection.execute(
+                """
+                UPDATE connector_bindings
+                SET account_id = ?, enabled = ?, auto_fetch_enabled = ?,
+                    next_sync_at = ?, config = ?, version = ?, updated_at = ?
+                WHERE workspace_id = ? AND connector = ? AND account_id = ?
+                  AND version = ? AND enabled = ? AND auto_fetch_enabled = ?
+                """,
+                (
+                    updated.account_id,
+                    int(updated.enabled),
+                    int(updated.auto_fetch_enabled),
+                    updated.next_sync_at.isoformat(),
+                    updated.model_dump_json(),
+                    updated.version,
+                    updated.updated_at.isoformat(),
+                    previous.workspace_id,
+                    previous.connector.value,
+                    previous.account_id,
+                    previous.version,
+                    int(previous.enabled),
+                    int(previous.auto_fetch_enabled),
+                ),
+            )
+            if cursor.rowcount != 1:
+                return False
+            if snapshot is not None:
+                await connection.execute(
+                    """
+                    INSERT INTO connector_snapshots(workspace_id, connector, fetched_at, snapshot)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(workspace_id, connector) DO UPDATE SET
+                        fetched_at = excluded.fetched_at,
+                        snapshot = excluded.snapshot
+                    """,
+                    (
+                        snapshot.workspace_id,
+                        snapshot.connector.value,
+                        snapshot.fetched_at.isoformat(),
+                        snapshot.model_dump_json(),
+                    ),
+                )
+            return True
+
+    async def save_binding_if_current(
+        self,
+        *,
+        previous: ConnectorBinding,
+        updated: ConnectorBinding,
+    ) -> bool:
+        return await self.commit_sync_if_current(
+            previous=previous,
+            updated=updated,
+            snapshot=None,
+        )
+
     async def get_binding(
         self, workspace_id: str, connector: ConnectorKind
     ) -> ConnectorBinding | None:
@@ -388,6 +466,64 @@ class ConnectorRepository:
                 )
             ).fetchall()
         return [ConnectorBinding.model_validate_json(row["config"]) for row in rows]
+
+    async def list_all_bindings(self) -> list[ConnectorBinding]:
+        async with self.database.connect() as connection:
+            rows = await (
+                await connection.execute(
+                    """
+                    SELECT config FROM connector_bindings
+                    ORDER BY workspace_id, connector
+                    """
+                )
+            ).fetchall()
+        return [ConnectorBinding.model_validate_json(row["config"]) for row in rows]
+
+    async def require_reconnect(
+        self,
+        *,
+        workspace_id: str,
+        connector: ConnectorKind,
+        account_id: str,
+        now: datetime,
+        error_code: str = "project_changed",
+    ) -> bool:
+        async with self.database.transaction() as connection:
+            binding_row = await (
+                await connection.execute(
+                    """
+                    SELECT config FROM connector_bindings
+                    WHERE workspace_id = ? AND connector = ? AND account_id = ?
+                    """,
+                    (workspace_id, connector.value, account_id),
+                )
+            ).fetchone()
+            account_row = await (
+                await connection.execute(
+                    """
+                    SELECT config FROM connector_accounts
+                    WHERE workspace_id = ? AND connector = ? AND id = ?
+                    """,
+                    (workspace_id, connector.value, account_id),
+                )
+            ).fetchone()
+            if binding_row is None or account_row is None:
+                return False
+            binding = ConnectorBinding.model_validate_json(binding_row["config"])
+            account = ConnectorAccount.model_validate_json(account_row["config"])
+            await self._save_account(
+                connection,
+                account.with_phase(ConnectionPhase.ERROR, now=now),
+            )
+            await self._save_binding(
+                connection,
+                binding.require_reconnect(now=now, error_code=error_code),
+            )
+            await connection.execute(
+                "DELETE FROM connector_snapshots WHERE workspace_id = ? AND connector = ?",
+                (workspace_id, connector.value),
+            )
+            return True
 
     async def list_due_bindings(self, now: datetime) -> list[ConnectorBinding]:
         async with self.database.connect() as connection:

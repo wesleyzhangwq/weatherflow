@@ -117,6 +117,7 @@ def main() -> int:
             stdout, stderr = process.communicate(timeout=2)
             raise SystemExit(
                 "desktop sidecar failed health smoke\n"
+                f"returncode={process.returncode}\n"
                 f"stdout={stdout.decode(errors='replace')[-2000:]}\n"
                 f"stderr={stderr.decode(errors='replace')[-2000:]}"
             )

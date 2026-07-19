@@ -50,3 +50,43 @@ def test_environment_data_directory_expands_the_user_home(monkeypatch) -> None:
     settings = Settings()
 
     assert settings.data_dir == Path.home() / "weatherflow-test-data"
+
+
+def test_activitywatch_defaults_are_loopback_and_read_only_source_locations() -> None:
+    settings = Settings()
+
+    assert settings.activitywatch_api_url == "http://127.0.0.1:5600/api/0"
+    assert settings.activitywatch_database_path == (
+        Path.home()
+        / "Library"
+        / "Application Support"
+        / "activitywatch"
+        / "aw-server-rust"
+        / "sqlite.db"
+    )
+
+
+def test_activitywatch_database_path_expands_the_user_home(monkeypatch) -> None:
+    monkeypatch.setenv("WF_ACTIVITYWATCH_DATABASE_PATH", "~/activitywatch-test/sqlite.db")
+
+    settings = Settings()
+
+    assert settings.activitywatch_database_path == Path.home() / "activitywatch-test/sqlite.db"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://127.0.0.1:5600/api/0",
+        "http://localhost:5600/api/0",
+        "http://127.0.0.1:5601/api/0",
+        "http://192.168.1.10:5600/api/0",
+        "http://activitywatch.example/api/0",
+        "http://user:secret@127.0.0.1:5600/api/0",
+        "http://127.0.0.1:5600/api/0?token=secret",
+        "http://127.0.0.1:5600/api/0#fragment",
+    ],
+)
+def test_activitywatch_api_url_must_be_plain_loopback_http(url: str) -> None:
+    with pytest.raises(ValueError, match="ActivityWatch API URL"):
+        Settings(activitywatch_api_url=url)

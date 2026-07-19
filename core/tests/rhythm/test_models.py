@@ -4,8 +4,6 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from weatherflow.rhythm import (
-    ActivityMetadata,
-    AppCategory,
     CheckInSignal,
     DimensionEstimate,
     DimensionName,
@@ -13,14 +11,14 @@ from weatherflow.rhythm import (
     HumanStateSnapshot,
     RhythmPolicy,
     RhythmSignal,
+    TaskBehaviorSignal,
     Trend,
     WeatherPresentation,
     WeatherScene,
 )
 
 
-@pytest.mark.parametrize("forbidden", ["screenshot", "window_title", "keystrokes", "clipboard"])
-def test_activity_metadata_rejects_raw_content_fields(forbidden: str) -> None:
+def test_activity_metadata_is_not_a_rhythm_signal() -> None:
     payload = {
         "kind": "activity_metadata",
         "observed_at": datetime.now(UTC),
@@ -30,29 +28,29 @@ def test_activity_metadata_rejects_raw_content_fields(forbidden: str) -> None:
         "idle_seconds": 60,
         "app_switch_count": 4,
         "category_seconds": {"development": 200, "communication": 40},
-        forbidden: "secret",
     }
 
     with pytest.raises(ValidationError):
         TypeAdapter(RhythmSignal).validate_python(payload)
 
 
-def test_signal_union_accepts_deliberate_and_metadata_inputs() -> None:
+def test_signal_union_accepts_deliberate_and_task_behavior_inputs() -> None:
     checkin = TypeAdapter(RhythmSignal).validate_python(
         {"kind": "checkin", "text": "I feel overloaded", "observed_at": datetime.now(UTC)}
     )
-    activity = ActivityMetadata(
-        observed_at=datetime.now(UTC),
-        window_start=datetime.now(UTC) - timedelta(minutes=5),
-        window_end=datetime.now(UTC),
-        active_seconds=240,
-        idle_seconds=60,
-        app_switch_count=4,
-        category_seconds={AppCategory.DEVELOPMENT: 240},
+    task = TypeAdapter(RhythmSignal).validate_python(
+        {
+            "kind": "task_behavior",
+            "observed_at": datetime.now(UTC),
+            "run_id": "run-1",
+            "outcome": "succeeded",
+            "duration_seconds": 240,
+            "step_count": 4,
+        }
     )
 
     assert isinstance(checkin, CheckInSignal)
-    assert activity.kind == "activity_metadata"
+    assert isinstance(task, TaskBehaviorSignal)
 
 
 def test_snapshot_policy_and_weather_round_trip() -> None:

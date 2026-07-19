@@ -6,6 +6,7 @@ import pytest
 
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.capabilities import ToolEffect, ToolHealth
+from weatherflow.capabilities.builtin import activity_tool_specs
 from weatherflow.config import Settings
 from weatherflow.extensions import PackageInstaller, PackageStore
 from weatherflow.mcp import (
@@ -181,7 +182,10 @@ async def test_installed_pack_selects_smallest_mcp_surface_for_new_run(
     snapshot = await container.snapshots.get_by_run_id(run.id)
 
     assert snapshot is not None
-    assert [tool.tool_id for tool in snapshot.tools] == ["mcp.fixture.search"]
+    assert {tool.tool_id for tool in snapshot.tools} == {
+        "mcp.fixture.search",
+        *(tool.tool_id for tool in activity_tool_specs()),
+    }
     assert container.executors.get("mcp.fixture.search") is not None
 
 

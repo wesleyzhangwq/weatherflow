@@ -175,7 +175,7 @@ def test_model_driven_package_install_is_always_approval_classified() -> None:
     tool = package_install_tool_spec()
 
     assert tool.effect == "install"
-    assert tool.required_scopes == frozenset({"extensions:install"})
+    assert tool.required_scopes == frozenset({"workspace:write"})
 
 
 @pytest.mark.parametrize(
@@ -289,7 +289,7 @@ async def test_model_driven_install_parks_then_updates_workspace_once(
         action_roots=[tmp_path / "project"],
         internal_root=tmp_path / "internal",
         artifact_root=tmp_path / "artifacts",
-        granted_scopes={"extensions:install"},
+        granted_scopes={"workspace:write"},
         installed_packs={"developer"},
     )
     await container.workspaces.create(workspace)

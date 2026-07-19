@@ -30,7 +30,7 @@ async def test_workspace_api_authorizes_real_directory_idempotently(tmp_path: Pa
     assert repeated.status_code == 201
     assert repeated.json()["id"] == first.json()["id"]
     assert first.json()["action_roots"] == [str(project.resolve())]
-    assert first.json()["installed_packs"] == ["developer"]
+    assert first.json()["installed_packs"] == ["developer", "personal_operations"]
     assert any(item["id"] == first.json()["id"] for item in listed.json())
     assert fetched.json()["action_roots"] == [str(project.resolve())]
     events = await container.ledger.list_stream("workspace", first.json()["id"])

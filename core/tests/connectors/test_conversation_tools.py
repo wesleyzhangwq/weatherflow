@@ -9,6 +9,8 @@ from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.capabilities import ToolEffect
 from weatherflow.config import Settings
 from weatherflow.connectors import (
+    ComposioErrorCode,
+    ComposioGatewayError,
     ConnectorAccount,
     ConnectorBinding,
     ConnectorKind,
@@ -35,8 +37,9 @@ class ScriptedModel:
 
 
 class RecordingGateway:
-    def __init__(self) -> None:
+    def __init__(self, failure: ComposioGatewayError | None = None) -> None:
         self.calls: list[tuple[str, str, str, str, dict[str, Any]]] = []
+        self.failure = failure
 
     async def execute_tool(
         self,
@@ -48,6 +51,8 @@ class RecordingGateway:
         arguments: dict[str, Any],
     ) -> Any:
         self.calls.append((action, version, connected_account_id, user_id, arguments))
+        if self.failure is not None:
+            raise self.failure
         if action == "GMAIL_FETCH_EMAILS":
             return {"messages": [{"subject": "Inbox review", "sender": "ops@example.com"}]}
         if action == "GOOGLECALENDAR_EVENTS_LIST":
@@ -71,8 +76,9 @@ async def connected_container(
     model: ScriptedModel,
     *,
     connector: ConnectorKind = ConnectorKind.GITHUB,
+    gateway: RecordingGateway | None = None,
 ):
-    gateway = RecordingGateway()
+    gateway = gateway or RecordingGateway()
     credentials = MappingCredentialStore(
         {
             "composio.project_api_key": "local-composio-secret",
@@ -349,6 +355,34 @@ async def test_connected_composio_read_tool_is_frozen_and_executed_from_chat(
         )
     ]
     assert "Runtime review" in model.requests[-1].messages[-1].content
+
+
+async def test_retryable_composio_failure_reaches_model_as_typed_value_free_error(
+    tmp_path: Path,
+) -> None:
+    tool_id = "composio.github.get_authenticated_user"
+    model = ScriptedModel(
+        [
+            ToolCallTurn(tool_id=tool_id, arguments={}),
+            FinalTurn(content="The provider is temporarily unavailable."),
+        ]
+    )
+    gateway = RecordingGateway(ComposioGatewayError(ComposioErrorCode.UPSTREAM, retryable=True))
+    container, workspace, _ = await connected_container(
+        tmp_path,
+        model,
+        gateway=gateway,
+    )
+
+    _run, outcome = await container.submit_run(
+        user_intent="Read my connected account",
+        workspace_id=workspace.id,
+    )
+
+    assert outcome is not None and outcome.result_summary is not None
+    observation = model.requests[-1].messages[-1].content
+    assert "connector_upstream_retryable" in observation
+    assert "tool_execution_failed" not in observation
 
 
 @pytest.mark.parametrize(

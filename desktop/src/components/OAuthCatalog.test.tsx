@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { WeatherFlowClient } from "../bridge";
 import type { ConnectorKind, ConnectorStatus, DesktopSnapshot } from "../types";
@@ -19,7 +19,6 @@ const snapshot: DesktopSnapshot = {
   },
   latest_run: null,
   workspace: { id: "w1", name: "WeatherFlow", action_roots: ["/tmp/w1"], installed_packs: [] },
-  metadata_sensor_enabled: false,
 };
 
 const connectorKinds: ConnectorKind[] = [
@@ -102,6 +101,41 @@ it("shows a searchable twenty-service OAuth catalog with backend-derived states"
   expect(screen.queryByRole("button", { name: "查看 Gmail" })).not.toBeInTheDocument();
 });
 
+it("shows a loading state instead of a false empty catalog while OAuth services load", async () => {
+  let resolveConnectors: ((value: ConnectorStatus[]) => void) | undefined;
+  const client = clientWithConnectors();
+  client.connectors = vi.fn().mockImplementation(() => new Promise<ConnectorStatus[]>((resolve) => {
+    resolveConnectors = resolve;
+  }));
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+
+  expect(await screen.findByText("正在加载 OAuth 服务")).toBeInTheDocument();
+  expect(screen.queryByText("没有匹配的服务")).not.toBeInTheDocument();
+
+  await act(async () => resolveConnectors?.(connectorKinds.map(connectorStatus)));
+  expect(await screen.findByRole("button", { name: "查看 GitHub" })).toBeInTheDocument();
+  expect(screen.queryByText("正在加载 OAuth 服务")).not.toBeInTheDocument();
+});
+
+it("shows a retryable error when the OAuth service catalog request fails", async () => {
+  const client = clientWithConnectors();
+  client.connectors = vi.fn()
+    .mockRejectedValueOnce(new Error("bridge unavailable"))
+    .mockResolvedValueOnce(connectorKinds.map(connectorStatus));
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+
+  expect(await screen.findByText("OAuth 服务目录加载失败")).toBeInTheDocument();
+  expect(screen.queryByText("没有匹配的服务")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重试加载 OAuth 服务" }));
+
+  expect(await screen.findByRole("button", { name: "查看 GitHub" })).toBeInTheDocument();
+  expect(client.connectors).toHaveBeenCalledTimes(2);
+});
+
 it("shows unified mode coverage for mature connectors and no tools for unsupported ones", async () => {
   const client = clientWithConnectors();
   render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
@@ -111,7 +145,8 @@ it("shows unified mode coverage for mature connectors and no tools for unsupport
   expect(screen.getByText("已接入统一工具模式")).toBeInTheDocument();
   expect(screen.getByText("已审查 1 个固定工具")).toBeInTheDocument();
   expect(screen.queryByRole("radio")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("GitHub 抓取频率")).toBeInTheDocument();
+  expect(screen.getByText("每天自动刷新")).toBeInTheDocument();
+  expect(screen.queryByLabelText("GitHub 抓取频率")).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "查看 Slack" }));
   expect(screen.getByText("连接后暂不能在对话中使用，固定工具仍在审阅中。")).toBeInTheDocument();
@@ -119,4 +154,21 @@ it("shows unified mode coverage for mature connectors and no tools for unsupport
   expect(screen.queryByLabelText("Slack 抓取频率")).not.toBeInTheDocument();
 
   await waitFor(() => expect(client.connectors).toHaveBeenCalledWith("w1"));
+});
+
+it("pins supported connector auto-fetch to one daily refresh", async () => {
+  const client = clientWithConnectors();
+  client.updateConnectorSettings = vi.fn().mockResolvedValue(undefined);
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "OAuth" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看 GitHub" }));
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "自动抓取" }));
+
+  await waitFor(() => expect(client.updateConnectorSettings).toHaveBeenCalledWith(
+    "github",
+    false,
+    1440,
+    "w1",
+  ));
 });
