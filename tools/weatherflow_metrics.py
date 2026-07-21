@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import platform
+import socket
 import subprocess
 import sys
 import time
@@ -78,6 +79,11 @@ BENCHMARK_VERSION = "weatherflow-v3-production-metrics-v2"
 RAW_SCHEMA_VERSION = "weatherflow_metrics_raw_v1"
 SUMMARY_SCHEMA_VERSION = "weatherflow_metrics_summary_v1"
 MANIFEST_SCHEMA_VERSION = "weatherflow_metrics_manifest_v1"
+EXTERNAL_CONTROL_CANDIDATES = (
+    ("example.com", 443),
+    ("platform.minimax.io", 443),
+    ("github.com", 443),
+)
 PRIVATE_CONTINUATION_MARKER = "benchmark-provider-private-payload"
 CONTINUATION_KEY = bytes(range(32))
 MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
@@ -1374,7 +1380,9 @@ async def _cost_case_cn_paygo(root: Path) -> dict[str, Any]:
         output_tokens=output_tokens,
     )
     if cost_amount is None:
-        raise RuntimeError("mainland MiniMax benchmark usage is outside the price tiers")
+        raise RuntimeError(
+            "mainland MiniMax benchmark usage is outside the price tiers"
+        )
     model = ScriptedModel(
         [
             FinalTurn(
@@ -1516,7 +1524,9 @@ def _cost_row(usage: Any, *, case_id: str, passed: bool) -> dict[str, Any]:
         "cost_budget_usage_percent": usage.cost_budget_usage_percent,
         "cost_budget_status": usage.cost_budget_status.value,
         "cost_failure_reason": (
-            usage.cost_failure_reason.value if usage.cost_failure_reason is not None else None
+            usage.cost_failure_reason.value
+            if usage.cost_failure_reason is not None
+            else None
         ),
     }
 
@@ -1809,20 +1819,30 @@ async def _seatbelt_network_row(
     case_id = ISOLATION_CASES[5] if loopback else ISOLATION_CASES[4]
     workspace = root / ("loopback" if loopback else "offline")
     workspace.mkdir(parents=True, exist_ok=True)
-    external_host = "1.1.1.1"
-    external_port = 443
-    host_external_control_reachable = await _host_tcp_reachable(
-        external_host, external_port
-    )
-    accepted = asyncio.Event()
+    external_target = await _reachable_external_target()
+    if external_target is None:
+        return _isolation_row(
+            case_id=case_id,
+            status="failed",
+            escape_success_count=1,
+            unauthorized_execution_count=1,
+            evidence=(
+                "host positive control could not reach any candidate public TCP "
+                "target; the external-denial claim cannot be tested"
+            ),
+            host_external_control_reachable=False,
+        )
+    external_host, external_port = external_target
+    loopback_accepted = asyncio.Event()
 
-    async def accept_connection(_reader, writer) -> None:
-        accepted.set()
+    async def accept_loopback(_reader, writer) -> None:
+        loopback_accepted.set()
         writer.close()
         await writer.wait_closed()
 
-    server = await asyncio.start_server(accept_connection, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
+    loopback_server = await asyncio.start_server(accept_loopback, "127.0.0.1", 0)
+    loopback_port = loopback_server.sockets[0].getsockname()[1]
+    host_external_control_reachable = True
     probe = workspace / "network_probe.py"
     probe.write_text(
         "import socket, sys\n"
@@ -1848,7 +1868,7 @@ async def _seatbelt_network_row(
         (
             str(python),
             str(probe),
-            str(port),
+            str(loopback_port),
             "allow" if loopback else "deny",
             external_host,
             str(external_port),
@@ -1862,16 +1882,16 @@ async def _seatbelt_network_row(
         result = await MacOSSeatbeltSandbox().execute(request)
         if loopback:
             try:
-                await asyncio.wait_for(accepted.wait(), timeout=1)
+                await asyncio.wait_for(loopback_accepted.wait(), timeout=1)
             except TimeoutError:
                 pass
     finally:
-        server.close()
-        await server.wait_closed()
+        loopback_server.close()
+        await loopback_server.wait_closed()
     passed = (
         host_external_control_reachable
         and result.returncode == 0
-        and accepted.is_set() is loopback
+        and loopback_accepted.is_set() is loopback
     )
     escape = 0 if passed else 1
     return _isolation_row(
@@ -1881,15 +1901,35 @@ async def _seatbelt_network_row(
         unauthorized_execution_count=escape,
         evidence=(
             (
-                "host reached 1.1.1.1:443; Seatbelt allowed loopback while denying the same external target"
+                "host reached a selected public TCP endpoint; Seatbelt allowed loopback while denying that exact numeric target"
                 if loopback
-                else "host reached 1.1.1.1:443; Seatbelt denied both loopback and the same external target"
+                else "host reached a selected public TCP endpoint; Seatbelt denied both loopback and that exact numeric target"
             )
             if host_external_control_reachable
-            else "host positive control could not reach 1.1.1.1:443; external-denial claim is invalid"
+            else "host positive control could not reach the selected public TCP endpoint; external-denial claim is invalid"
         ),
         host_external_control_reachable=host_external_control_reachable,
     )
+
+
+async def _reachable_external_target() -> tuple[str, int] | None:
+    """Select one numeric target that the unsandboxed host just reached."""
+
+    loop = asyncio.get_running_loop()
+    for hostname, port in EXTERNAL_CONTROL_CANDIDATES:
+        try:
+            infos = await loop.getaddrinfo(
+                hostname,
+                port,
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM,
+            )
+        except OSError:
+            continue
+        for address in dict.fromkeys(info[4][0] for info in infos):
+            if await _host_tcp_reachable(address, port):
+                return address, port
+    return None
 
 
 async def _host_tcp_reachable(host: str, port: int) -> bool:
@@ -2212,8 +2252,8 @@ ISOLATION_DEFINITIONS: dict[str, str] = {
     "tool_outside_frozen_snapshot": "SharedTurnLoop observes a frozen-snapshot miss; surprise executor stays at zero",
     "workspace_outside_read": "DeveloperExecutor rejects an absolute read outside Workspace action roots",
     "workspace_outside_write": "DeveloperExecutor rejects an outside write and creates no target",
-    "offline_network": "real Seatbelt OFFLINE denies loopback and external egress",
-    "loopback_only_network": "real Seatbelt LOOPBACK reaches the local server but denies external egress",
+    "offline_network": "real Seatbelt OFFLINE denies loopback and an exact public TCP target reached by the host positive control",
+    "loopback_only_network": "real Seatbelt LOOPBACK reaches the local server but denies an exact public TCP target reached by the host positive control",
     "keychain_access": "real Seatbelt denies security list-keychains and exposes no stdout",
     "unapproved_external_write": "external Action parks in WAITING_APPROVAL before executor invocation",
     "install_requires_approval": "install policy returns APPROVE and MCP installer rejects an empty approved Action",
@@ -2527,10 +2567,18 @@ def build_manifest(
             "recovery": RECOVERY_DEFINITIONS,
             "isolation": ISOLATION_DEFINITIONS,
             "cost": {
-                COST_CASES[0]: "explicit global PayGo origin; official USD catalog and deterministic provider-shaped tokens",
-                COST_CASES[1]: "explicit mainland PayGo origin; official CNY catalog remains CNY and a USD budget fails closed without FX",
-                COST_CASES[2]: "explicit Token Plan origin; no PayGo token-price substitution and finite USD budget fails closed",
-                COST_CASES[3]: "deterministic unpriced token fixture; finite budget must fail closed and cost remains null",
+                COST_CASES[
+                    0
+                ]: "explicit global PayGo origin; official USD catalog and deterministic provider-shaped tokens",
+                COST_CASES[
+                    1
+                ]: "explicit mainland PayGo origin; official CNY catalog remains CNY and a USD budget fails closed without FX",
+                COST_CASES[
+                    2
+                ]: "explicit Token Plan origin; no PayGo token-price substitution and finite USD budget fails closed",
+                COST_CASES[
+                    3
+                ]: "deterministic unpriced token fixture; finite budget must fail closed and cost remains null",
             },
         },
         "sensitive_data_policy": "no credentials, prompts, or provider-private continuation payloads in artifacts",
@@ -2607,7 +2655,7 @@ def render_report(
     lines.extend(
         [
             "",
-            "生产安全结论要求真实 Seatbelt 用例全部执行且 skipped=0；任何 skipped 都会令 Overall=FAIL。portable CI 可验证其余合同，但不能产出 production-security PASS。网络负例还要求宿主先能到达同一外部目标，否则不会把目标本身不可达误报成 Seatbelt 拦截。",
+            "生产安全结论要求真实 Seatbelt 用例全部执行且 skipped=0；任何 skipped 都会令 Overall=FAIL。portable CI 可验证其余合同，但不能产出 production-security PASS。网络负例先让宿主连通选定公网服务的精确 IPv4/端口，再让 Seatbelt 验证同一数值目标；目标不可达时不会把网络故障误报成沙箱拦截。该正控只建立 TCP 连接，不发送 TLS 或应用层请求。",
             "",
             "## 按 Run 成本可观测样本",
             "",

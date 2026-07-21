@@ -1797,8 +1797,9 @@ and structured events.
 - macOS sandbox escape denial for filesystem, network, Keychain, host signals,
   environment inheritance, timeout, and descendant cleanup;
 - production-security aggregation requires every real Seatbelt case to execute
-  with `skipped=0`; an external-network denial is valid only when an unsandboxed
-  host positive control first reaches the exact same host and port;
+  with `skipped=0`; network denial is valid only after the unsandboxed host
+  reaches a selected public TCP endpoint and Seatbelt OFFLINE/LOOPBACK then deny
+  that exact numeric IPv4 address and port;
 - the production-metrics runner preflights and freezes a clean source commit,
   then requires the worktree to remain clean and the commit unchanged after the
   benchmark and immediately before artifact write; dirty or changed source state

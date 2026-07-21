@@ -271,10 +271,11 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     message, status text, response body, ActivityWatch content, or credential is
     persisted; authentication, network, and route failures have no response stage.
 47. A production-security benchmark may report overall `PASS` only when every
-    required real macOS Seatbelt case executed and `skipped=0`. External-network
-    denial requires an unsandboxed host reachability positive control against the
-    same target; target unreachability invalidates the case instead of counting as
-    sandbox enforcement.
+    required real macOS Seatbelt case executed and `skipped=0`. Network denial
+    first selects a public TCP endpoint that the unsandboxed host can reach, then
+    passes that exact numeric IPv4 address and port to Seatbelt OFFLINE/LOOPBACK.
+    Target unreachability invalidates the case instead of counting as sandbox
+    enforcement; the positive control sends no TLS or application-layer request.
 48. Production-metrics artifacts are evidence-eligible only when the runner
     preflights one clean source commit, freezes that commit identity for the
     benchmark, and verifies both a clean worktree and the same commit again after

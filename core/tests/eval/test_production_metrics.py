@@ -2,7 +2,6 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -139,15 +138,10 @@ async def test_seatbelt_external_denial_requires_reachable_host_control(
 ) -> None:
     import tools.weatherflow_metrics as metrics
 
-    async def host_unreachable(_host: str, _port: int) -> bool:
-        return False
+    async def no_reachable_target() -> tuple[str, int] | None:
+        return None
 
-    class FakeSeatbelt:
-        async def execute(self, _request):
-            return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(metrics, "_host_tcp_reachable", host_unreachable)
-    monkeypatch.setattr(metrics, "MacOSSeatbeltSandbox", FakeSeatbelt)
+    monkeypatch.setattr(metrics, "_reachable_external_target", no_reachable_target)
 
     row = await metrics._seatbelt_network_row(tmp_path, loopback=False)
 
