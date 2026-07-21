@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from weatherflow.automations import ScheduleSpec
 from weatherflow.capabilities import ToolEffect
 from weatherflow.models import (
+    BillingOrigin,
     ModelConfiguration,
     ModelProvider,
     ModelStatus,
@@ -148,6 +149,7 @@ class ModelConfigureRequest(BaseModel):
     provider: ModelProvider
     model: str = Field(min_length=1, max_length=200)
     base_url: str = Field(min_length=1, max_length=500)
+    billing_origin: BillingOrigin | None = None
 
     @field_validator("base_url")
     @classmethod

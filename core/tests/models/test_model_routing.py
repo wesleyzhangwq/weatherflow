@@ -7,7 +7,7 @@ import httpx
 from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
 from weatherflow.extensions import MappingCredentialStore
-from weatherflow.models import ModelProvider
+from weatherflow.models import BillingOrigin, ModelProvider
 from weatherflow.runs import RunStatus
 from weatherflow.runtime import LoopStatus
 
@@ -65,6 +65,7 @@ async def test_each_run_freezes_its_workspace_model_route(
         provider=ModelProvider.MINIMAX,
         model="MiniMax-M2.7",
         base_url="https://api.minimaxi.com/v1",
+        billing_origin=BillingOrigin.MINIMAX_CN_PAYGO,
     )
     await container.configure_model(
         workspace_id=second.id,
@@ -120,6 +121,7 @@ async def test_each_run_freezes_its_workspace_model_route(
         "provider": "minimax",
         "model": "MiniMax-M2.7",
         "configuration_version": 0,
+        "billing_origin": "minimax_cn_paygo",
     }
     assert "credential" not in route_event.model_dump_json()
 

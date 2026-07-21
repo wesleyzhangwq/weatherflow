@@ -9,6 +9,7 @@ from weatherflow.events import EventLedger
 from weatherflow.extensions import CredentialBroker, CredentialRef, KeyringCredentialStore
 from weatherflow.models import (
     AnthropicMessagesAdapter,
+    BillingOrigin,
     MiniMaxAdapter,
     MiniMaxAuthenticationError,
     ModelConfiguration,
@@ -159,25 +160,34 @@ async def test_validated_minimax_configuration_persists_reference_only(
         workspace_id=workspace.id,
         model="MiniMax-M3",
         base_url="https://api.minimax.test/v1/",
+        billing_origin=BillingOrigin.MINIMAX_CN_TOKEN_PLAN,
     )
 
     assert configuration.provider is ModelProvider.MINIMAX
     assert configuration.base_url == "https://api.minimax.test/v1"
     assert configuration.credential_ref.provider == "minimax"
     assert configuration.credential_ref.name == "api_key"
-    assert isinstance(service.adapter(configuration), MiniMaxAdapter)
+    assert configuration.billing_origin is BillingOrigin.MINIMAX_CN_TOKEN_PLAN
+    resolved_adapter = service.adapter(configuration)
+    assert isinstance(resolved_adapter, MiniMaxAdapter)
+    assert resolved_adapter.token_price is None
     assert store.resolve(configuration.credential_ref) == SECRET
     async with database.connect() as connection:
         rows = await (
             await connection.execute(
-                "SELECT provider, model, base_url, credential_ref FROM model_configurations"
+                """
+                SELECT provider, model, base_url, credential_ref, billing_origin
+                FROM model_configurations
+                """
             )
         ).fetchall()
     durable = json.dumps([dict(row) for row in rows])
     assert SECRET not in durable
+    assert "minimax_cn_token_plan" in durable
     events = await ledger.list_stream("workspace", workspace.id, limit=100)
     assert SECRET not in "".join(event.model_dump_json() for event in events)
     assert events[-1].type == "model.configuration_changed"
+    assert events[-1].payload["billing_origin"] == "minimax_cn_token_plan"
 
 
 async def test_invalid_key_is_not_activated_and_service_does_not_mutate_store(

@@ -120,7 +120,7 @@ class ActivitySummaryResult:
     prompt_version: str
     request_digest: str
     redaction_count: int
-    usage: dict[str, int | float]
+    usage: dict[str, int | float | str]
     fallback_reason: str | None = None
 
 

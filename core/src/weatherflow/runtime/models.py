@@ -32,8 +32,13 @@ class ModelUsage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     input_tokens: int = Field(default=0, ge=0)
+    cache_read_input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+    cost_amount: float | None = Field(default=None, ge=0)
     cost_usd: float | None = Field(default=None, ge=0)
+    currency: Literal["USD", "CNY"] | None = None
+    cost_scope: Literal["model_usage_only"] = "model_usage_only"
+    billing_origin: str | None = Field(default=None, max_length=100)
 
 
 class FinalTurn(BaseModel):

@@ -176,8 +176,13 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     lightweight no-Action path.
 33. A finite model-cost budget is enforceable only from provider-reported usage
     and an exact entry in a versioned pricing catalog for the frozen provider,
-    model, and billing origin. Unknown pricing or usage fails closed before tool
-    dispatch or terminal result commit; it is never interpreted as zero cost.
+    model, and user-confirmed billing origin. The endpoint hostname never selects
+    a billing product. Global PayGo USD and mainland PayGo CNY are independent
+    catalogs, native currency is preserved without FX conversion, and
+    `cost_scope` is always `model_usage_only`. Token Plan, Credits, unconfirmed
+    billing type, non-USD `max_cost_usd`, unknown pricing, or missing usage fails
+    closed before tool dispatch or terminal result commit; none is interpreted as
+    zero cost.
 34. Executor output is untrusted until it validates against the frozen
     `ToolSpec.output_schema` under JSON Schema Draft 2020-12. Invalid safe-read
     output becomes a value-free failure Observation. Invalid output from a
@@ -265,6 +270,16 @@ The daemon is also usable through CLI and MCP. No client owns business state.
     `choice`, `message`, `empty_text`, or `unknown`) on the attempt. No provider
     message, status text, response body, ActivityWatch content, or credential is
     persisted; authentication, network, and route failures have no response stage.
+47. A production-security benchmark may report overall `PASS` only when every
+    required real macOS Seatbelt case executed and `skipped=0`. External-network
+    denial requires an unsandboxed host reachability positive control against the
+    same target; target unreachability invalidates the case instead of counting as
+    sandbox enforcement.
+48. Production-metrics artifacts are evidence-eligible only when the runner
+    preflights one clean source commit, freezes that commit identity for the
+    benchmark, and verifies both a clean worktree and the same commit again after
+    execution and immediately before writing artifacts. A dirty or changed source
+    fails closed without producing a report.
 
 ## 4. v3.0 scope
 
@@ -757,3 +772,14 @@ watchers and a second raw activity vault are excluded.
   migrations, ActivityWatch semantic queries, Watch, recovery, and the flagship
   acceptance gate remain intact. Superseded implementation plans and design-QA
   outputs remain recoverable from Git history rather than the active tree.
+- 2026-07-21: Replaced endpoint-derived MiniMax pricing with an explicit frozen
+  `billing_origin`. Global PayGo uses its official versioned USD catalog;
+  mainland PayGo uses a separate official versioned CNY catalog with no FX
+  conversion. Token Plan and unconfirmed billing remain monetary `UNKNOWN`, and
+  finite USD budgets fail closed for non-USD amounts. Run usage now exposes
+  `cost_amount`, `currency`, `cost_usd`, and the fixed
+  `cost_scope=model_usage_only`. Production-security reports also require every
+  real Seatbelt case to execute (`skipped=0`), and external-denial evidence now
+  includes a host reachability positive control to the same target. Production
+  metrics freeze one clean source commit and revalidate it before artifact write;
+  dirty or commit-changing runs cannot produce evidence reports.

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
@@ -6,7 +7,9 @@ from httpx import ASGITransport, AsyncClient
 from weatherflow.api.app import create_app
 from weatherflow.bootstrap import EchoModelAdapter, RuntimeContainer
 from weatherflow.config import Settings
-from weatherflow.runtime import AgentMessage, FinalTurn, MessageRole, ToolCallTurn
+from weatherflow.extensions import CredentialRef
+from weatherflow.models import BillingOrigin, RunModelRoute
+from weatherflow.runtime import AgentMessage, FinalTurn, MessageRole, ModelUsage, ToolCallTurn
 from weatherflow.sessions import ConversationSession
 from weatherflow.workspaces import Workspace
 
@@ -52,6 +55,29 @@ class ActivityPoisonSensitiveModel:
         return FinalTurn(content="Follow-up context was safely projected")
 
 
+class PricedUsageModel:
+    pricing_catalog_version = "minimax-global-paygo-usd-2026-07-21"
+    billing_origin = BillingOrigin.MINIMAX_GLOBAL_PAYGO
+    cost_currency = "USD"
+    cost_scope = "model_usage_only"
+
+    async def complete(self, request):
+        del request
+        return FinalTurn(
+            content="Measured result",
+            usage=ModelUsage(
+                input_tokens=1_200,
+                cache_read_input_tokens=0,
+                output_tokens=300,
+                cost_amount=0.00072,
+                cost_usd=0.00072,
+                currency="USD",
+                cost_scope="model_usage_only",
+                billing_origin="minimax_global_paygo",
+            ),
+        )
+
+
 async def test_run_api_is_idempotent_and_exposes_timeline(tmp_path: Path) -> None:
     container = await RuntimeContainer.create(Settings(data_dir=tmp_path), model=EchoModelAdapter())
     app = create_app(container=container)
@@ -78,6 +104,72 @@ async def test_run_api_is_idempotent_and_exposes_timeline(tmp_path: Path) -> Non
     event_types = [event["type"] for event in timeline.json()]
     assert event_types[0] == "run.created"
     assert "run.result_committed" in event_types
+
+
+async def test_run_usage_api_projects_only_read_only_nonsecret_accounting(
+    tmp_path: Path,
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path), model=PricedUsageModel())
+    run, _ = await container.submit_run(
+        user_intent="Measure this Run",
+        client_request_id="usage-api",
+        execute=False,
+    )
+    async with container.database.transaction() as connection:
+        await container.model_routes.create_in(
+            connection,
+            RunModelRoute(
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                configuration_workspace_id=run.workspace_id,
+                provider="minimax",
+                model="MiniMax-M2.7",
+                base_url="https://api.minimaxi.com/v1",
+                credential_ref=CredentialRef(provider="minimax", name="api_key"),
+                billing_origin=BillingOrigin.MINIMAX_GLOBAL_PAYGO,
+                configuration_version=3,
+                bound_at=datetime.now(UTC),
+            ),
+        )
+    outcome = await container.resume_run(run.id)
+    assert outcome.status.value == "succeeded"
+    transport = ASGITransport(app=create_app(container=container))
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/v1/runs/{run.id}/usage")
+        missing = await client.get("/v1/runs/missing/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "run_usage_v1",
+        "run_id": run.id,
+        "provider": "minimax",
+        "model": "MiniMax-M2.7",
+        "input_tokens": 1_200,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 300,
+        "total_tokens": 1_500,
+        "cost_amount": 0.00072,
+        "cost_usd": 0.00072,
+        "currency": "USD",
+        "cost_scope": "model_usage_only",
+        "billing_origin": "minimax_global_paygo",
+        "cost_status": "known",
+        "pricing_catalog_version": "minimax-global-paygo-usd-2026-07-21",
+        "step_count": 1,
+        "elapsed_seconds": response.json()["elapsed_seconds"],
+        "timeout_seconds": 1_800,
+        "max_cost_usd": None,
+        "cost_budget_usage_percent": None,
+        "cost_budget_status": "unlimited",
+        "cost_failure_reason": None,
+    }
+    assert response.json()["elapsed_seconds"] >= 0
+    serialized = response.text.lower()
+    for forbidden in ("credential", "api_key", "base_url", "prompt", "continuation", "reasoning"):
+        assert forbidden not in serialized
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": {"code": "run_not_found", "run_id": "missing"}}
 
 
 async def test_run_api_freezes_explicit_tool_mode_and_defaults_to_ask(tmp_path: Path) -> None:

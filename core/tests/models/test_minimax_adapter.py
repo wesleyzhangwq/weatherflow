@@ -8,6 +8,7 @@ from weatherflow.capabilities import ToolEffect, ToolSpec
 from weatherflow.continuations import ProviderContinuation
 from weatherflow.extensions import CredentialBroker, CredentialRef, MappingCredentialStore
 from weatherflow.models import (
+    BillingOrigin,
     MiniMaxAdapter,
     MiniMaxAuthenticationError,
     MiniMaxResponseError,
@@ -121,13 +122,20 @@ def m2_adapter(handler, model: str = "MiniMax-M2.7") -> MiniMaxAdapter:
     )
 
 
-def official_adapter(handler, model: str) -> MiniMaxAdapter:
+def official_adapter(
+    handler,
+    model: str,
+    *,
+    billing_origin: BillingOrigin = BillingOrigin.MINIMAX_GLOBAL_PAYGO,
+    base_url: str = "https://api.minimax.io/v1",
+) -> MiniMaxAdapter:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return MiniMaxAdapter(
         broker=CredentialBroker(MappingCredentialStore({"minimax.api_key": SECRET})),
         credential_ref=CredentialRef(provider="minimax", name="api_key"),
         model=model,
-        base_url="https://api.minimax.io/v1",
+        base_url=base_url,
+        billing_origin=billing_origin,
         client=client,
     )
 
@@ -184,7 +192,11 @@ async def test_official_minimax_models_report_paygo_equivalent_cost(
             200,
             json={
                 "choices": [{"message": {"role": "assistant", "content": "Done"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                },
             },
         )
 
@@ -193,8 +205,241 @@ async def test_official_minimax_models_report_paygo_equivalent_cost(
 
     assert isinstance(turn, FinalTurn)
     assert turn.usage.input_tokens == 1
+    assert turn.usage.cache_read_input_tokens == 0
     assert turn.usage.output_tokens == 1
+    assert turn.usage.cost_amount == pytest.approx(expected_cost)
     assert turn.usage.cost_usd == pytest.approx(expected_cost)
+    assert turn.usage.currency == "USD"
+    assert turn.usage.cost_scope == "model_usage_only"
+    assert turn.usage.billing_origin == "minimax_global_paygo"
+
+
+async def test_official_unlisted_model_keeps_cost_unknown() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        )
+
+    adapter = official_adapter(handler, model="MiniMax-Future")
+    completion = await adapter.complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.input_tokens == 1
+    assert turn.usage.output_tokens == 1
+    assert turn.usage.cost_usd is None
+    assert adapter.pricing_catalog_version is None
+
+
+async def test_official_minimax_cost_accounts_for_cache_read_discount() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {
+                    "prompt_tokens": 1_200,
+                    "completion_tokens": 300,
+                    "prompt_tokens_details": {"cached_tokens": 800},
+                },
+            },
+        )
+
+    completion = await official_adapter(handler, model="MiniMax-M2.7").complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.cache_read_input_tokens == 800
+    assert turn.usage.cost_usd == pytest.approx(0.000528)
+
+
+async def test_official_minimax_missing_cache_breakdown_keeps_cost_unknown() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {"prompt_tokens": 1_200, "completion_tokens": 300},
+            },
+        )
+
+    completion = await official_adapter(handler, model="MiniMax-M2.7").complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.input_tokens == 1_200
+    assert turn.usage.cache_read_input_tokens is None
+    assert turn.usage.cost_usd is None
+
+
+@pytest.mark.parametrize("cached_tokens", [-1, 1_201, True, "800"])
+async def test_official_minimax_invalid_cache_breakdown_keeps_cost_unknown(
+    cached_tokens: object,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {
+                    "prompt_tokens": 1_200,
+                    "completion_tokens": 300,
+                    "prompt_tokens_details": {"cached_tokens": cached_tokens},
+                },
+            },
+        )
+
+    completion = await official_adapter(handler, model="MiniMax-M2.7").complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.cache_read_input_tokens is None
+    assert turn.usage.cost_usd is None
+
+
+async def test_explicit_cn_paygo_uses_cny_catalog_without_fx_conversion() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {
+                    "prompt_tokens": 1_200,
+                    "completion_tokens": 300,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        )
+
+    completion = await official_adapter(
+        handler,
+        model="MiniMax-M2.7",
+        billing_origin=BillingOrigin.MINIMAX_CN_PAYGO,
+        # Deliberately use the global hostname: the explicit billing fact, not
+        # this URL, selects the catalog.
+        base_url="https://api.minimax.io/v1",
+    ).complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.cost_amount == pytest.approx(0.00504)
+    assert turn.usage.cost_usd is None
+    assert turn.usage.currency == "CNY"
+    assert turn.usage.billing_origin == "minimax_cn_paygo"
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "expected_cost"),
+    [(512_000, 0.1536), (512_001, 0.3072006)],
+)
+async def test_global_m3_selects_official_tier_from_total_input_tokens(
+    input_tokens: int,
+    expected_cost: float,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": 0,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        )
+
+    completion = await official_adapter(handler, model="MiniMax-M3").complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.cost_usd == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "expected_cost"),
+    [(512_000, 1.0752), (512_001, 2.1504042)],
+)
+async def test_cn_m3_selects_official_cny_tier_without_fx_conversion(
+    input_tokens: int,
+    expected_cost: float,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": 0,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        )
+
+    completion = await official_adapter(
+        handler,
+        model="MiniMax-M3",
+        billing_origin=BillingOrigin.MINIMAX_CN_PAYGO,
+    ).complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.cost_amount == pytest.approx(expected_cost)
+    assert turn.usage.cost_usd is None
+    assert turn.usage.currency == "CNY"
+    assert turn.usage.billing_origin == "minimax_cn_paygo"
+
+
+@pytest.mark.parametrize(
+    "billing_origin",
+    [
+        None,
+        BillingOrigin.MINIMAX_GLOBAL_TOKEN_PLAN,
+        BillingOrigin.MINIMAX_CN_TOKEN_PLAN,
+    ],
+)
+async def test_unconfirmed_or_token_plan_billing_never_uses_paygo_prices(
+    billing_origin: BillingOrigin | None,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "Done"}}],
+                "usage": {
+                    "prompt_tokens": 1_200,
+                    "completion_tokens": 300,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = MiniMaxAdapter(
+        broker=CredentialBroker(MappingCredentialStore({"minimax.api_key": SECRET})),
+        credential_ref=CredentialRef(provider="minimax", name="api_key"),
+        model="MiniMax-M2.7",
+        base_url="https://api.minimaxi.com/v1",
+        billing_origin=billing_origin,
+        client=client,
+    )
+    completion = await adapter.complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
+
+    assert isinstance(turn, FinalTurn)
+    assert turn.usage.cost_amount is None
+    assert turn.usage.cost_usd is None
+    assert turn.usage.currency is None
+    assert adapter.pricing_catalog_version is None
 
 
 async def test_custom_minimax_origin_does_not_assume_official_pricing() -> None:
@@ -203,13 +448,18 @@ async def test_custom_minimax_origin_does_not_assume_official_pricing() -> None:
             200,
             json={
                 "choices": [{"message": {"role": "assistant", "content": "Done"}}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "prompt_tokens_details": {"cached_tokens": 50},
+                },
             },
         )
 
     turn = await adapter(handler).complete(request())
 
     assert isinstance(turn, FinalTurn)
+    assert turn.usage.cache_read_input_tokens == 50
     assert turn.usage.cost_usd is None
 
 
@@ -233,8 +483,9 @@ async def test_official_minimax_invalid_usage_does_not_assume_zero_cost(
             },
         )
 
-    adapter = official_adapter(handler, model="MiniMax-M3")
-    turn = await adapter.complete(request())
+    adapter = official_adapter(handler, model="MiniMax-M2.7")
+    completion = await adapter.complete(request())
+    turn = completion.turn if isinstance(completion, ModelCompletion) else completion
 
     assert isinstance(turn, FinalTurn)
     assert turn.usage.input_tokens == 0

@@ -77,7 +77,7 @@ async def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None
         ).fetchall()
 
     assert journal_mode == ("wal",)
-    assert migration == (42,)
+    assert migration == (43,)
     assert tables == [
         ("actions",),
         ("activity_category_rule_versions",),
@@ -140,7 +140,7 @@ async def test_initialize_is_idempotent(tmp_path: Path) -> None:
             await connection.execute("SELECT COUNT(*) FROM schema_migrations")
         ).fetchone()
 
-    assert tuple(count) == (42,)
+    assert tuple(count) == (43,)
 
 
 async def test_upgrade_requeues_only_latest_transient_model_fallback_revisions(

@@ -1634,4 +1634,14 @@ MIGRATIONS = (
           );
         """,
     ),
+    Migration(
+        version=43,
+        sql="""
+        -- Billing product/region is an explicit user-owned fact.  It must not
+        -- be inferred from an endpoint hostname because MiniMax PayGo and
+        -- Token Plan keys can use overlapping service origins.
+        ALTER TABLE model_configurations ADD COLUMN billing_origin TEXT;
+        ALTER TABLE run_model_routes ADD COLUMN billing_origin TEXT;
+        """,
+    ),
 )

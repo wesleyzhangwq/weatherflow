@@ -131,6 +131,7 @@ from weatherflow.runtime import (
     RunControl,
     RunControlNotFoundError,
     RunControlRejectedError,
+    RunUsage,
 )
 from weatherflow.sessions import (
     ConversationSession,
@@ -1100,6 +1101,17 @@ def create_app(
             )
         return run
 
+    @app.get("/v1/runs/{run_id}/usage", response_model=RunUsage)
+    async def get_run_usage(run_id: str) -> RunUsage:
+        service = await runtime()
+        try:
+            return await service.run_usage(run_id)
+        except LookupError as error:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "run_not_found", "run_id": run_id},
+            ) from error
+
     @app.post("/v1/runs/{run_id}/cancel", response_model=Run)
     async def cancel_run(run_id: str) -> Run:
         service = await runtime()
@@ -1377,6 +1389,7 @@ def create_app(
                 provider=request.provider,
                 model=request.model,
                 base_url=request.base_url,
+                billing_origin=request.billing_origin,
             )
         except ValueError as error:
             raise HTTPException(

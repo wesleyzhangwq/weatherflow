@@ -26,6 +26,7 @@ from weatherflow.runtime import (
     FinalTurn,
     LoopStatus,
     ModelCompletion,
+    RunCheckpoint,
     RunCheckpointRepository,
     SharedTurnLoop,
     ToolCallBatchTurn,
@@ -1764,7 +1765,10 @@ async def test_cost_budget_stops_before_dispatching_an_over_budget_tool(
     assert checkpoint.state["runtime_usage"] == {
         "input_tokens": 10,
         "output_tokens": 2,
+        "cost_amount": 0.51,
         "cost_usd": 0.51,
+        "currency": "USD",
+        "cost_scope": "model_usage_only",
         "cost_status": "known",
     }
     stored = await runs.get(run.id)
@@ -1797,6 +1801,60 @@ async def test_unknown_model_cost_fails_closed_before_tool_dispatch(tmp_path: Pa
     checkpoint = await checkpoints.get(run.id)
     assert checkpoint is not None
     assert checkpoint.state["runtime_usage"]["cost_status"] == "unknown"
+    stored = await runs.get(run.id)
+    assert stored is not None and stored.status is RunStatus.FAILED
+
+
+async def test_legacy_minimax_cost_without_cache_breakdown_stays_fail_closed(
+    tmp_path: Path,
+) -> None:
+    model = ScriptedModel(
+        [
+            ToolCallTurn(
+                tool_id="files.read",
+                arguments={"path": "README.md"},
+                usage={
+                    "input_tokens": 10,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 2,
+                    "cost_usd": 0.0000054,
+                },
+            )
+        ]
+    )
+    model.pricing_catalog_version = "minimax-paygo-2026-07-21"
+    loop, executors, runs, checkpoints, workspace, agent, run = await setup_loop(
+        tmp_path,
+        model,
+        budget=RunBudget(max_steps=5, max_cost_usd=1.0, timeout_seconds=60),
+    )
+    legacy = RunCheckpoint.new(
+        run_id=run.id,
+        state={
+            "runtime_usage": {
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "cost_usd": 0.000042,
+                "cost_status": "known",
+                "pricing_catalog_version": "minimax-paygo-2026-07-14",
+            }
+        },
+    )
+    async with loop.database.transaction() as connection:
+        await checkpoints.create_in(connection, legacy)
+    executor = RecordingExecutor()
+    executors.register("files.read", executor)
+
+    outcome = await loop.run(run_id=run.id, workspace=workspace, agent=agent)
+
+    assert outcome.status is LoopStatus.FAILED
+    assert outcome.error == "run cost budget cannot be enforced: model cost is unknown"
+    assert executor.calls == []
+    updated = await checkpoints.get(run.id)
+    assert updated is not None
+    assert updated.state["runtime_usage"]["cost_status"] == "unknown"
+    assert "pricing_catalog_version" not in updated.state["runtime_usage"]
+    assert "cache_read_input_tokens" not in updated.state["runtime_usage"]
     stored = await runs.get(run.id)
     assert stored is not None and stored.status is RunStatus.FAILED
 

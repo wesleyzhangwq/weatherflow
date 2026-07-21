@@ -28,6 +28,7 @@ import type {
   ResetPreview,
   ResetResult,
   Run,
+  RunUsage,
   Session,
   SkillCatalogEntry,
   SystemStatus,
@@ -168,6 +169,7 @@ export class WeatherFlowClient {
     return this.request("/v1/workspaces", { method: "POST", body: JSON.stringify({ name, path }) });
   }
   runs(workspaceId?: string | null): Promise<Run[]> { return this.request(this.scoped("/v1/runs", workspaceId)); }
+  runUsage(runId: string): Promise<RunUsage> { return this.request(`/v1/runs/${encodeURIComponent(runId)}/usage`); }
   sessions(workspaceId: string): Promise<Session[]> { return this.request(this.scoped("/v1/sessions", workspaceId)); }
   createSession(workspaceId: string): Promise<Session> {
     return this.request("/v1/sessions", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) });

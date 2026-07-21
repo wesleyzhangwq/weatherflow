@@ -110,6 +110,56 @@ it("shows explicit operational detail and handles approval", async () => {
   expect(screen.getByText("ActivityWatch 只读 · 独立运行")).toBeInTheDocument();
 });
 
+it("shows per-Run token and budget usage while keeping unknown cost explicit", async () => {
+  const runUsage = vi.fn().mockResolvedValue({
+    schema_version: "run_usage_v1",
+    run_id: "r1",
+    provider: "openai",
+    model: "gpt-test",
+    input_tokens: 800,
+    cache_read_input_tokens: null,
+    output_tokens: 100,
+    total_tokens: 900,
+    cost_amount: null,
+    cost_usd: null,
+    currency: null,
+    cost_scope: "model_usage_only",
+    billing_origin: null,
+    cost_status: "unknown",
+    pricing_catalog_version: null,
+    step_count: 1,
+    elapsed_seconds: 5,
+    timeout_seconds: 300,
+    max_cost_usd: 0.02,
+    cost_budget_usage_percent: null,
+    cost_budget_status: "unknown_cost",
+    cost_failure_reason: "cost_unknown",
+  });
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]),
+    runs: vi.fn().mockResolvedValue([{ ...snapshot.latest_run, status: "failed" }]),
+    timeline: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn().mockResolvedValue([]),
+    runUsage,
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: true, provider: "openai", model: "gpt-test", base_url: null, credential_available: true },
+    }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "任务" }));
+
+  expect(await screen.findByLabelText("Run 用量与预算")).toHaveTextContent("openai · gpt-test");
+  expect(screen.getByLabelText("Run 用量与预算")).toHaveTextContent("输入 800 · 缓存命中 未知 · 输出 100 · 总计 900");
+  expect(screen.getByLabelText("Run 用量与预算")).toHaveTextContent("成本未知");
+  expect(screen.getByLabelText("Run 用量与预算")).toHaveTextContent("无可靠定价目录");
+  expect(screen.getByLabelText("Run 用量与预算")).toHaveTextContent("成本未知，无法计算占用");
+  expect(screen.getByRole("alert")).toHaveTextContent("有限预算已按安全策略终止");
+  expect(runUsage).toHaveBeenCalledWith("r1");
+});
+
 it("requires review then a second explicit click before derived activity reset", async () => {
   const client = {
     approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([{ ...snapshot.latest_run }]), timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
@@ -425,6 +475,51 @@ it("lets the user switch the active conversation model without entering the key 
   credentialStatus.mockRestore();
 });
 
+it("requires an explicit MiniMax billing choice instead of inferring it from the endpoint", async () => {
+  const setCredential = vi.spyOn(nativeCredentials, "set").mockResolvedValue({ provider: "minimax", key_present: true });
+  const credentialStatus = vi.spyOn(nativeCredentials, "status").mockImplementation(async (provider) => ({ provider, key_present: false }));
+  const configureModel = vi.fn().mockResolvedValue({});
+  const client = {
+    approvals: vi.fn().mockResolvedValue([]), runs: vi.fn().mockResolvedValue([]),
+    timeline: vi.fn().mockResolvedValue([]), artifacts: vi.fn().mockResolvedValue([]),
+    status: vi.fn().mockResolvedValue({
+      local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
+      behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
+      retention: {}, model: { configured: false, provider: "minimax", model: null, base_url: null, billing_origin: null, credential_available: false },
+    }),
+    modelProviders: vi.fn().mockResolvedValue([
+      {
+        provider: "minimax", label: "MiniMax", base_url: "https://api.minimaxi.com/v1",
+        default_model: "MiniMax-M2.7", suggested_models: ["MiniMax-M2.7"],
+        billing_origins: ["minimax_global_paygo", "minimax_cn_paygo", "minimax_global_token_plan", "minimax_cn_token_plan"],
+      },
+    ]),
+    providerModels: vi.fn().mockResolvedValue({
+      provider: "minimax", source: "provider",
+      models: [{ id: "MiniMax-M2.7", selectable: true, compatibility: "agent_ready", note: null }],
+    }),
+    configureModel,
+    exportDiagnostics: vi.fn().mockResolvedValue({ path: "/tmp/diagnostic.json", sha256: "d", size_bytes: 10 }),
+    previewReset: vi.fn().mockResolvedValue({ category: "behavior", count: 0 }),
+  } as unknown as WeatherFlowClient;
+
+  render(<Cockpit client={client} snapshot={snapshot} offline={false} selectedWorkspaceId="w1" />);
+  fireEvent.click(screen.getByRole("button", { name: "LLM 模型" }));
+  fireEvent.change(await screen.findByLabelText("MiniMax 计费来源"), { target: { value: "minimax_cn_token_plan" } });
+  fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "验证并启用 MiniMax" }));
+
+  await waitFor(() => expect(configureModel).toHaveBeenCalledWith({
+    provider: "minimax",
+    model: "MiniMax-M2.7",
+    base_url: "https://api.minimaxi.com/v1",
+    billing_origin: "minimax_cn_token_plan",
+  }, "w1"));
+  expect(setCredential).toHaveBeenCalledWith("minimax", "secret");
+  setCredential.mockRestore();
+  credentialStatus.mockRestore();
+});
+
 it("allows MiniMax M2 models backed by encrypted provider continuations", async () => {
   const credentialStatus = vi.spyOn(nativeCredentials, "status").mockImplementation(async (provider) => ({
     provider,
@@ -437,10 +532,10 @@ it("allows MiniMax M2 models backed by encrypted provider continuations", async 
     status: vi.fn().mockResolvedValue({
       local_only: true, telemetry_upload: false, workspace_id: "w1", installed_packs: [], providers: {},
       behavior_sensor: { mode: "metadata_only", raw_content_captured: false, fallback_to_deliberate_signals: true },
-      retention: {}, model: { configured: true, provider: "minimax", model: "MiniMax-M3", base_url: "https://api.minimaxi.com/v1", credential_available: true },
+      retention: {}, model: { configured: true, provider: "minimax", model: "MiniMax-M3", base_url: "https://api.minimaxi.com/v1", billing_origin: "minimax_cn_paygo", credential_available: true },
     }),
     modelProviders: vi.fn().mockResolvedValue([
-      { provider: "minimax", label: "MiniMax", base_url: "https://api.minimaxi.com/v1", default_model: "MiniMax-M3", suggested_models: ["MiniMax-M3", "MiniMax-M2.7"] },
+      { provider: "minimax", label: "MiniMax", base_url: "https://api.minimaxi.com/v1", default_model: "MiniMax-M3", suggested_models: ["MiniMax-M3", "MiniMax-M2.7"], billing_origins: ["minimax_global_paygo", "minimax_cn_paygo", "minimax_global_token_plan", "minimax_cn_token_plan"] },
     ]),
     providerModels: vi.fn().mockResolvedValue({
       provider: "minimax",
@@ -462,7 +557,7 @@ it("allows MiniMax M2 models backed by encrypted provider continuations", async 
   expect(m27).toBeEnabled();
   fireEvent.click(m27);
   await waitFor(() => expect(configureModel).toHaveBeenCalledWith(
-    { provider: "minimax", model: "MiniMax-M2.7", base_url: "https://api.minimaxi.com/v1" },
+    { provider: "minimax", model: "MiniMax-M2.7", base_url: "https://api.minimaxi.com/v1", billing_origin: "minimax_cn_paygo" },
     "w1",
   ));
   credentialStatus.mockRestore();

@@ -513,7 +513,7 @@ class ActivitySummaryAttempt(BaseModel):
     configuration_version: int | None = Field(default=None, ge=0)
     prompt_version: str | None = None
     redaction_count: int = Field(default=0, ge=0)
-    usage: dict[str, int | float] = Field(default_factory=dict)
+    usage: dict[str, int | float | str] = Field(default_factory=dict)
     fallback_reason: str | None = Field(default=None, max_length=120)
 
     @field_validator("started_at", "completed_at")
@@ -593,7 +593,7 @@ class ActivitySummaryRevision(BaseModel):
     statistics_version: str
     request_digest: str
     redaction_count: int = Field(default=0, ge=0)
-    usage: dict[str, int | float] = Field(default_factory=dict)
+    usage: dict[str, int | float | str] = Field(default_factory=dict)
     fallback_reason: str | None = Field(default=None, max_length=120)
     source_watermark: str = Field(min_length=64, max_length=64)
     legacy_rules: bool = False

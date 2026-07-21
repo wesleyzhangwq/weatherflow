@@ -17,6 +17,7 @@ from weatherflow.extensions import (
 from weatherflow.models.anthropic import AnthropicMessagesAdapter
 from weatherflow.models.minimax import MiniMaxAdapter, OpenAICompatibleAdapter
 from weatherflow.models.openai import OpenAIResponsesAdapter
+from weatherflow.models.pricing import BillingOrigin
 from weatherflow.runtime import ModelConfigurationRequiredError, ModelRouteUnavailableError
 from weatherflow.storage import Database
 
@@ -41,6 +42,7 @@ class ProviderPreset(BaseModel):
     base_url: str
     default_model: str
     suggested_models: tuple[str, ...]
+    billing_origins: tuple[BillingOrigin, ...] = ()
 
 
 class ProviderModelCatalog(BaseModel):
@@ -77,6 +79,7 @@ def provider_presets() -> tuple[ProviderPreset, ...]:
                 "MiniMax-M2.1-highspeed",
                 "MiniMax-M2",
             ),
+            billing_origins=tuple(BillingOrigin),
         ),
         ProviderPreset(
             provider=ModelProvider.DEEPSEEK,
@@ -196,6 +199,7 @@ class ModelConfiguration(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     base_url: str = Field(min_length=1, max_length=500)
     credential_ref: CredentialRef
+    billing_origin: BillingOrigin | None = None
     version: int = Field(default=0, ge=0)
     updated_at: datetime
 
@@ -203,6 +207,12 @@ class ModelConfiguration(BaseModel):
     @classmethod
     def valid_https_base_url(cls, value: str) -> str:
         return normalize_model_base_url(value)
+
+    @model_validator(mode="after")
+    def coherent_billing_origin(self) -> "ModelConfiguration":
+        if self.provider is not ModelProvider.MINIMAX and self.billing_origin is not None:
+            raise ValueError("billing_origin is supported only for MiniMax")
+        return self
 
 
 class ModelStatus(BaseModel):
@@ -212,6 +222,7 @@ class ModelStatus(BaseModel):
     provider: str
     model: str | None = None
     base_url: str | None = None
+    billing_origin: BillingOrigin | None = None
     credential_available: bool = False
 
 
@@ -227,6 +238,7 @@ class RunModelRoute(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     base_url: str | None = Field(default=None, max_length=500)
     credential_ref: CredentialRef | None = None
+    billing_origin: BillingOrigin | None = None
     configuration_version: int | None = Field(default=None, ge=0)
     bound_at: datetime
 
@@ -238,6 +250,7 @@ class RunModelRoute(BaseModel):
                 for value in (
                     self.base_url,
                     self.credential_ref,
+                    self.billing_origin,
                     self.configuration_version,
                     self.configuration_workspace_id,
                 )
@@ -245,6 +258,8 @@ class RunModelRoute(BaseModel):
                 raise ValueError("echo route cannot carry provider configuration")
             return self
         ModelProvider(self.provider)
+        if self.provider != ModelProvider.MINIMAX.value and self.billing_origin is not None:
+            raise ValueError("billing_origin is supported only for MiniMax")
         if (
             self.base_url is None
             or self.credential_ref is None
@@ -288,13 +303,14 @@ class ModelConfigurationRepository:
             """
             INSERT INTO model_configurations(
                 workspace_id, provider, model, base_url, credential_ref,
-                version, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                billing_origin, version, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(workspace_id) DO UPDATE SET
                 provider = excluded.provider,
                 model = excluded.model,
                 base_url = excluded.base_url,
                 credential_ref = excluded.credential_ref,
+                billing_origin = excluded.billing_origin,
                 version = excluded.version,
                 updated_at = excluded.updated_at
             """,
@@ -304,6 +320,7 @@ class ModelConfigurationRepository:
                 updated.model,
                 updated.base_url,
                 updated.credential_ref.model_dump_json(),
+                updated.billing_origin.value if updated.billing_origin is not None else None,
                 updated.version,
                 updated.updated_at.isoformat(),
             ),
@@ -341,8 +358,9 @@ class RunModelRouteRepository:
             """
             INSERT OR IGNORE INTO run_model_routes(
                 run_id, workspace_id, configuration_workspace_id, provider,
-                model, base_url, credential_ref, configuration_version, bound_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                model, base_url, credential_ref, billing_origin,
+                configuration_version, bound_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 route.run_id,
@@ -352,6 +370,7 @@ class RunModelRouteRepository:
                 route.model,
                 route.base_url,
                 route.credential_ref.model_dump_json() if route.credential_ref else None,
+                route.billing_origin.value if route.billing_origin is not None else None,
                 route.configuration_version,
                 route.bound_at.isoformat(),
             ),
@@ -391,12 +410,14 @@ class ModelConfigurationService:
         workspace_id: str,
         model: str,
         base_url: str,
+        billing_origin: BillingOrigin | None = None,
     ) -> ModelConfiguration:
         return await self.configure(
             workspace_id=workspace_id,
             provider=ModelProvider.MINIMAX,
             model=model,
             base_url=base_url,
+            billing_origin=billing_origin,
         )
 
     async def configure(
@@ -406,6 +427,7 @@ class ModelConfigurationService:
         provider: ModelProvider,
         model: str,
         base_url: str,
+        billing_origin: BillingOrigin | None = None,
     ) -> ModelConfiguration:
         reference = CredentialRef(provider=provider.value, name="api_key")
         candidate = ModelConfiguration(
@@ -414,6 +436,7 @@ class ModelConfigurationService:
             model=model,
             base_url=base_url,
             credential_ref=reference,
+            billing_origin=billing_origin,
             updated_at=datetime.now(UTC),
         )
         await self._adapter(candidate, CredentialBroker(self.credential_store)).verify()
@@ -432,6 +455,9 @@ class ModelConfigurationService:
                         "model": saved.model,
                         "base_url": saved.base_url,
                         "credential_ref": saved.credential_ref.model_dump(mode="json"),
+                        "billing_origin": (
+                            saved.billing_origin.value if saved.billing_origin is not None else None
+                        ),
                         "version": saved.version,
                     },
                 ),
@@ -460,6 +486,7 @@ class ModelConfigurationService:
                 model=configuration.model,
                 base_url=configuration.base_url,
                 credential_ref=configuration.credential_ref,
+                billing_origin=configuration.billing_origin,
                 configuration_version=configuration.version,
                 bound_at=datetime.now(UTC),
             )
@@ -489,6 +516,11 @@ class ModelConfigurationService:
                         "provider": stored.provider,
                         "model": stored.model,
                         "configuration_version": stored.configuration_version,
+                        "billing_origin": (
+                            stored.billing_origin.value
+                            if stored.billing_origin is not None
+                            else None
+                        ),
                     },
                 ),
             )
@@ -528,6 +560,11 @@ class ModelConfigurationService:
                         "provider": stored.provider,
                         "model": stored.model,
                         "configuration_version": stored.configuration_version,
+                        "billing_origin": (
+                            stored.billing_origin.value
+                            if stored.billing_origin is not None
+                            else None
+                        ),
                     },
                 ),
             )
@@ -551,6 +588,7 @@ class ModelConfigurationService:
                     model=route.model,
                     base_url=route.base_url,
                     credential_ref=route.credential_ref,
+                    billing_origin=route.billing_origin,
                     version=route.configuration_version or 0,
                     updated_at=route.bound_at,
                 )
@@ -603,7 +641,10 @@ class ModelConfigurationService:
             "client": self.client,
         }
         if configuration.provider is ModelProvider.MINIMAX:
-            return MiniMaxAdapter(**arguments)
+            return MiniMaxAdapter(
+                **arguments,
+                billing_origin=configuration.billing_origin,
+            )
         if configuration.provider is ModelProvider.OPENAI:
             return OpenAIResponsesAdapter(**arguments)
         if configuration.provider is ModelProvider.ANTHROPIC:
@@ -630,6 +671,7 @@ class ModelConfigurationService:
             provider=configuration.provider.value,
             model=configuration.model,
             base_url=configuration.base_url,
+            billing_origin=configuration.billing_origin,
             credential_available=credential_available,
         )
 
@@ -642,6 +684,7 @@ def _from_row(row: Any) -> ModelConfiguration:
             "model": row["model"],
             "base_url": row["base_url"],
             "credential_ref": json.loads(row["credential_ref"]),
+            "billing_origin": row["billing_origin"],
             "version": row["version"],
             "updated_at": row["updated_at"],
         }
@@ -660,6 +703,7 @@ def _route_from_row(row: Any) -> RunModelRoute:
             "credential_ref": (
                 json.loads(row["credential_ref"]) if row["credential_ref"] else None
             ),
+            "billing_origin": row["billing_origin"],
             "configuration_version": row["configuration_version"],
             "bound_at": row["bound_at"],
         }

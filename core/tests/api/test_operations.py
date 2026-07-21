@@ -75,6 +75,7 @@ async def test_status_metrics_export_and_reset_require_explicit_requests(
         "provider": "echo",
         "model": None,
         "base_url": None,
+        "billing_origin": None,
         "credential_available": False,
     }
     assert metrics.status_code == 200

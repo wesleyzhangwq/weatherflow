@@ -1408,6 +1408,7 @@ async def test_authentication_failure_completes_on_the_next_due_compensation_pas
     assert revision is not None
     assert revision.provider == "minimax"
     assert revision.model == "MiniMax-M3"
+    assert revision.usage["cost_scope"] == "model_usage_only"
     assert revision.fallback_reason is None
 
 

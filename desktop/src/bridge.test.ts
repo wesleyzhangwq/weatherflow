@@ -36,6 +36,45 @@ describe("WeatherFlowClient", () => {
     expect(body).toEqual({ user_intent: "Ship release", client_request_id: "request-1", workspace_id: "workspace-1", tool_mode: "ask" });
   });
 
+  it("reads the stable per-Run usage projection without a write request", async () => {
+    const payload = {
+      schema_version: "run_usage_v1",
+      run_id: "run / 1",
+      provider: "minimax",
+      model: "MiniMax-M2.7",
+      input_tokens: 1200,
+      cache_read_input_tokens: 0,
+      output_tokens: 300,
+      total_tokens: 1500,
+      cost_amount: 0.00072,
+      cost_usd: 0.00072,
+      currency: "USD",
+      cost_scope: "model_usage_only",
+      billing_origin: "minimax_global_paygo",
+      cost_status: "known",
+      pricing_catalog_version: "minimax-global-paygo-usd-2026-07-21",
+      step_count: 1,
+      elapsed_seconds: 2,
+      timeout_seconds: 1800,
+      max_cost_usd: null,
+      cost_budget_usage_percent: null,
+      cost_budget_status: "unlimited",
+      cost_failure_reason: null,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    );
+    const client = new WeatherFlowClient({ baseUrl: "http://127.0.0.1:9000", token: "secret" });
+
+    await expect(client.runUsage("run / 1")).resolves.toEqual(payload);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9000/v1/runs/run%20%2F%201/usage",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer secret" }) }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.method).toBeUndefined();
+  });
+
   it("retains only the typed bridge status and code for broker permission failures", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       detail: {

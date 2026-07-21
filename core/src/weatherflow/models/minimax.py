@@ -18,7 +18,7 @@ from weatherflow.extensions import (
 )
 from weatherflow.models.errors import ModelResponseFailureStage
 from weatherflow.models.pricing import (
-    PRICING_CATALOG_VERSION,
+    BillingOrigin,
     ModelTokenPrice,
     resolve_token_price,
 )
@@ -74,6 +74,7 @@ class OpenAICompatibleAdapter:
         max_completion_tokens: int = 2048,
         timeout_seconds: float = 120,
         client: httpx.AsyncClient | None = None,
+        billing_origin: BillingOrigin | None = None,
     ) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", provider):
             raise ValueError("invalid provider identifier")
@@ -84,6 +85,8 @@ class OpenAICompatibleAdapter:
             raise ValueError("model base URL must use HTTPS")
         if not 1 <= max_completion_tokens <= 2048:
             raise ValueError("max_completion_tokens must be between 1 and 2048")
+        if provider != "minimax" and billing_origin is not None:
+            raise ValueError("billing_origin is supported only for MiniMax")
         self.broker = broker
         self.provider = provider
         self.credential_ref = credential_ref
@@ -92,14 +95,17 @@ class OpenAICompatibleAdapter:
         self.max_completion_tokens = max_completion_tokens
         self.timeout_seconds = timeout_seconds
         self.client = client or httpx.AsyncClient()
+        self.billing_origin = billing_origin
         self.token_price = resolve_token_price(
             provider=provider,
             model=model,
-            base_url=normalized_url,
+            billing_origin=billing_origin,
         )
         self.pricing_catalog_version = (
-            PRICING_CATALOG_VERSION if self.token_price is not None else None
+            self.token_price.catalog_version if self.token_price is not None else None
         )
+        self.cost_currency = self.token_price.currency if self.token_price is not None else None
+        self.cost_scope = "model_usage_only"
         self.continuation_provider = (
             provider if provider == "minimax" and model.startswith("MiniMax-M2") else None
         )
@@ -404,7 +410,11 @@ class OpenAICompatibleAdapter:
                 "model provider returned no assistant message",
                 stage=ModelResponseFailureStage.MESSAGE,
             )
-        usage = _usage(response.get("usage"), self.token_price)
+        usage = _usage(
+            response.get("usage"),
+            self.token_price,
+            billing_origin=self.billing_origin,
+        )
         provider_message = deepcopy(message)
         provider_message.setdefault("role", "assistant")
 
@@ -508,6 +518,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         max_completion_tokens: int = 2048,
         timeout_seconds: float = 120,
         client: httpx.AsyncClient | None = None,
+        billing_origin: BillingOrigin | None = None,
     ) -> None:
         if not model.startswith("MiniMax-"):
             raise ValueError("unsupported MiniMax model identifier")
@@ -520,6 +531,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             max_completion_tokens=max_completion_tokens,
             timeout_seconds=timeout_seconds,
             client=client,
+            billing_origin=billing_origin,
         )
 
 
@@ -607,7 +619,12 @@ def _arguments(value: Any) -> dict[str, Any]:
     return parsed
 
 
-def _usage(value: Any, token_price: ModelTokenPrice | None) -> ModelUsage:
+def _usage(
+    value: Any,
+    token_price: ModelTokenPrice | None,
+    *,
+    billing_origin: BillingOrigin | None,
+) -> ModelUsage:
     if not isinstance(value, dict):
         return ModelUsage()
     if "prompt_tokens" not in value or "completion_tokens" not in value:
@@ -623,15 +640,40 @@ def _usage(value: Any, token_price: ModelTokenPrice | None) -> ModelUsage:
         return ModelUsage()
     if input_tokens < 0 or output_tokens < 0:
         return ModelUsage()
+    cache_read_input_tokens = _cache_read_input_tokens(value, input_tokens=input_tokens)
+    cost_amount = (
+        token_price.estimate(
+            input_tokens=input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            output_tokens=output_tokens,
+        )
+        if token_price is not None
+        else None
+    )
     return ModelUsage(
         input_tokens=input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
         output_tokens=output_tokens,
+        cost_amount=cost_amount,
         cost_usd=(
-            token_price.estimate_usd(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-            )
-            if token_price is not None
-            else None
+            cost_amount if token_price is not None and token_price.currency == "USD" else None
         ),
+        currency=token_price.currency if cost_amount is not None else None,
+        cost_scope="model_usage_only",
+        billing_origin=(billing_origin.value if billing_origin is not None else None),
     )
+
+
+def _cache_read_input_tokens(value: dict[str, Any], *, input_tokens: int) -> int | None:
+    details = value.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    cached_tokens = details.get("cached_tokens")
+    if (
+        not isinstance(cached_tokens, int)
+        or isinstance(cached_tokens, bool)
+        or cached_tokens < 0
+        or cached_tokens > input_tokens
+    ):
+        return None
+    return cached_tokens

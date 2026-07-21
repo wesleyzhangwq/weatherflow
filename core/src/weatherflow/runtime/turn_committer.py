@@ -50,23 +50,87 @@ class TurnCommitter:
         prior_usage = state.get("runtime_usage", {})
         input_tokens = int(prior_usage.get("input_tokens", 0)) + turn.usage.input_tokens
         output_tokens = int(prior_usage.get("output_tokens", 0)) + turn.usage.output_tokens
-        prior_cost = prior_usage.get("cost_usd")
-        prior_cost_status = prior_usage.get("cost_status")
-        turn_cost_status = "known" if turn.usage.cost_usd is not None else "unknown"
-        cost_status = "unknown" if "unknown" in {prior_cost_status, turn_cost_status} else "known"
-        cost = (
-            (float(prior_cost) if prior_cost is not None else 0.0) + turn.usage.cost_usd
-            if turn.usage.cost_usd is not None
-            else prior_cost
+        prior_cache_read = prior_usage.get("cache_read_input_tokens")
+        cache_read_input_tokens = (
+            int(prior_cache_read or 0) + turn.usage.cache_read_input_tokens
+            if turn.usage.cache_read_input_tokens is not None
+            and (not prior_usage or prior_cache_read is not None)
+            else None
         )
-        if input_tokens or output_tokens or cost is not None:
+        prior_cost_amount = prior_usage.get("cost_amount", prior_usage.get("cost_usd"))
+        prior_cost_usd = prior_usage.get("cost_usd")
+        prior_cost_status = prior_usage.get("cost_status")
+        pricing_version = getattr(active_model, "pricing_catalog_version", None)
+        billing_origin = turn.usage.billing_origin or getattr(active_model, "billing_origin", None)
+        if hasattr(billing_origin, "value"):
+            billing_origin = billing_origin.value
+        currency = turn.usage.currency or getattr(active_model, "cost_currency", None)
+        cost_scope = turn.usage.cost_scope or getattr(
+            active_model, "cost_scope", "model_usage_only"
+        )
+        turn_cost_amount = turn.usage.cost_amount
+        if turn_cost_amount is None and turn.usage.cost_usd is not None:
+            turn_cost_amount = turn.usage.cost_usd
+            currency = currency or "USD"
+        turn_cost_usd = turn.usage.cost_usd if currency == "USD" else None
+        minimax_catalog = isinstance(pricing_version, str) and pricing_version.startswith(
+            "minimax-"
+        )
+        if (
+            prior_usage
+            and minimax_catalog
+            and (
+                prior_cache_read is None
+                or not prior_usage.get("billing_origin")
+                or not prior_usage.get("currency")
+                or not prior_usage.get("cost_scope")
+            )
+        ):
+            prior_cost_status = "unknown"
+        prior_metadata_matches = not prior_usage or all(
+            (
+                prior_usage.get("billing_origin") == billing_origin,
+                prior_usage.get("currency") == currency,
+                prior_usage.get("cost_scope") == cost_scope,
+                prior_usage.get("pricing_catalog_version") == pricing_version,
+            )
+        )
+        turn_cost_status = (
+            "known"
+            if turn_cost_amount is not None
+            and currency in {"USD", "CNY"}
+            and cost_scope == "model_usage_only"
+            and (not minimax_catalog or billing_origin is not None)
+            else "unknown"
+        )
+        cost_status = "unknown" if "unknown" in {prior_cost_status, turn_cost_status} else "known"
+        if not prior_metadata_matches:
+            cost_status = "unknown"
+        cost_amount = (
+            (float(prior_cost_amount) if prior_cost_amount is not None else 0.0) + turn_cost_amount
+            if turn_cost_amount is not None and cost_status == "known"
+            else None
+        )
+        cost_usd = (
+            (float(prior_cost_usd) if prior_cost_usd is not None else 0.0) + turn_cost_usd
+            if turn_cost_usd is not None and cost_status == "known"
+            else None
+        )
+        if input_tokens or output_tokens or cost_amount is not None:
             state["runtime_usage"] = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
-                "cost_usd": cost,
+                "cost_amount": cost_amount,
+                "cost_usd": cost_usd,
                 "cost_status": cost_status,
+                "cost_scope": "model_usage_only",
             }
-            pricing_version = getattr(active_model, "pricing_catalog_version", None)
+            if cache_read_input_tokens is not None:
+                state["runtime_usage"]["cache_read_input_tokens"] = cache_read_input_tokens
+            if billing_origin is not None:
+                state["runtime_usage"]["billing_origin"] = billing_origin
+            if currency is not None and cost_status == "known":
+                state["runtime_usage"]["currency"] = currency
             if pricing_version is not None and cost_status == "known":
                 state["runtime_usage"]["pricing_catalog_version"] = pricing_version
         desired = checkpoint.model_copy(

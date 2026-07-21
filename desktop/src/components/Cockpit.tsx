@@ -15,8 +15,9 @@ import { getThemePreference, setThemePreference, type ThemePreference } from "..
 import { AutomationView, MCPServersView, SkillsView } from "./ToolViews";
 import { WatchView } from "./WatchView";
 import type {
+  BillingOrigin,
   ActivitySummarySettings, Approval, Artifact, ConnectionAttempt, ConnectorKind, ConnectorStatus, DesktopSnapshot,
-  LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, Run, Session, SystemStatus, ToolMode, Workspace,
+  LedgerEvent, ModelProviderPreset, ProviderModel, ResetPreview, Run, RunUsage, Session, SystemStatus, ToolMode, Workspace,
 } from "../types";
 
 type ViewId = "chat" | "runs" | "watch" | "automations" | "skills" | "mcp" | "models" | "oauth" | "settings";
@@ -41,6 +42,26 @@ function presetModelOptions(provider: ModelProviderPreset): ProviderModel[] {
   }));
 }
 
+function billingOriginLabel(origin: BillingOrigin): string {
+  const labels: Record<BillingOrigin, string> = {
+    minimax_global_paygo: "国际站 · 按量计费（USD）",
+    minimax_cn_paygo: "中国站 · 按量计费（CNY）",
+    minimax_global_token_plan: "国际站 · Token Plan（金额 unknown）",
+    minimax_cn_token_plan: "中国站 · Token Plan（金额 unknown）",
+  };
+  return labels[origin];
+}
+
+async function loadRunUsage(client: WeatherFlowClient, runId: string): Promise<RunUsage | null> {
+  const method = (client as Partial<WeatherFlowClient>).runUsage;
+  if (typeof method !== "function") return null;
+  try {
+    return await method.call(client, runId);
+  } catch {
+    return null;
+  }
+}
+
 interface CockpitProps {
   client: WeatherFlowClient;
   snapshot: DesktopSnapshot | null;
@@ -63,6 +84,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [timeline, setTimeline] = useState<LedgerEvent[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [usage, setUsage] = useState<RunUsage | null>(null);
   const [system, setSystem] = useState<SystemStatus | null>(null);
   const [providers, setProviders] = useState<ModelProviderPreset[]>([]);
   const [resetPreview, setResetPreview] = useState<ResetPreview | null>(null);
@@ -103,10 +125,12 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
     selectedRunIdRef.current = activeId ?? null;
     setSelectedRunId(activeId ?? null);
     if (activeId) {
-      const [events, files] = await Promise.all([client.timeline(activeId), client.artifacts(activeId)]);
+      const [events, files, nextUsage] = await Promise.all([
+        client.timeline(activeId), client.artifacts(activeId), loadRunUsage(client, activeId),
+      ]);
       if (generation !== refreshGeneration.current) return;
-      setTimeline(events); setArtifacts(files);
-    } else { setTimeline([]); setArtifacts([]); }
+      setTimeline(events); setArtifacts(files); setUsage(nextUsage);
+    } else { setTimeline([]); setArtifacts([]); setUsage(null); }
   }, [client, selectedWorkspaceId]);
 
   const refreshSessions = useCallback(async (preferredSessionId?: string | null) => {
@@ -144,6 +168,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
     setApprovals([]);
     setTimeline([]);
     setArtifacts([]);
+    setUsage(null);
   }, [selectedWorkspaceId]);
   useEffect(() => { void refresh(); }, [refresh, snapshot]);
   useEffect(() => { void refreshSessions(); }, [refreshSessions, snapshot]);
@@ -152,10 +177,10 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
     const runId = activeSessionRunId;
     selectedRunIdRef.current = runId;
     setSelectedRunId((current) => current === runId ? current : runId);
-    if (!runId) { setTimeline([]); setArtifacts([]); return; }
+    if (!runId) { setTimeline([]); setArtifacts([]); setUsage(null); return; }
     let current = true;
-    void Promise.all([client.timeline(runId), client.artifacts(runId)]).then(([events, files]) => {
-      if (current) { setTimeline(events); setArtifacts(files); }
+    void Promise.all([client.timeline(runId), client.artifacts(runId), loadRunUsage(client, runId)]).then(([events, files, nextUsage]) => {
+      if (current) { setTimeline(events); setArtifacts(files); setUsage(nextUsage); }
     });
     return () => { current = false; };
   }, [activeSessionRunId, client, sessionsEnabled]);
@@ -231,7 +256,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
     const created = await client.createSession(selectedWorkspaceId);
     setSessions((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     setSelectedSessionId(created.id);
-    selectedRunIdRef.current = null; setSelectedRunId(null); setTimeline([]); setArtifacts([]);
+    selectedRunIdRef.current = null; setSelectedRunId(null); setTimeline([]); setArtifacts([]); setUsage(null);
   };
   const updateConversation = async (sessionId: string, update: { title?: string; pinned?: boolean }) => {
     if (!selectedWorkspaceId) return;
@@ -293,7 +318,7 @@ export function Cockpit({ client, snapshot, offline, workspaces = [], selectedWo
 
       <section className="app-workspace">
         {view === "chat" && <ChatView client={client} providers={providers} workspaceId={selectedWorkspaceId} sessions={sessions} sessionsEnabled={sessionsEnabled} activeSession={activeSession} runs={runs} run={run} pending={pending} artifacts={artifacts} chatInput={chatInput} sending={sending} toolMode={toolMode} workspaceReady={Boolean(selectedWorkspaceId)} snapshot={snapshot} system={system} onInput={setChatInput} onToolMode={setToolMode} onSubmit={submitChat} onSelectRun={selectRun} onSelectSession={selectSession} onCreateSession={createConversation} onUpdateSession={updateConversation} onDeleteSession={deleteConversation} onDecide={decide} onDownload={downloadArtifact} onModelChanged={refresh} onOpenSettings={() => setView("models")} />}
-        {view === "runs" && <RunsView runs={runs} run={run} timeline={timeline} artifacts={artifacts} pending={pending} onSelect={selectRun} onDecide={decide} onDownload={downloadArtifact} />}
+        {view === "runs" && <RunsView runs={runs} run={run} usage={usage} timeline={timeline} artifacts={artifacts} pending={pending} onSelect={selectRun} onDecide={decide} onDownload={downloadArtifact} />}
         {view === "watch" && <WatchView client={client} workspaceId={selectedWorkspaceId} />}
         {view === "automations" && <AutomationView client={client} workspaceId={selectedWorkspaceId} onOperation={setOperation} />}
         {view === "skills" && <SkillsView client={client} workspace={selectedWorkspace} onOperation={setOperation} />}
@@ -489,7 +514,12 @@ function ModelSwitcher({ client, providers, workspaceId, system, disabled, onCha
     if (!workspaceId || busy) return;
     setBusy(true); setError(null);
     try {
-      await client.configureModel({ provider: provider.provider, model, base_url: provider.base_url }, workspaceId);
+      await client.configureModel({
+        provider: provider.provider,
+        model,
+        base_url: provider.base_url,
+        ...(provider.provider === "minimax" ? { billing_origin: system?.model?.billing_origin ?? null } : {}),
+      }, workspaceId);
       await onChanged();
       setOpen(false);
     } catch {
@@ -520,8 +550,49 @@ function ContextContent({ pending, artifacts, onDecide, onDownload }: { pending:
   return <><section><h3>待批准</h3>{pending.length === 0 ? <p>没有需要处理的操作。</p> : pending.map((approval) => <article className="approval-card" key={approval.id}><strong>{approval.tool_id}</strong><pre>{JSON.stringify(approval.preview, null, 2)}</pre><div><button onClick={() => void onDecide(approval, "deny")}>拒绝</button><button className="primary" onClick={() => void onDecide(approval, "approve")}>批准</button></div></article>)}</section><section><h3>产出文件</h3>{artifacts.length === 0 ? <p>暂无文件。</p> : artifacts.map((artifact) => <button className="artifact-link" key={artifact.id} onClick={() => void onDownload(artifact)}>{artifact.name}<small>{artifact.size_bytes} 字节</small></button>)}</section></>;
 }
 
-function RunsView({ runs, run, timeline, artifacts, pending, onSelect, onDecide, onDownload }: { runs: Run[]; run: Run | null; timeline: LedgerEvent[]; artifacts: Artifact[]; pending: Approval[]; onSelect: (id: string) => void; onDecide: (approval: Approval, decision: "approve" | "deny") => void; onDownload: (artifact: Artifact) => void }) {
-  return <div className="page-view"><header className="page-header"><span>任务</span><h1>执行、批准与产出</h1><p>这里只展示 Agent 的任务状态；人的状态理解与任务成败保持分离。</p></header><div className="runs-layout"><nav className="run-list" aria-label="任务列表">{runs.length === 0 ? <div className="run-list-empty">暂无任务</div> : runs.map((item) => <button className={item.id === run?.id ? "selected" : ""} key={item.id} onClick={() => onSelect(item.id)} aria-pressed={item.id === run?.id} aria-label={`${item.user_intent}，${runStatusText[item.status]}`}><span>{item.user_intent}</span><small><i className={`run-dot ${item.status}`} />{runStatusText[item.status]} · {formatRelativeTime(item.updated_at)}</small></button>)}</nav><section className="run-detail">{run ? <><div className="run-detail-heading"><span className={`status-pill ${run.status}`}>{runStatusText[run.status]}</span><time>{formatRelativeTime(run.updated_at)}</time></div><h2>{run.user_intent}</h2><div className="run-result"><span>当前结果</span><p>{runMessage(run)}</p></div><div className="section-heading"><h3>执行记录</h3><small>{timeline.length} 个事件</small></div>{timeline.length ? <ol className="timeline">{timeline.slice(-12).reverse().map((event) => <li key={event.id}><i /><div><strong>{formatEventType(event.type)}</strong><time>{new Date(event.recorded_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div></li>)}</ol> : <div className="detail-empty">等待第一条执行记录</div>}</> : <div className="detail-empty centered">选择一个任务查看完整执行记录</div>}</section><aside className="run-context"><div className="context-heading"><Wrench /><span>任务上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside></div></div>;
+function RunsView({ runs, run, usage, timeline, artifacts, pending, onSelect, onDecide, onDownload }: { runs: Run[]; run: Run | null; usage: RunUsage | null; timeline: LedgerEvent[]; artifacts: Artifact[]; pending: Approval[]; onSelect: (id: string) => void; onDecide: (approval: Approval, decision: "approve" | "deny") => void; onDownload: (artifact: Artifact) => void }) {
+  return <div className="page-view"><header className="page-header"><span>任务</span><h1>执行、批准与产出</h1><p>这里只展示 Agent 的任务状态；人的状态理解与任务成败保持分离。</p></header><div className="runs-layout"><nav className="run-list" aria-label="任务列表">{runs.length === 0 ? <div className="run-list-empty">暂无任务</div> : runs.map((item) => <button className={item.id === run?.id ? "selected" : ""} key={item.id} onClick={() => onSelect(item.id)} aria-pressed={item.id === run?.id} aria-label={`${item.user_intent}，${runStatusText[item.status]}`}><span>{item.user_intent}</span><small><i className={`run-dot ${item.status}`} />{runStatusText[item.status]} · {formatRelativeTime(item.updated_at)}</small></button>)}</nav><section className="run-detail">{run ? <><div className="run-detail-heading"><span className={`status-pill ${run.status}`}>{runStatusText[run.status]}</span><time>{formatRelativeTime(run.updated_at)}</time></div><h2>{run.user_intent}</h2><div className="run-result"><span>当前结果</span><p>{runMessage(run)}</p></div><RunUsagePanel usage={usage} /><div className="section-heading"><h3>执行记录</h3><small>{timeline.length} 个事件</small></div>{timeline.length ? <ol className="timeline">{timeline.slice(-12).reverse().map((event) => <li key={event.id}><i /><div><strong>{formatEventType(event.type)}</strong><time>{new Date(event.recorded_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div></li>)}</ol> : <div className="detail-empty">等待第一条执行记录</div>}</> : <div className="detail-empty centered">选择一个任务查看完整执行记录</div>}</section><aside className="run-context"><div className="context-heading"><Wrench /><span>任务上下文</span></div><ContextContent pending={pending} artifacts={artifacts} onDecide={onDecide} onDownload={onDownload} /></aside></div></div>;
+}
+
+function RunUsagePanel({ usage }: { usage: RunUsage | null }) {
+  if (!usage) return <section className="run-usage" aria-label="Run 用量与预算"><div className="section-heading"><h3>用量与预算</h3></div><p>用量数据暂不可用。</p></section>;
+  const model = usage.provider && usage.model ? `${usage.provider} · ${usage.model}` : "模型路由未绑定";
+  const cost = usage.cost_status === "known" && usage.cost_amount !== null && usage.currency
+    ? `${usage.currency === "USD" ? "$" : "CNY "}${usage.cost_amount.toFixed(6)}`
+    : "成本未知";
+  const pricing = usage.pricing_catalog_version ?? "无可靠定价目录";
+  const failure = usage.cost_failure_reason === "cost_unknown"
+    ? "成本未知，有限预算已按安全策略终止。"
+    : usage.cost_failure_reason === "cost_budget_exhausted"
+      ? "成本预算已耗尽，Run 已按安全策略终止。"
+      : null;
+  return <section className="run-usage" aria-label="Run 用量与预算">
+    <div className="section-heading"><h3>用量与预算</h3><small>{usage.schema_version}</small></div>
+    <dl>
+      <div><dt>模型</dt><dd>{model}</dd></div>
+      <div><dt>Token</dt><dd>输入 {usage.input_tokens.toLocaleString("zh-CN")} · 缓存命中 {usage.cache_read_input_tokens === null ? "未知" : usage.cache_read_input_tokens.toLocaleString("zh-CN")} · 输出 {usage.output_tokens.toLocaleString("zh-CN")} · 总计 {usage.total_tokens.toLocaleString("zh-CN")}</dd></div>
+      <div><dt>成本</dt><dd className={usage.cost_status === "unknown" ? "unknown" : ""}>{cost}</dd></div>
+      <div><dt>口径</dt><dd>{usage.cost_scope} · {usage.billing_origin ?? "计费来源未确认"}</dd></div>
+      <div><dt>定价</dt><dd>{pricing}</dd></div>
+      <div><dt>预算</dt><dd>{formatCostBudget(usage)}</dd></div>
+      <div><dt>进度</dt><dd>{usage.step_count} 步 · 已运行 {formatDuration(usage.elapsed_seconds)} · 超时上限 {formatDuration(usage.timeout_seconds)}</dd></div>
+    </dl>
+    {failure && <p className="run-usage-failure" role="alert">{failure}</p>}
+  </section>;
+}
+
+function formatCostBudget(usage: RunUsage): string {
+  if (usage.cost_budget_status === "unlimited") return "未设置成本上限";
+  if (usage.cost_budget_status === "pending_usage") return `上限 $${(usage.max_cost_usd ?? 0).toFixed(6)} · 等待首次模型用量`;
+  if (usage.cost_budget_status === "unknown_cost") return `上限 $${(usage.max_cost_usd ?? 0).toFixed(6)} · 成本未知，无法计算占用`;
+  const percent = usage.cost_budget_usage_percent === null ? "占用比例不可计算" : `已用 ${usage.cost_budget_usage_percent.toFixed(1)}%`;
+  return `上限 $${(usage.max_cost_usd ?? 0).toFixed(6)} · ${percent}`;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} 秒`;
+  if (seconds < 3_600) return `${(seconds / 60).toFixed(1)} 分钟`;
+  return `${(seconds / 3_600).toFixed(1)} 小时`;
 }
 
 function formatRelativeTime(value: string) {
@@ -879,6 +950,7 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
   const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean>>({});
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModel[]>>({});
   const [model, setModel] = useState(system?.model?.model ?? "MiniMax-M3");
+  const [billingOrigin, setBillingOrigin] = useState<BillingOrigin | "">(system?.model?.billing_origin ?? "");
   const [modelSearch, setModelSearch] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [editingKey, setEditingKey] = useState(false);
@@ -901,8 +973,9 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
     if (system?.model?.configured && system.model.provider) {
       setSelectedProvider(system.model.provider);
       if (system.model.model) setModel(system.model.model);
+      setBillingOrigin(system.model.billing_origin ?? "");
     }
-  }, [system?.model?.configured, system?.model?.model, system?.model?.provider]);
+  }, [system?.model?.billing_origin, system?.model?.configured, system?.model?.model, system?.model?.provider]);
 
   useEffect(() => {
     let current = true;
@@ -974,6 +1047,7 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
   const chooseProvider = (provider: ModelProviderPreset) => {
     setSelectedProvider(provider.provider);
     setModel(system?.model?.provider === provider.provider && system.model.model ? system.model.model : provider.default_model);
+    setBillingOrigin(system?.model?.provider === provider.provider ? system.model.billing_origin ?? "" : "");
     setModelSearch(""); setApiKey(""); setEditingKey(false); setConfigureError(null);
   };
 
@@ -990,7 +1064,12 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
         : models.some((item) => item.id === preset.default_model && item.selectable)
           ? preset.default_model
           : models.find((item) => item.selectable)?.id ?? preset.default_model;
-      await client.configureModel({ provider: selectedProvider, model: selectedModel, base_url: preset.base_url }, workspaceId);
+      await client.configureModel({
+        provider: selectedProvider,
+        model: selectedModel,
+        base_url: preset.base_url,
+        ...(selectedProvider === "minimax" ? { billing_origin: billingOrigin || null } : {}),
+      }, workspaceId);
       setApiKey(""); setEditingKey(false); setModel(selectedModel);
       setCredentialStatus((current) => ({ ...current, [selectedProvider]: true }));
       await onModelChanged();
@@ -1004,7 +1083,16 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
     if (!preset || !workspaceId || configuring || !credentialPresent) return;
     setConfiguring(true); setConfigureError(null);
     try {
-      await client.configureModel({ provider: selectedProvider, model: nextModel, base_url: preset.base_url }, workspaceId);
+      await client.configureModel({
+        provider: selectedProvider,
+        model: nextModel,
+        base_url: preset.base_url,
+        ...(selectedProvider === "minimax" ? {
+          billing_origin: billingOrigin
+            || (system?.model?.provider === selectedProvider ? system.model.billing_origin : null)
+            || null,
+        } : {}),
+      }, workspaceId);
       setModel(nextModel);
       await onModelChanged();
       onOperation(`已切换到 ${nextModel}，后续对话将使用这个模型。`);
@@ -1086,7 +1174,7 @@ function SettingsView({ section, client, system, providers, workspaceId, offline
       })}</div>
       {preset && <div className="provider-detail" data-provider={preset.provider}>
         <div className="provider-detail-head"><div><span className="eyebrow">{credentialPresent ? "已连接" : "等待配置"}</span><h3>{preset.label}</h3><p>{preset.base_url}</p></div>{credentialPresent && <span className="secure-badge"><ShieldCheck />密钥已保存</span>}</div>
-        {(!credentialPresent || editingKey) ? <form className="provider-key-form" onSubmit={configure}><label>API Key<input aria-label="API Key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={`粘贴 ${preset.label} API Key`} /></label><p>密钥不会进入 React 状态之外的持久数据、Python 日志、事件、记忆或模型提示词。</p>{configureError && <p className="form-error" role="alert">{configureError}</p>}<div><button type="submit" className="primary" disabled={!apiKey.trim() || configuring}>{configuring ? "正在验证…" : `验证并启用 ${preset.label}`}</button>{credentialPresent && <button type="button" onClick={() => { setEditingKey(false); setApiKey(""); }}>取消</button>}</div></form> : <>
+        {(!credentialPresent || editingKey) ? <form className="provider-key-form" onSubmit={configure}><label>API Key<input aria-label="API Key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={`粘贴 ${preset.label} API Key`} /></label>{preset.provider === "minimax" && <label>计费来源<select aria-label="MiniMax 计费来源" value={billingOrigin} onChange={(event) => setBillingOrigin(event.target.value as BillingOrigin | "")}><option value="">未确认（成本保持 unknown）</option>{(preset.billing_origins ?? []).map((origin) => <option key={origin} value={origin}>{billingOriginLabel(origin)}</option>)}</select></label>}<p>{preset.provider === "minimax" ? "API 地址不能证明密钥属于按量计费还是 Token Plan；只有明确选择按量计费后才按对应币种计算模型用量。" : "密钥不会进入 React 状态之外的持久数据、Python 日志、事件、记忆或模型提示词。"}</p>{configureError && <p className="form-error" role="alert">{configureError}</p>}<div><button type="submit" className="primary" disabled={!apiKey.trim() || configuring}>{configuring ? "正在验证…" : `验证并启用 ${preset.label}`}</button>{credentialPresent && <button type="button" onClick={() => { setEditingKey(false); setApiKey(""); }}>取消</button>}</div></form> : <>
           <div className="provider-model-heading"><div><h4>这个密钥可用的语言模型</h4><p>目录来自厂商 API；切换只影响后续模型调用，不做自动路由。</p></div>{availableModels.length > 8 && <input aria-label="搜索模型" type="search" value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder="搜索模型…" />}</div>
           <div className="provider-model-list">{visibleModels.map((item) => {
             const active = system?.model?.provider === selectedProvider && system.model.model === item.id;

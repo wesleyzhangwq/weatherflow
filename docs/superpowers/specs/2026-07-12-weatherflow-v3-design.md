@@ -477,10 +477,13 @@ leaf delegation at the provider boundary. Canonical dotted tool IDs receive
 deterministic provider-safe aliases and map back before the runtime sees a
 `ModelTurn`; an unknown alias fails closed.
 
-Per-Workspace SQLite configuration owns only provider, model, HTTPS base URL,
-version, and `credential_ref`. The MiniMax API key lives in macOS Keychain and
-is resolved by `CredentialBroker` only inside the HTTP transport callback.
-Echo is a visible unconfigured smoke fallback, not a production model path.
+Per-Workspace SQLite configuration owns provider, model, HTTPS base URL,
+version, `credential_ref`, and an optional user-confirmed `billing_origin`.
+The MiniMax API key lives in macOS Keychain and is resolved by
+`CredentialBroker` only inside the HTTP transport callback. The route freezes
+`billing_origin` with the other configuration fields; a base-URL hostname never
+infers whether the key belongs to PayGo, Token Plan, or Credits. Echo is a
+visible unconfigured smoke fallback, not a production model path.
 
 All provider API keys live in macOS Keychain. Provider presets expose model and
 HTTPS API endpoint in Cockpit. The primary desktop flow uses the fixed official
@@ -499,18 +502,23 @@ retention-bounded provider-continuation owner described below and never enter
 the normalized transcript, prompt text, events, logs, memory, or artifacts.
 
 Model-cost accounting is based on provider-reported token usage and an exact,
-versioned price entry for the frozen provider, model, and billing origin. The
-MiniMax catalog version `minimax-paygo-2026-07-14` records the official global
-pay-as-you-go equivalent for maintained M3 and M2.x models. It intentionally
-does not assume cache discounts, subscription-plan allocation, or a custom
-OpenAI-compatible endpoint, so the estimate remains conservative and
-auditable rather than pretending to reproduce an account invoice.
+versioned price entry for the frozen provider, model, and explicit billing
+origin. MiniMax global PayGo and mainland PayGo are separate catalogs:
+`minimax-global-paygo-usd-2026-07-21` preserves official USD amounts, while
+`minimax-cn-paygo-cny-2026-07-21` preserves official CNY amounts. WeatherFlow
+does no FX conversion. Every projection labels `cost_scope=model_usage_only`
+and exposes native `cost_amount`, `currency`, and `cost_usd` only when the
+native currency is USD. Cache-read pricing is used only when provider usage
+reports a valid cache breakdown. Token Plan and Credits are quota/subscription
+products and are never substituted into a PayGo token catalog.
 
-If a Run has a finite `max_cost_usd`, unknown model pricing, a custom billing
-origin, or missing provider usage is an `UNKNOWN` cost state rather than zero.
-After the provider turn that reveals this state, SharedTurnLoop fails closed
-before dispatching tools or committing a terminal result. Checkpoints retain
-the pricing-catalog version and whether cumulative cost is known.
+If a Run has a finite `max_cost_usd`, an unconfirmed or non-PayGo billing
+origin, non-USD native cost, unknown model pricing, or missing provider usage
+cannot enforce that USD budget and remains `UNKNOWN` rather than zero. After
+the provider turn that reveals this state, SharedTurnLoop fails closed before
+dispatching tools or committing a terminal result. Checkpoints retain the
+billing origin, native currency, fixed cost scope, pricing-catalog version, and
+whether cumulative cost is known.
 
 One provider key may expose multiple language models. WeatherFlow intersects
 first-party providers' official maintained allowlists with the models actually
@@ -521,7 +529,8 @@ applies to subsequent Runs. v3 does not perform automatic model routing.
 
 At Run acceptance, WeatherFlow copies the Workspace selection into an immutable
 `run_model_routes` record containing provider, model, endpoint, credential
-reference, and configuration version, but never credential material. The
+reference, explicit billing origin, and configuration version, but never
+credential material. The
 SharedTurnLoop resolves its adapter from this Run-scoped record once per resume;
 it does not own a mutable process-global provider. Worker Runs inherit the
 parent Run route. A later Workspace switch cannot change an accepted or active
@@ -1787,6 +1796,13 @@ and structured events.
 - sandbox and command classification;
 - macOS sandbox escape denial for filesystem, network, Keychain, host signals,
   environment inheritance, timeout, and descendant cleanup;
+- production-security aggregation requires every real Seatbelt case to execute
+  with `skipped=0`; an external-network denial is valid only when an unsandboxed
+  host positive control first reaches the exact same host and port;
+- the production-metrics runner preflights and freezes a clean source commit,
+  then requires the worktree to remain clean and the commit unchanged after the
+  benchmark and immediately before artifact write; dirty or changed source state
+  fails closed without creating a report;
 - MCP discovery, disconnect, and schema drift;
 - Composio least-privilege scoped-key validation, transport 401/403 versus
   wrapped-provider authentication classification, and replacement-key

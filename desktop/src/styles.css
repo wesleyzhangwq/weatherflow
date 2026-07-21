@@ -3583,3 +3583,13 @@ textarea:focus-visible {
   .chat-composer { min-height: 74px; padding-top: 11px; padding-bottom: 9px; }
   .composer-meta { min-height: 48px; }
 }
+
+/* Durable Run usage is a read-only projection of checkpoint accounting. */
+.run-usage { margin-top: 22px; padding: 16px; border: 1px solid var(--wf-border-soft); border-radius: 12px; background: color-mix(in srgb, var(--wf-panel) 88%, transparent); }
+.run-usage .section-heading h3 { margin: 0; }
+.run-usage dl { display: grid; gap: 10px; margin: 14px 0 0; }
+.run-usage dl > div { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; }
+.run-usage dt { color: var(--wf-text-faint); font-size: 10px; }
+.run-usage dd { margin: 0; color: var(--wf-text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.run-usage dd.unknown { color: var(--wf-gold); font-weight: 650; }
+.run-usage .run-usage-failure { margin: 14px 0 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--wf-red) 48%, transparent); border-radius: 8px; color: var(--wf-red); background: var(--wf-danger-soft); font-size: 11px; }

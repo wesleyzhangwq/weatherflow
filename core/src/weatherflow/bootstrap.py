@@ -100,6 +100,7 @@ from weatherflow.mcp import (
 from weatherflow.mcp.client import ConnectedMCP, MCPRegistry, MCPTransport
 from weatherflow.memory import MemoryStore
 from weatherflow.models import (
+    BillingOrigin,
     ModelConfiguration,
     ModelConfigurationRepository,
     ModelConfigurationService,
@@ -138,10 +139,12 @@ from weatherflow.runtime import (
     RunControlCoordinator,
     RunControlKind,
     RunControlRepository,
+    RunUsage,
     SharedTurnLoop,
     ToolExecutorRegistry,
     WorkerCoordinator,
     builtin_worker_definitions,
+    project_run_usage,
 )
 from weatherflow.sandbox import MacOSSeatbeltSandbox
 from weatherflow.sessions import ConversationSessionDeletion, ConversationSessionRepository
@@ -1188,12 +1191,14 @@ class RuntimeContainer:
         *,
         model: str,
         base_url: str,
+        billing_origin: BillingOrigin | None = None,
     ) -> ModelConfiguration:
         return await self.configure_model(
             workspace_id=self.default_workspace.id,
             provider=ModelProvider.MINIMAX,
             model=model,
             base_url=base_url,
+            billing_origin=billing_origin,
         )
 
     async def configure_model(
@@ -1203,12 +1208,14 @@ class RuntimeContainer:
         provider: ModelProvider,
         model: str,
         base_url: str,
+        billing_origin: BillingOrigin | None = None,
     ) -> ModelConfiguration:
         configuration = await self.model_configurations.configure(
             workspace_id=workspace_id,
             provider=provider,
             model=model,
             base_url=base_url,
+            billing_origin=billing_origin,
         )
         return configuration
 
@@ -1418,6 +1425,21 @@ class RuntimeContainer:
             for related_run_id in (run_id, *worker_run_ids)
             for artifact in await self.artifacts.list_run(related_run_id)
         ]
+
+    async def run_usage(self, run_id: str, *, now: datetime | None = None) -> RunUsage:
+        """Return one credential-free usage projection from existing Run state."""
+
+        run = await self.runs.get(run_id)
+        if run is None:
+            raise LookupError(run_id)
+        checkpoint = await self.checkpoints.get(run_id)
+        route = await self.model_routes.get(run_id)
+        return project_run_usage(
+            run=run,
+            checkpoint=checkpoint,
+            route=route,
+            now=now,
+        )
 
     async def _bind_rhythm_context(
         self,

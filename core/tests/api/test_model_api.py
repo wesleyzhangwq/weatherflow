@@ -9,6 +9,7 @@ from weatherflow.bootstrap import RuntimeContainer
 from weatherflow.config import Settings
 from weatherflow.extensions import CredentialRef, MappingCredentialStore
 from weatherflow.models import (
+    BillingOrigin,
     ModelConfiguration,
     ModelProvider,
     ModelStatus,
@@ -108,6 +109,7 @@ async def test_provider_catalog_and_generic_configuration_api(
     assert response.status_code == 200
     request_schema = openapi.json()["components"]["schemas"]["ModelConfigureRequest"]
     assert "api_key" not in request_schema["properties"]
+    assert "billing_origin" in request_schema["properties"]
     assert request_schema["additionalProperties"] is False
     assert response.json()["configuration"]["base_url"] == "https://llm.example.cn/v1"
     assert calls == [
@@ -116,6 +118,7 @@ async def test_provider_catalog_and_generic_configuration_api(
             "provider": ModelProvider.DEEPSEEK,
             "model": "deepseek-v4-flash",
             "base_url": "https://llm.example.cn/v1",
+            "billing_origin": None,
         }
     ]
 
@@ -156,6 +159,63 @@ async def test_system_status_never_inherits_another_workspace_model(
     assert response.status_code == 200
     assert response.json()["model"]["configured"] is False
     assert requested == [workspace.id]
+
+
+async def test_minimax_configuration_api_passes_explicit_billing_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = await RuntimeContainer.create(Settings(data_dir=tmp_path))
+    calls: list[dict[str, object]] = []
+    configured = ModelConfiguration(
+        workspace_id=container.default_workspace.id,
+        provider=ModelProvider.MINIMAX,
+        model="MiniMax-M2.7",
+        base_url="https://api.minimaxi.com/v1",
+        credential_ref=CredentialRef(provider="minimax", name="api_key"),
+        billing_origin=BillingOrigin.MINIMAX_CN_PAYGO,
+        updated_at=datetime.now(UTC),
+    )
+
+    async def configure_model(_container: RuntimeContainer, **kwargs: object) -> ModelConfiguration:
+        calls.append(kwargs)
+        return configured
+
+    async def model_status(_service: ModelConfigurationService, _workspace_id: str) -> ModelStatus:
+        return ModelStatus(
+            configured=True,
+            provider="minimax",
+            model="MiniMax-M2.7",
+            base_url="https://api.minimaxi.com/v1",
+            billing_origin=BillingOrigin.MINIMAX_CN_PAYGO,
+            credential_available=True,
+        )
+
+    monkeypatch.setattr(RuntimeContainer, "configure_model", configure_model)
+    monkeypatch.setattr(ModelConfigurationService, "status", model_status)
+    transport = ASGITransport(app=create_app(container=container))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/models/configure",
+            json={
+                "provider": "minimax",
+                "model": "MiniMax-M2.7",
+                "base_url": "https://api.minimaxi.com/v1",
+                "billing_origin": "minimax_cn_paygo",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["configuration"]["billing_origin"] == "minimax_cn_paygo"
+    assert calls == [
+        {
+            "workspace_id": container.default_workspace.id,
+            "provider": ModelProvider.MINIMAX,
+            "model": "MiniMax-M2.7",
+            "base_url": "https://api.minimaxi.com/v1",
+            "billing_origin": BillingOrigin.MINIMAX_CN_PAYGO,
+        }
+    ]
 
 
 @pytest.mark.parametrize(

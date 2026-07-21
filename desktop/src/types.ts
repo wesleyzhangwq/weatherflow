@@ -46,6 +46,39 @@ export interface Run {
   updated_at: string;
 }
 
+export type CostBudgetStatus = "unlimited" | "pending_usage" | "within_budget" | "exceeded" | "unknown_cost";
+export type CostFailureReason = "cost_unknown" | "cost_budget_exhausted";
+export type BillingOrigin =
+  | "minimax_global_paygo"
+  | "minimax_cn_paygo"
+  | "minimax_global_token_plan"
+  | "minimax_cn_token_plan";
+
+export interface RunUsage {
+  schema_version: "run_usage_v1";
+  run_id: string;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  cache_read_input_tokens: number | null;
+  output_tokens: number;
+  total_tokens: number;
+  cost_amount: number | null;
+  cost_usd: number | null;
+  currency: "USD" | "CNY" | null;
+  cost_scope: "model_usage_only";
+  billing_origin: BillingOrigin | null;
+  cost_status: "known" | "unknown";
+  pricing_catalog_version: string | null;
+  step_count: number;
+  elapsed_seconds: number;
+  timeout_seconds: number;
+  max_cost_usd: number | null;
+  cost_budget_usage_percent: number | null;
+  cost_budget_status: CostBudgetStatus;
+  cost_failure_reason: CostFailureReason | null;
+}
+
 export interface Session {
   id: string;
   workspace_id: string;
@@ -267,7 +300,7 @@ export interface SystemStatus {
   providers: Record<string, string>;
   behavior_sensor: { mode: "activitywatch_read_only"; raw_content_captured: false; fallback_to_deliberate_signals: true };
   retention: Record<string, string>;
-  model: { configured: boolean; provider: string; model: string | null; base_url: string | null; credential_available: boolean };
+  model: { configured: boolean; provider: string; model: string | null; base_url: string | null; billing_origin?: BillingOrigin | null; credential_available: boolean };
 }
 export interface ModelProviderPreset {
   provider: string;
@@ -275,6 +308,7 @@ export interface ModelProviderPreset {
   base_url: string;
   default_model: string;
   suggested_models: string[];
+  billing_origins?: BillingOrigin[];
 }
 export interface ProviderModel {
   id: string;
@@ -283,8 +317,8 @@ export interface ProviderModel {
   note: string | null;
 }
 export interface ProviderModelCatalog { provider: string; models: ProviderModel[]; source: "provider" }
-export interface ModelConfigureInput { provider: string; model: string; base_url: string }
-export interface ModelConfigurationResponse { configuration: { workspace_id: string; provider: string; model: string; base_url: string }; status: SystemStatus["model"] }
+export interface ModelConfigureInput { provider: string; model: string; base_url: string; billing_origin?: BillingOrigin | null }
+export interface ModelConfigurationResponse { configuration: { workspace_id: string; provider: string; model: string; base_url: string; billing_origin?: BillingOrigin | null }; status: SystemStatus["model"] }
 export interface ResetPreview { category: string; count: number }
 export interface ResetResult { category: string; deleted_count: number }
 export interface DiagnosticExport { path: string; sha256: string; size_bytes: number }
