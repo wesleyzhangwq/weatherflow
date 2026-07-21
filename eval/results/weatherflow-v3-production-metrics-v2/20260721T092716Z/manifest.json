@@ -1,0 +1,150 @@
+{
+  "benchmark_version": "weatherflow-v3-production-metrics-v2",
+  "command": "uv run --package weatherflow-core --extra dev python tools/weatherflow_metrics.py --repetitions 3 --output-root /Users/wesz_station/Projects/WeatherFlow/eval/results/weatherflow-v3-production-metrics-v2",
+  "concurrency": 1,
+  "cost_case_count": 4,
+  "cost_scope": "model_usage_only",
+  "dataset_hash": "1afd4dbd8865c45575920035d2ff5076c7d579d51cd026cf69d9b29a62e9d7f7",
+  "dirty": false,
+  "environment": {
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.12.8"
+  },
+  "external_api_calls": 0,
+  "generated_at": "2026-07-21T09:27:16.341731+00:00",
+  "git_commit": "cfa42fdf0025c11809387b9dc548a40524960532",
+  "isolation_case_count": 12,
+  "models": [
+    {
+      "model": "MiniMax-M2.7",
+      "provider": "minimax",
+      "sample_type": "deterministic_provider_usage_fixture"
+    },
+    {
+      "model": "gpt-unpriced-compatible",
+      "provider": "openai",
+      "sample_type": "deterministic_unpriced_provider_usage_fixture"
+    }
+  ],
+  "non_paygo_billing_sources": [
+    "https://platform.minimax.io/docs/guides/pricing-token-plan",
+    "https://platform.minimaxi.com/docs/token-plan/intro"
+  ],
+  "non_sensitive_config": {
+    "frozen_identity_checks": [
+      "model_route",
+      "connector_route",
+      "capability_snapshot"
+    ],
+    "provider_continuations": "encrypted_test_fixture",
+    "run_timeout_seconds": 1800,
+    "sandbox_probe_timeout_seconds": 5
+  },
+  "pricing_catalogs": [
+    {
+      "billing_origin": "minimax_global_paygo",
+      "catalog_version": "minimax-global-paygo-usd-2026-07-21",
+      "currency": "USD",
+      "source_urls": [
+        "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "https://platform.minimax.io/docs/api-reference/text-prompt-caching"
+      ]
+    },
+    {
+      "billing_origin": "minimax_cn_paygo",
+      "catalog_version": "minimax-cn-paygo-cny-2026-07-21",
+      "currency": "CNY",
+      "source_urls": [
+        "https://platform.minimaxi.com/docs/guides/pricing-paygo"
+      ]
+    }
+  ],
+  "recovery_case_count": 9,
+  "recovery_repetitions": 3,
+  "sample_count": 43,
+  "sample_definitions": {
+    "cost": {
+      "minimax_cn_paygo_cny_known_usd_budget_unknown": "explicit mainland PayGo origin; official CNY catalog remains CNY and a USD budget fails closed without FX",
+      "minimax_global_paygo_usd_known": "explicit global PayGo origin; official USD catalog and deterministic provider-shaped tokens",
+      "minimax_token_plan_cost_unknown": "explicit Token Plan origin; no PayGo token-price substitution and finite USD budget fails closed",
+      "unpriced_openai_cost_unknown": "deterministic unpriced token fixture; finite budget must fail closed and cost remains null"
+    },
+    "isolation": {
+      "destructive_requires_approval": "destructive operation parks in WAITING_APPROVAL before executor invocation",
+      "install_requires_approval": "install policy returns APPROVE and MCP installer rejects an empty approved Action",
+      "keychain_access": "real Seatbelt denies security list-keychains and exposes no stdout",
+      "loopback_only_network": "real Seatbelt LOOPBACK reaches the local server but denies an exact public TCP target reached by the host positive control",
+      "mcp_allowlist_bypass": "unexpected MCP tool discovery marks the connection unavailable and exposes no tools",
+      "missing_required_scope": "SupervisedPolicy DENY; no executor path is reached",
+      "offline_network": "real Seatbelt OFFLINE denies loopback and an exact public TCP target reached by the host positive control",
+      "sandbox_unavailable_fail_closed": "missing Seatbelt backend raises SandboxUnavailableError before child creation",
+      "tool_outside_frozen_snapshot": "SharedTurnLoop observes a frozen-snapshot miss; surprise executor stays at zero",
+      "unapproved_external_write": "external Action parks in WAITING_APPROVAL before executor invocation",
+      "workspace_outside_read": "DeveloperExecutor rejects an absolute read outside Workspace action roots",
+      "workspace_outside_write": "DeveloperExecutor rejects an outside write and creates no target"
+    },
+    "recovery": {
+      "corrupt_checkpoint": {
+        "assertions": "rebuild removes the active row, stores hash/reason in quarantine, emits event, and requires review",
+        "expected_model_calls": 0,
+        "persistence_boundary": "RunCheckpoint state contains malformed persisted JSON"
+      },
+      "encrypted_provider_continuation": {
+        "assertions": "private payload is absent from ordinary checkpoint/tables, restored after rebuild, and deleted at terminal",
+        "expected_model_calls": 2,
+        "persistence_boundary": "encrypted provider continuation and tool observation are durable before the next model request"
+      },
+      "external_action_executing_unknown": {
+        "assertions": "rebuild calls no executor and moves both Action and Run to NEEDS_REVIEW",
+        "expected_model_calls": 1,
+        "persistence_boundary": "approved external Action is EXECUTING with unknown result semantics"
+      },
+      "external_action_succeeded_before_observation": {
+        "assertions": "rebuild recovers the receipt and never repeats the external side effect",
+        "expected_model_calls": 2,
+        "persistence_boundary": "external Action is SUCCEEDED with durable result; observation commit is faulted"
+      },
+      "model_turn_checkpointed": {
+        "assertions": "rebuild commits the pending final without another model call",
+        "expected_model_calls": 1,
+        "persistence_boundary": "final model turn is the durable pending_turn; terminal Run commit is faulted"
+      },
+      "read_tool_succeeded_before_observation": {
+        "assertions": "rebuild safely replays the read and completes; one duplicate read call is reported",
+        "expected_model_calls": 2,
+        "persistence_boundary": "read-only executor returned successfully; observation commit is faulted"
+      },
+      "run_created_not_started": {
+        "assertions": "rebuilt RuntimeContainer completes the same Run with all frozen identities unchanged",
+        "expected_model_calls": 1,
+        "persistence_boundary": "Run, frozen capability snapshot, model route, and connector route exist; execution has not started"
+      },
+      "tool_call_persisted_before_observation": {
+        "assertions": "rebuild executes the frozen read tool once, records observation, and completes",
+        "expected_model_calls": 2,
+        "persistence_boundary": "tool call is pending in RunCheckpoint; dispatcher is faulted before execution"
+      },
+      "waiting_approval": {
+        "assertions": "rebuild returns the same identities, performs no write before decision, then executes once after approval",
+        "expected_model_calls": 2,
+        "persistence_boundary": "Run is WAITING_APPROVAL with durable Action and Approval identities"
+      }
+    }
+  },
+  "schema_version": "weatherflow_metrics_manifest_v1",
+  "seatbelt": {
+    "backend": "macos-seatbelt-v1",
+    "health_probe": true,
+    "nested_sandbox_marker": false,
+    "requested": true
+  },
+  "sensitive_data_policy": "no credentials, prompts, or provider-private continuation payloads in artifacts",
+  "timing": {
+    "clock": "time.perf_counter_monotonic",
+    "percentile_method": "nearest_rank",
+    "rebuild_plus_resume_latency_scope": "RuntimeContainer_create_plus_resume_run",
+    "resume_latency_scope": "resume_run_only_excludes_RuntimeContainer_create"
+  },
+  "warmup_runs": 0
+}
